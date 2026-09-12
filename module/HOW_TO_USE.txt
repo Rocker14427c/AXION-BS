@@ -1,38 +1,52 @@
-HOW TO USE — Axion Super Power Saving v2.1
+HOW TO USE - Axion Super Power Saving v3.0.2
 ==========================================
 ResukiSU (KernelSU). RMX3430 / AxionOS 2.7.
 
-v2 difference vs 1.8:
-- Snapshot of every node/prop/setting BEFORE any write
-- Exit restores from those files (sysfs first, not settings-only)
-- Does NOT freeze every app (that took 1–2 min and cooked the phone)
-- Does NOT kill logd / persist.log.tag (Logfox keeps working)
-- Does NOT deep-doze (that made the power button miss and 4–5s reboot)
-- DT2W off only while SPSM is on; restored from snapshot on exit
-- A55 cores stay online; A75 offline only while SPSM is on
+WHAT IS NEW IN v3
+- Every change is journaled before it is made, and turned off again on exit.
+- A value you change yourself after us is never overwritten.
+- Nothing is held while you are using the phone: the heavy savings (doze,
+  background app limits, CPU/GPU caps) apply only while the screen is off and
+  are released the moment you wake it. That is what makes the mode feel normal
+  to use and still drain ~nothing overnight.
+- Options screen: see every change and turn off the ones you do not want.
+- A crash or reboot cannot leave the phone capped or dark.
 
 INSTALL
-1. ResukiSU → Modules → Install from storage → Axion-SPSM-v2.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.0.2-RMX3430.zip
 2. Reboot.
-3. App drawer → Super Power Saving
-4. ResukiSU Superuser → Allow
+3. App drawer -> Super Power Saving
+4. ResukiSU Superuser -> Allow
 
 TURN ON
-1. Pick 6 apps. Turn on → confirm.
-2. Should take a few seconds, not minutes.
-3. Black 6-app home. Door top-left to exit.
-4. Log: /data/adb/spsm/spsm.log  and  /data/adb/spsm/snap/MANIFEST
+1. Options -> untick anything you do not want changed.
+2. Pick 6 apps.
+3. Turn on. The black home appears in about a second; the rest finishes behind it.
+4. /data/adb/spsm/spsm.log and /data/adb/spsm/journal/ hold the details.
 
 WHILE ON
-- Power button wakes. DT2W is off (same as realme SPSM).
+- Power button wakes instantly (the caps are released on wake).
 - Incoming calls / Jio VoLTE stay up. Mobile data stays on.
-- Wi-Fi off while the screen is off.
-- Google Play services sleep.
-- logd stays running so you can record a log.
+- Wi-Fi, Bluetooth and NFC are off for the session and come back on exit if
+  they were on before.
+- Google Play services sleep (that is on by default only if you enable it).
+- Logging stays on, so you can record a log while the mode runs.
 
 TURN OFF
-- Door → Exit. Snapshot is restored. DT2W comes back if it was on.
+- Door -> Exit. Everything is put back from the journal.
+- Or: su -c 'sh /data/adb/spsm/exit.sh'
+
+HOW MUCH IT SAVED
+- /data/adb/spsm/drain.log - one line per sleep, e.g.
+  2026-09-10 23:41:02 screen off 84% -> 82% in 421 min (0.28%/h)
+- /data/adb/spsm/spsm.log - what was applied, what was put back.
+
+CHECKING THAT IT REVERTED
+- su -c 'sh /data/adb/spsm/scripts/engine.sh verify'
+  Small drift count = all good. "left-alone" means you changed that value
+  yourself while the mode was on, so it was deliberately not overwritten.
 
 STUCK
-- ResukiSU → Modules → remove Axion Super Power Saving → reboot
-- or: su -c 'sh /data/adb/spsm/exit.sh'
+- ResukiSU -> Modules -> remove Axion Super Power Saving -> reboot
+  (removal reverts first, then uninstalls itself)
+- Read-only diagnostic, writes nothing: su -c 'sh /sdcard/DIAG.sh'
