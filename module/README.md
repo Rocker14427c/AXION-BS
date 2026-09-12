@@ -2,31 +2,26 @@
 
 realme UI 2/3-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on **Realme Narzo 50A (RMX3430)**. Also works on other AOSP/Lineage-based ROMs with SukiSU / KernelSU / Magisk.
 
+Current module: **v1.6**.
+
 ## Why this is a clone, not a port
 
-The real RUI2/RUI3 Super Power Saving Mode is **not an APK you can flash**. It is glued into:
+The real RUI2/RUI3 Super Power Saving Mode is **not an APK you can flash**. It is glued into ColorOS framework jars, the stock launcher, `com.oplus.battery`, and vendor power HALs. Those APKs crash on Axion.
 
-- ColorOS / realme **framework jars** (`oplus-framework`, `oplus-services`)
-- The **stock realme launcher** (the black 6-app home *is* a launcher mode)
-- `com.oplus.battery` and PowerManager hooks
-- Signature-level `oplus.*` permissions
-- MediaTek/Oplus power HAL policies
-
-RUI2 = Android 11, RUI3 = Android 12, Axion 2.7 = **Android 16**. Those APKs crash with `ClassNotFoundException` for `oplus.*` on AOSP, and putting ColorOS framework on Axion bootloops. Vendor leftovers you still see (`system_server` on vendor, mtk apps) are **not** ColorOS SPSM.
-
-This module **rebuilds the feature** on Axion:
+This module **rebuilds the feature** on AOSP:
 
 | realme UI SPSM | This module |
 |---|---|
 | Black 6-app home, door to exit | Same UX (`dev.axion.spsm`) |
-| Phone / Messages / Browser + 3 | Auto-filled, long-press to change |
-| CPU / brightness cuts | Helio G85: **offline A75 big cores (cpu6-7)**, little cluster capped ~1.15 GHz, GPU locked to lowest OPP, GED/FPSGO boosts off |
+| Phone / Messages / Browser + 3 | Auto-filled, tap to change |
+| CPU / brightness cuts | Helio G85: **A75 cpu6–7 offline**, A55 850 MHz on / 500 MHz off, GPU 300 MHz |
 | Background apps gone | `pm suspend` + force-stop everything not in the 6 |
-| Battery saver | AOSP battery saver + `force_all_apps_standby` + data saver + doze when screen off |
+| Panel fully asleep | DT2W / lift-to-wake / AOD / pocket wake off |
+| Calls still work | Mobile data stays (Jio VoLTE). Quick doze, **not** `force-idle` |
 
 ## Install (SukiSU)
 
-1. Copy `Axion-SPSM-v1.0.zip` to the phone.
+1. Copy `Axion-SPSM-v1.6-RMX3430.zip` to the phone.
 2. **SukiSU → Modules → Install from storage** → pick the zip → **Reboot**.
 3. Open **Super Power Saving**.
 4. SukiSU Superuser prompt → **Allow** (and disable umount for this app if you use “Unmount modules by default”).
@@ -40,24 +35,23 @@ SukiSU Action button on the module also toggles the mode.
 
 The black home is the launcher while the mode is on. Exit with the **door icon** (top left).
 
-If that fails:
-
-- SukiSU → Modules → **disable** Axion Super Power Saving → reboot  
-- or from any root shell: `touch /data/adb/spsm/disable` then reboot  
+- SukiSU → Modules → **disable** Axion Super Power Saving → reboot
+- or from any root shell: `touch /data/adb/spsm/disable` then reboot
 - Log: `/data/adb/spsm/spsm.log`
 
-## What it does (aggressive)
+## What it does (standalone — no other module required)
 
-- Forces AOSP Battery Saver + night mode + animation scale 0
-- Brightness ~8%, 15s screen timeout, haptics off, location off
-- Bluetooth + NFC off (radio stays up for **calls & SMS**)
-- Restrict background data, disable Wi‑Fi/BLE scanning
-- Offline Helio G85 big cores, cap remaining CPUs, lock GPU min
-- Freeze (suspend) all non-essential apps
-- Watchdog every 20s so PowerHAL cannot bring big cores back
+- AOSP Battery Saver (Android 16 keys + legacy names) + night mode + animation scale 0
+- Brightness ~8%, 15s timeout, haptics off, location off, auto-rotate off, hotword off
+- Bluetooth + NFC off (restored on exit). Radio stays up for **calls & SMS**
+- Wi‑Fi off while the screen is off (restored on wake if it was on)
+- Play services / Play Store / Search **disable-user + frozen**
+- logd + kernel printk silenced; caches trimmed
+- Offline Helio G85 big cores; little cluster capped; GPU locked 300 MHz
+- Watchdog every 15s so PowerHAL cannot bring big cores back
 - Survives reboot until you exit
 
-Incoming **phone calls still work**. Alarms may be delayed while the screen is off (deep doze). WhatsApp / Telegram only work if you put them in the 6 apps.
+Incoming **phone calls still work**. Alarms may be delayed while the screen is off (deep doze). WhatsApp / Telegram get no FCM push until you open them — same trade as realme SPSM.
 
 ## Uninstall
 

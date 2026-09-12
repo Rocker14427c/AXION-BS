@@ -22,7 +22,8 @@ final class Root {
     }
 
     static boolean modulePresent() {
-        String out = exec("[ -x " + ENTER + " ] || [ -f /data/adb/modules/axion_spsm/scripts/enter.sh ] && echo YES || echo NO");
+        String out = exec(
+                "if [ -x " + ENTER + " ] || [ -f /data/adb/modules/axion_spsm/scripts/enter.sh ]; then echo YES; else echo NO; fi");
         return out != null && out.contains("YES");
     }
 
@@ -46,15 +47,12 @@ final class Root {
     static String exec(String cmd) {
         Process p = null;
         try {
-            p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+            // Merge stderr so we cannot deadlock on a full error pipe.
+            p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd + " 2>&1"});
             BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            BufferedReader e = new BufferedReader(new InputStreamReader(p.getErrorStream()));
             StringBuilder out = new StringBuilder();
             String line;
             while ((line = r.readLine()) != null) {
-                out.append(line).append('\n');
-            }
-            while ((line = e.readLine()) != null) {
                 out.append(line).append('\n');
             }
             p.waitFor();

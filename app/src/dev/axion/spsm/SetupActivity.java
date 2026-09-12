@@ -137,14 +137,22 @@ public class SetupActivity extends Activity {
         new Thread(() -> {
             Root.writeWhitelist(Prefs.getAll(this));
             Root.enter();
+            final boolean ok = Root.isActive();
             runOnUiThread(() -> {
                 busy = false;
                 toggle.setEnabled(true);
                 working.setVisibility(View.GONE);
+                if (!ok) {
+                    Toast.makeText(this, R.string.enter_fail, Toast.LENGTH_LONG).show();
+                    refresh();
+                    return;
+                }
                 Toast.makeText(this, R.string.done_on, Toast.LENGTH_SHORT).show();
-                Intent i = new Intent(this, SpsmHomeActivity.class);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(i);
+                try {
+                    Intent i = new Intent(this, SpsmHomeActivity.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                } catch (Exception ignored) {}
                 refresh();
             });
         }).start();

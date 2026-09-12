@@ -1,0 +1,53 @@
+HOW TO USE — like realme UI 2/3 Super Power Saving
+==================================================
+This module is standalone. It does Wi-Fi, Google/GMS, logs, CPU, GPU,
+doze, backlight, and app freeze itself. No other module is required.
+
+INSTALL
+1. SukiSU → Modules → Install from storage → Axion-SPSM-v1.6-RMX3430.zip
+2. Reboot.
+
+TURN ON (same flow as RUI: Battery → Super power saving)
+1. Open the app  "Super Power Saving"  (yellow battery + moon).
+2. First time: SukiSU Superuser popup → Allow.
+   (If no popup: SukiSU → Superuser → Super Power Saving → grant.)
+3. First 3 slots auto-fill Phone / Messages / Browser.
+   Tap a slot to pick WhatsApp etc. Max 6.
+4. Tap  Turn on  → confirm.
+5. Phone jumps to a black home: big clock, remaining time,
+   6 icons, door top-left. That IS Super Power Saving Mode.
+
+WHILE IT IS ON
+- Home always returns to the black screen (like RUI).
+- Only the 6 apps open. Everything else is frozen.
+- Incoming calls still ring. Do not use airplane mode.
+- This module by itself:
+  • A75 offline, A55 850 MHz (on) / 500 MHz (off)
+  • GPU locked 300 MHz
+  • Wi-Fi off while the screen is off (restored when you wake,
+    if Wi-Fi was on before)
+  • Play services / Play Store / Search disabled+frozen
+  • logd + kernel printk silenced
+  • caches trimmed
+  • DT2W / lift-to-wake / AOD / pocket wake OFF (panel fully asleep)
+  • Hotword / OK Google / auto-rotate / hotspot / notification LED off
+  • Quick doze (not force-idle, so calls still ring)
+  • BT / NFC / location / sync / scans off
+  • deep doze while asleep
+- Mobile data stays up (VoLTE calls).
+
+TURN OFF
+- Door icon (top-left) → Exit
+  or Super Power Saving app → Turn off.
+- Launcher, Wi-Fi, Google, logs, CPU all restore.
+
+STUCK
+- SukiSU → Modules → disable Axion Super Power Saving → reboot
+- or:  su -c 'touch /data/adb/spsm/disable; reboot'
+
+OPTIONAL
+- QS tile: Super Power Save
+- SukiSU module Action button toggles it
+
+WhatsApp / Telegram get no FCM push until you open them.
+Same trade as realme Super power saving.

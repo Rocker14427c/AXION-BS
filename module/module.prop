@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v1.0
-versionCode=10
+version=v1.6
+versionCode=16
 author=Axion SPSM
-description=realme UI-style Super Power Saving Mode for AxionOS. 6-app black home, freeze background apps, offline Helio G85 big cores, lock GPU/CPU, force AOSP battery saver. Open the Super Power Saving app and grant root in SukiSU.
+description=v1.6 audited: AOSP16 saver, DT2W/AOD/hotword off, quick doze (calls OK), NFC restore, no force-idle. Grant root in Super Power Saving.

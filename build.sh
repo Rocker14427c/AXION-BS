@@ -19,8 +19,8 @@ echo "==> compile resources"
   --java "$OUT/gen" \
   --min-sdk-version 26 \
   --target-sdk-version 34 \
-  --version-code 1 \
-  --version-name 1.0 \
+  --version-code 16 \
+  --version-name 1.6 \
   --auto-add-overlay \
   "$OUT/res.zip"
 

@@ -3,7 +3,7 @@
     <string name="app_name">Super Power Saving</string>
     <string name="tile_label">Super Power Save</string>
     <string name="setup_title">Super power saving mode</string>
-    <string name="setup_desc">Emergency mode like realme UI. Only 6 apps stay usable. Background apps are frozen, big CPU cores are taken offline, GPU is locked low, and AOSP battery saver is forced on.</string>
+    <string name="setup_desc">Same idea as realme UI 2/3 Super power saving. Black 6-app home, door to exit. Play services sleep. Wi‑Fi off while the screen is off. Incoming calls still work. Idle drain target: about 0–1% in 8 hours.</string>
     <string name="enter">Turn on</string>
     <string name="exit">Turn off</string>
     <string name="active">On · Super power saving</string>
@@ -19,7 +19,7 @@
     <string name="exit_title">Exit super power saving mode?</string>
     <string name="exit_msg">The phone will go back to Axion. Frozen apps will resume.</string>
     <string name="enter_title">Turn on super power saving mode?</string>
-    <string name="enter_msg">Only the 6 apps below will open. Incoming calls still work. Brightness, CPU and background apps will be cut hard.\n\nIf you get stuck: SukiSU → Modules → disable Super Power Saving → reboot.</string>
+    <string name="enter_msg">Like realme Super power saving:\n• Only these 6 apps\n• Incoming calls / SMS still work (Jio VoLTE stays up)\n• Google Play sleeps — WhatsApp push only when you open it\n• Wi‑Fi turns off when the screen is off\n\nStuck? SukiSU → Modules → disable this → reboot.</string>
     <string name="cancel">Cancel</string>
     <string name="confirm">Turn on</string>
     <string name="confirm_exit">Exit</string>
@@ -32,4 +32,5 @@
     <string name="done_off">Super power saving mode is off</string>
     <string name="search">Search apps</string>
     <string name="module_missing">Module scripts not found. Flash Axion-SPSM.zip in SukiSU and reboot.</string>
+    <string name="enter_fail">Could not turn on. Grant root in SukiSU, then try again.</string>
 </resources>
