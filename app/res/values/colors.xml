@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="text_secondary">#B3FFFFFF</color>
+    <color name="text_hint">#73FFFFFF</color>
+    <color name="accent">#FFFFC915</color>
+    <color name="accent_dim">#FF3D3208</color>
+    <color name="card">#FF141414</color>
+    <color name="card_stroke">#FF2A2A2A</color>
+    <color name="danger">#FFFF5A5A</color>
+    <color name="ok">#FF3DDC84</color>
+    <color name="slot_bg">#FF1C1C1C</color>
+</resources>

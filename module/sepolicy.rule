@@ -1,0 +1,3 @@
+# Allow init/ksu scripts to talk to package/activity managers (usually already allowed as root).
+allow untrusted_app magisk_file dir { search read getattr }
+allow untrusted_app magisk_file file { read open getattr execute }

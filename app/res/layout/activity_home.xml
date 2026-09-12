@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    android:orientation="vertical"
+    android:fitsSystemWindows="true">
+
+    <RelativeLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="16dp">
+
+        <ImageButton
+            android:id="@+id/btn_exit"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_alignParentStart="true"
+            android:layout_centerVertical="true"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/exit"
+            android:padding="12dp"
+            android:src="@drawable/ic_exit" />
+
+        <TextView
+            android:id="@+id/chip_mode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:background="@drawable/bg_chip"
+            android:paddingStart="12dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="4dp"
+            android:text="@string/active"
+            android:textColor="@color/accent"
+            android:textSize="11sp" />
+    </RelativeLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp">
+
+        <TextClock
+            android:id="@+id/clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="h:mm"
+            android:format24Hour="HH:mm"
+            android:textColor="@color/white"
+            android:textSize="72sp"
+            android:fontFamily="sans-serif-light"
+            android:includeFontPadding="false" />
+
+        <TextClock
+            android:id="@+id/date"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:format12Hour="EEE, d MMM"
+            android:format24Hour="EEE, d MMM"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/battery"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textColor="@color/accent"
+            android:textSize="15sp"
+            android:gravity="center" />
+    </LinearLayout>
+
+    <GridLayout
+        android:id="@+id/grid"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:columnCount="3"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="8dp"
+        android:alignmentMode="alignMargins"
+        android:useDefaultMargins="false">
+
+        <include layout="@layout/item_app_slot" android:id="@+id/slot0" />
+        <include layout="@layout/item_app_slot" android:id="@+id/slot1" />
+        <include layout="@layout/item_app_slot" android:id="@+id/slot2" />
+        <include layout="@layout/item_app_slot" android:id="@+id/slot3" />
+        <include layout="@layout/item_app_slot" android:id="@+id/slot4" />
+        <include layout="@layout/item_app_slot" android:id="@+id/slot5" />
+    </GridLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingBottom="18dp"
+        android:text="@string/hold_to_change"
+        android:textColor="@color/text_hint"
+        android:textSize="12sp" />
+</LinearLayout>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Super Power Saving</string>
+    <string name="tile_label">Super Power Save</string>
+    <string name="setup_title">Super power saving mode</string>
+    <string name="setup_desc">Emergency mode like realme UI. Only 6 apps stay usable. Background apps are frozen, big CPU cores are taken offline, GPU is locked low, and AOSP battery saver is forced on.</string>
+    <string name="enter">Turn on</string>
+    <string name="exit">Turn off</string>
+    <string name="active">On · Super power saving</string>
+    <string name="inactive">Off</string>
+    <string name="root_ok">Root (SukiSU) granted</string>
+    <string name="root_need">Tap to grant root in SukiSU, then Allow</string>
+    <string name="root_fail">No root. Open SukiSU → Superuser → allow Super Power Saving.</string>
+    <string name="apps_title">Apps available in this mode (6)</string>
+    <string name="apps_hint">Tap an icon to change it. Phone / Messages / Browser are filled automatically.</string>
+    <string name="hold_to_change">Hold an icon to change</string>
+    <string name="pick_app">Choose app</string>
+    <string name="empty_slot">Add</string>
+    <string name="exit_title">Exit super power saving mode?</string>
+    <string name="exit_msg">The phone will go back to Axion. Frozen apps will resume.</string>
+    <string name="enter_title">Turn on super power saving mode?</string>
+    <string name="enter_msg">Only the 6 apps below will open. Incoming calls still work. Brightness, CPU and background apps will be cut hard.\n\nIf you get stuck: SukiSU → Modules → disable Super Power Saving → reboot.</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">Turn on</string>
+    <string name="confirm_exit">Exit</string>
+    <string name="charging">Charging</string>
+    <string name="remaining">About %1$s remaining</string>
+    <string name="remaining_unknown">Super power saving is on</string>
+    <string name="qs_hint">Tip: add the Super Power Save tile in Quick Settings.</string>
+    <string name="working">Applying…</string>
+    <string name="done_on">Super power saving mode is on</string>
+    <string name="done_off">Super power saving mode is off</string>
+    <string name="search">Search apps</string>
+    <string name="module_missing">Module scripts not found. Flash Axion-SPSM.zip in SukiSU and reboot.</string>
+</resources>
