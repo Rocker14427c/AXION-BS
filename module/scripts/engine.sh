@@ -177,6 +177,12 @@ do_deactivate() {
   log "===== SPSM v3 OFF ====="
   progress "Restoring"
 
+  # The mode is off from this point, before anything is put back. A screen-off
+  # that was already in flight (or one the daemon starts in the next few
+  # milliseconds) must not re-apply deep knobs behind the revert - that is the
+  # one race that could leave a change behind on exit.
+  rm -f "$ACTIVE"
+
   # Deep phase first (it holds the system-wide switches), then the session.
   phase_deep_revert
   phase_session revert
@@ -200,7 +206,6 @@ do_deactivate() {
   fi
 
   stop_daemon
-  rm -f "$ACTIVE"
   touch "$STATE/last_exit_ok"
   lock_release
   return 0
@@ -209,6 +214,8 @@ do_deactivate() {
 do_screen_off() {
   still_on || return 0
   lock_acquire || return 0
+  # Re-checked under the lock: the exit may have started while we waited.
+  [ -f "$ACTIVE" ] || { lock_release; return 0; }
   log "screen off -> deep phase"
   phase_deep apply
   lock_release
@@ -222,6 +229,10 @@ DEEP_FAST="cpu_offline_big cpu_cap gpu_cap ged_boost_off deep_doze"
 do_screen_on() {
   still_on || return 0
   lock_acquire || return 0
+  # Same re-check as the screen-off path: a daemon that was killed on exit can
+  # still have this child in flight, and it must not start waking the phone up
+  # after the mode is already off.
+  [ -f "$ACTIVE" ] || { lock_release; return 0; }
   log "screen on -> release deep phase"
   for _k in $DEEP_FAST; do
     [ "$(knob_scope "$_k")" = "deep" ] && knob_revert "$_k"

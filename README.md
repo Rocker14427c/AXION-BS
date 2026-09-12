@@ -85,6 +85,20 @@ Optional: add the **Super Power Save** tile in Quick Settings.
 If a previous version is installed, the installer undoes its leftover changes
 before installing.
 
+## Measuring it
+
+Claims about battery life are worth nothing unmeasured, so the daemon measures
+its own sleeping drain and writes it to `/data/adb/spsm/drain.log`:
+
+```
+2026-09-10 23:41:02 screen off 84% -> 82% in 421 min (0.28%/h)
+```
+
+One line per sleep: the level as the screen went off, the level when it came
+back, and the rate in between. If the numbers do not look like the 4-5% a night
+this is meant to replace, `/data/adb/spsm/spsm.log` next to it says which knobs
+were applied and which were left alone.
+
 ## Guaranteed revert
 
 `module/scripts/engine.sh` is the only thing that changes anything:
@@ -149,11 +163,13 @@ sh tests/run-install.sh       # the APK install fallback chain
 ```
 
 `tests/run.sh` runs the real engine scripts against a fake device tree with
-stubbed Android commands. It asserts, among other things, that entering and
-leaving the mode leaves that tree **byte-for-byte identical**, that a value you
-changed yourself is never overwritten, that a crash-and-reboot puts the phone
-back, that a normal boot touches nothing at all, that a screen change is
-reacted to in under a second, and that the shipped defaults are themselves
+stubbed Android commands, 19 cases and 86 assertions. It asserts, among other
+things, that entering and leaving the mode leaves that tree **byte-for-byte
+identical**, that a value you changed yourself is never overwritten, that a
+crash-and-reboot puts the phone back, that a normal boot touches nothing at all,
+that a screen change is reacted to well inside the poll interval, that an exit
+cannot be undone by a screen-off that was already in flight, that the drain
+report is arithmetically right, and that the shipped defaults are themselves
 fully reversible. `tests/run-install.sh` drives `install-apk.sh` through a stub
 `pm`: first-try success, the signature-mismatch recovery, the package-already-
 present case, and outright failure (which must not silently pretend to work).

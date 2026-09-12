@@ -109,6 +109,10 @@ case "$CMD" in
 
   dumpsys)
     case "$1" in
+      battery)
+        # Level is a file the test sets, so drain reporting can be asserted.
+        echo "  level: $(cat "$S/battery_level" 2>/dev/null || echo 100)"
+        ;;
       deviceidle)
         if [ "$2" = "whitelist" ]; then cat "$S/deviceidle_whitelist"; fi
         if [ "$2" = "force-idle" ]; then log_call "$@"; : > "$S/doze_forced"; fi

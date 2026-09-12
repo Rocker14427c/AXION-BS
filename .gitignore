@@ -1,10 +1,9 @@
 build/
+sdk/
 *.jks
 *.keystore
-.DS_Store
-sdk/
-**/.DS_Store
 *.log
 .idea/
 *.iml
 __pycache__/
+.DS_Store

@@ -24,6 +24,9 @@ check() { # check description condition-result
 
 # --------------------------------------------------------------- fake device
 make_tree() {
+  # A daemon from an earlier case is still holding a reference to the old work
+  # directory. Left alive it would wake up and act on the new one mid-test.
+  stop_daemons
   ROOT="$WORK/dev"
   rm -rf "$ROOT" "$WORK/spsm"
   mkdir -p "$WORK/spsm/scripts"
@@ -78,6 +81,21 @@ exec sh "$REPO/tests/stub.sh" "\$@"
 EOF
     chmod +x "$BIN/$c"
   done
+  # An injectable clock. The engine's drain report is a rate per hour; with a
+  # real clock the test would have to sleep for an hour to assert on it.
+  cat > "$BIN/date" <<EOF
+#!/bin/sh
+# Test-only: shift the clock so elapsed time can be asserted exactly.
+_off=\$(cat "$WORK/clock_offset" 2>/dev/null || echo 0)
+if [ "\$1" = "+%s" ]; then
+  echo \$(( \$(command -p date +%s) + _off ))
+else
+  command -p date "\$@"
+fi
+EOF
+  chmod +x "$BIN/date"
+  echo 0 > "$WORK/clock_offset"
+
   # stub.sh reads the command name from $CMD_OVERRIDE when present
   sed -i 's|^CMD=$(basename "$0")|CMD=${CMD_OVERRIDE:-$(basename "$0")}|' "$REPO/tests/stub.sh"
 }
@@ -147,6 +165,17 @@ run_shell() { # run_shell script args...
 
 # Dump of everything the engine could possibly have touched. This is the whole
 # point of the suite: on/off must be a no-op on this dump.
+stop_daemons() {
+  _p=$(cat "$WORK/spsm/daemon.pid" 2>/dev/null)
+  [ -n "$_p" ] && kill "$_p" 2>/dev/null
+  for _d in /proc/[0-9]*; do
+    case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
+      *"$WORK/spsm/scripts/daemon.sh"*) kill "$(basename "$_d")" 2>/dev/null ;;
+    esac
+  done
+  return 0
+}
+
 dump_state() {
   _out=$1
   : > "$_out"
@@ -445,20 +474,78 @@ sleep 2
 screen_off
 echo off > "$WORK/spsm/state/screen"
 kill -USR1 "$DPID" 2>/dev/null
+# Two separate facts: how fast the daemon REACTED (what the poke buys us, must
+# beat the 8 second poll) and that the work then finished (which takes as long
+# as it takes, and is not what this case is about).
 i=0
-while [ $i -lt 24 ] && [ ! -f "$WORK/spsm/journal/order" ]; do sleep 0.25; i=$((i + 1)); done
-[ -f "$WORK/spsm/journal/order" ]
-check "deep knobs applied after the poke (${i}x250ms, a poll takes 8s)" $?
+while [ $i -lt 16 ] && ! grep -q "screen on -> off" "$WORK/spsm/spsm.log"; do sleep 0.25; i=$((i + 1)); done
+grep -q "screen on -> off" "$WORK/spsm/spsm.log"
+check "the poke started the screen-off work (${i}x250ms, a poll takes 8s)" $?
+i=0
+while [ $i -lt 80 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1100000" ]; do sleep 0.25; i=$((i + 1)); done
 [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
-check "cpu cap is on" $?
+check "and the cap landed" $?
+[ -f "$WORK/spsm/journal/order" ]; check "the knobs were journalled as they applied" $?
 # ...and waking up reverses it just as promptly.
 screen_on
 echo on > "$WORK/spsm/state/screen"
 kill -USR1 "$DPID" 2>/dev/null
 i=0
-while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1800000" ]; do sleep 0.25; i=$((i + 1)); done
+while [ $i -lt 16 ] && ! grep -qc "screen off -> on" "$WORK/spsm/spsm.log"; do sleep 0.25; i=$((i + 1)); done
+[ "$(grep -c "screen off -> on" "$WORK/spsm/spsm.log")" -ge 1 ]
+check "the poke started the wake-up work in ${i}x250ms" $?
+i=0
+while [ $i -lt 80 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1800000" ]; do sleep 0.25; i=$((i + 1)); done
 [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
-check "waking up lifted the cap in ${i}x250ms" $?
+check "the cap came off (after ${i} more polls)" $?
+rm -f "$WORK/spsm/state/active"
+kill "$DPID" 2>/dev/null
+wait "$DPID" 2>/dev/null
+
+say "18. the mode measures its own idle drain"
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/spsm/state"
+enable_knobs cpu_cap
+echo 100 > "$WORK/stub/battery_level"
+screen_on
+echo 1 > "$WORK/spsm/state/active"
+SPSM_ROOT="$ROOT" SPSM_DIR="$WORK/spsm" SPSM_STUB="$WORK/stub" PATH="$BIN:$PATH" \
+  sh "$WORK/spsm/scripts/daemon.sh" >>"$WORK/spsm/spsm.log" 2>&1 &
+DPID=$!
+sleep 3
+# The level is set BEFORE the screen change: the daemon may notice the change
+# on its own poll rather than on the poke, and it must read the level that
+# belongs to that transition either way.
+echo 80 > "$WORK/stub/battery_level"
+screen_off
+kill -USR1 "$DPID" 2>/dev/null
+i=0
+while [ $i -lt 80 ] && [ ! -f "$WORK/spsm/state/drain_mark" ]; do sleep 0.25; i=$((i + 1)); done
+[ -f "$WORK/spsm/state/drain_mark" ]
+check "the level is noted when the screen goes off" $?
+[ "$(awk '{print $1}' "$WORK/spsm/state/drain_mark")" = "80" ]
+check "it recorded the right level" $?
+# Overnight: eight hours pass and one percent is lost, so the reported rate has
+# to be 0.12%/h - the number the user actually cares about.
+echo 28800 > "$WORK/clock_offset"
+echo 79 > "$WORK/stub/battery_level"
+screen_on
+kill -USR1 "$DPID" 2>/dev/null
+i=0
+while [ $i -lt 80 ] && [ ! -f "$WORK/spsm/drain.log" ]; do sleep 0.25; i=$((i + 1)); done
+[ -s "$WORK/spsm/drain.log" ]; check "a drain report was written" $?
+grep -q "80% -> 79%" "$WORK/spsm/drain.log"; check "the report has the real levels" $?
+DATE_RE='[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} '
+grep -qE "${DATE_RE}screen off 80% -> 79% in 480 min \(0\.12%/h\)" "$WORK/spsm/drain.log"
+RATE_OK=$?
+[ "$RATE_OK" = "0" ] || { echo "    --- daemon transitions ---"; grep -E "screen .* ->|drain" "$WORK/spsm/spsm.log" | tail -12 | sed 's/^/    /'; }
+check "and a rate per hour computed from them" $RATE_OK
+[ "$RATE_OK" = "0" ] || sed 's/^/    actual: /' "$WORK/spsm/drain.log"
+grep -q "^[0-9][0-9][0-9][0-9]-" "$WORK/spsm/drain.log"
+check "the report is timestamped like a log" $?
+[ "$(wc -l < "$WORK/spsm/drain.log")" = "1" ]
+check "exactly one report per sleep" $?
+echo 0 > "$WORK/clock_offset"
 rm -f "$WORK/spsm/state/active"
 kill "$DPID" 2>/dev/null
 wait "$DPID" 2>/dev/null
@@ -494,7 +581,53 @@ else
   show_diff "$WORK/def_before" "$WORK/def_after"
 fi
 run_engine verify >"$WORK/out.ver17" 2>&1
-grep -q 'drift=0' "$WORK/out.ver17"; check "no drift from a default session" $?
+grep -q 'drift=0' "$WORK/out.ver17"
+DRIFT_OK=$?
+check "no drift from a default session" $DRIFT_OK
+[ "$DRIFT_OK" = "0" ] || {
+  echo "    --- engine drift log ---"
+  grep -E "DRIFT|left|keep " "$WORK/spsm/spsm.log" | tail -8 | sed 's/^/    /'
+  echo "    --- verify output: $(cat "$WORK/out.ver17") ---"
+}
+
+say "19. an exit cannot be undone by a screen-off already in flight"
+make_tree; make_stubs; seed_stub_state
+enable_knobs cpu_cap app_restrict deep_doze
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+check "the cap is on while asleep" $?
+run_engine deactivate >"$WORK/out.dea19" 2>&1
+check "exit exits 0" $?
+dump_state "$WORK/after_exit19"
+# This is the daemon's screen-off arriving late, after the mode is off. It must
+# find nothing to do: the phone has already been put back.
+run_engine screen-off >"$WORK/out.late19" 2>&1
+check "a late screen-off does not fail" $?
+dump_state "$WORK/after_late19"
+if diff -q "$WORK/after_exit19" "$WORK/after_late19" >/dev/null; then
+  ok "the late screen-off changed nothing"
+else
+  bad "the late screen-off changed nothing"
+  show_diff "$WORK/after_exit19" "$WORK/after_late19"
+fi
+[ ! -f "$WORK/spsm/state/active" ]; check "the mode is flagged off before the revert ran" $?
+# A child that was already in flight when the daemon was stopped gets to finish
+# and release; give it a moment rather than racing it.
+i=0
+while [ $i -lt 16 ] && [ -d "$WORK/spsm/lock" ]; do sleep 0.25; i=$((i + 1)); done
+[ ! -d "$WORK/spsm/lock" ]
+LOCK_OK=$?
+check "no lock left behind" $LOCK_OK
+[ "$LOCK_OK" = "0" ] || {
+  echo "    lock holder pid: $(cat "$WORK/spsm/lock/pid" 2>/dev/null)"
+  echo "    daemon pid file: $(cat "$WORK/spsm/daemon.pid" 2>/dev/null)"
+  echo "    --- engine log tail ---"
+  tail -6 "$WORK/spsm/spsm.log" | sed 's/^/    /'
+}
+run_engine verify >"$WORK/out.ver19" 2>&1
+grep -q 'drift=0' "$WORK/out.ver19"; check "nothing drifted" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
