@@ -82,20 +82,35 @@
             android:textColor="@color/text_hint"
             android:textSize="12sp" />
 
-        <GridLayout
+        <LinearLayout
             android:id="@+id/grid"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:columnCount="3">
-
-            <include layout="@layout/item_app_slot" android:id="@+id/slot0" />
-            <include layout="@layout/item_app_slot" android:id="@+id/slot1" />
-            <include layout="@layout/item_app_slot" android:id="@+id/slot2" />
-            <include layout="@layout/item_app_slot" android:id="@+id/slot3" />
-            <include layout="@layout/item_app_slot" android:id="@+id/slot4" />
-            <include layout="@layout/item_app_slot" android:id="@+id/slot5" />
-        </GridLayout>
+            android:orientation="vertical">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <include layout="@layout/item_app_slot" android:id="@+id/slot0"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+                <include layout="@layout/item_app_slot" android:id="@+id/slot1"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+                <include layout="@layout/item_app_slot" android:id="@+id/slot2"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <include layout="@layout/item_app_slot" android:id="@+id/slot3"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+                <include layout="@layout/item_app_slot" android:id="@+id/slot4"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+                <include layout="@layout/item_app_slot" android:id="@+id/slot5"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+            </LinearLayout>
+        </LinearLayout>
 
         <TextView
             android:id="@+id/working"

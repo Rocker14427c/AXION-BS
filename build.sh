@@ -17,10 +17,10 @@ echo "==> compile resources"
   -I "$ANDROID_JAR" \
   --manifest "$APP/AndroidManifest.xml" \
   --java "$OUT/gen" \
-  --min-sdk-version 26 \
-  --target-sdk-version 34 \
-  --version-code 16 \
-  --version-name 1.6 \
+  --min-sdk-version 31 \
+  --target-sdk-version 36 \
+  --version-code 21 \
+  --version-name 2.1 \
   --auto-add-overlay \
   "$OUT/res.zip"
 
@@ -36,14 +36,27 @@ javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options \
 
 echo "==> d8"
 find "$OUT/classes" -name '*.class' > "$OUT/classes.txt"
-"$D8" --min-api 26 --lib "$ANDROID_JAR" --output "$OUT" @"$OUT/classes.txt"
+"$D8" --min-api 31 --lib "$ANDROID_JAR" --output "$OUT" @"$OUT/classes.txt"
 
-echo "==> pack apk"
-rm -rf "$OUT/apk"
-mkdir -p "$OUT/apk"
-unzip -q "$OUT/res.apk" -d "$OUT/apk"
-cp "$OUT/classes.dex" "$OUT/apk/"
-( cd "$OUT/apk" && zip -q -r "$OUT/unsigned.apk" . )
+echo "==> pack apk (resources.arsc must be STORED + 4-byte aligned for targetSdk 30+)"
+python3 - "$OUT/res.apk" "$OUT/classes.dex" "$OUT/unsigned.apk" <<'PY'
+import sys, zipfile
+res_apk, dex, out = sys.argv[1], sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(res_apk, "r") as zin, zipfile.ZipFile(out, "w") as zout:
+    for info in zin.infolist():
+        data = zin.read(info.filename)
+        ni = zipfile.ZipInfo(filename=info.filename, date_time=info.date_time)
+        ni.external_attr = info.external_attr
+        ni.create_system = 0
+        # Android R+ rejects compressed resources.arsc
+        if info.filename.endswith((".arsc", ".so")):
+            ni.compress_type = zipfile.ZIP_STORED
+        else:
+            ni.compress_type = zipfile.ZIP_DEFLATED
+        zout.writestr(ni, data)
+    with open(dex, "rb") as f:
+        zout.writestr("classes.dex", f.read(), compress_type=zipfile.ZIP_DEFLATED)
+PY
 
 echo "==> zipalign + sign"
 "$ZIPALIGN" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
@@ -55,9 +68,21 @@ if [ ! -f "$ROOT/spsm.jks" ]; then
 fi
 "$APKSIGNER" sign --ks "$ROOT/spsm.jks" --ks-key-alias spsm \
   --ks-pass pass:android --key-pass pass:android \
+  --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
   --out "$OUT/AxionSPSM.apk" "$OUT/aligned.apk"
 "$APKSIGNER" verify --verbose "$OUT/AxionSPSM.apk" | head -20
+"$ZIPALIGN" -c -p 4 "$OUT/AxionSPSM.apk"
+python3 - "$OUT/AxionSPSM.apk" <<'PY'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+info = z.getinfo("resources.arsc")
+print("resources.arsc compress=%s size=%s" % (
+    "STORED" if info.compress_type == zipfile.ZIP_STORED else "DEFLATED", info.file_size))
+if info.compress_type != zipfile.ZIP_STORED:
+    raise SystemExit("resources.arsc must be uncompressed")
+PY
 
-mkdir -p "$ROOT/module/app"
+mkdir -p "$ROOT/module/app" "$ROOT/module/system/app/AxionSPSM"
 cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/app/AxionSPSM.apk"
+cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/system/app/AxionSPSM/AxionSPSM.apk"
 echo "==> APK $(du -h "$OUT/AxionSPSM.apk" | awk '{print $1}')"

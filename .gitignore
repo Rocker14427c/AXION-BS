@@ -5,3 +5,5 @@ build/
 sdk/
 **/.DS_Store
 *.log
+.idea/
+*.iml

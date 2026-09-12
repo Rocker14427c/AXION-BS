@@ -2,7 +2,7 @@
 
 realme UI 2/3-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on **Realme Narzo 50A (RMX3430)**. Also works on other AOSP/Lineage-based ROMs with SukiSU / KernelSU / Magisk.
 
-Current module: **v1.6**.
+Current module: **v1.7** (Android 16 install fix).
 
 ## Why this is a clone, not a port
 
