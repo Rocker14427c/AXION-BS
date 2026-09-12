@@ -1,9 +1,10 @@
 #!/system/bin/sh
-# SukiSU / KernelSU "Action" button: toggle SPSM.
+# ResukiSU / KernelSU "Action" button: toggle the mode.
 MODDIR=${0%/*}
-SPSM_DIR=/data/adb/spsm
-if [ -f "$SPSM_DIR/active" ]; then
-  sh "$MODDIR/scripts/exit.sh"
+SPSM_DIR=${SPSM_DIR:-/data/adb/spsm}
+
+if [ -f "$SPSM_DIR/scripts/engine.sh" ]; then
+  sh "$SPSM_DIR/scripts/engine.sh" toggle
 else
-  sh "$MODDIR/scripts/enter.sh"
+  sh "$MODDIR/scripts/engine.sh" toggle
 fi

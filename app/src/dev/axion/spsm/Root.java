@@ -8,6 +8,7 @@ final class Root {
     static final String EXIT = "/data/adb/spsm/exit.sh";
     static final String ACTIVE = "/data/adb/spsm/active";
     static final String WHITELIST = "/data/adb/spsm/whitelist.txt";
+    static final String DIR = "/data/adb/spsm";
 
     private Root() {}
 
@@ -33,6 +34,36 @@ final class Root {
 
     static String exit() {
         return exec("sh " + EXIT);
+    }
+
+    /**
+     * Publishes the new screen state and wakes the daemon immediately.
+     *
+     * The file alone would only be read when the daemon's poll came round - up
+     * to 8 seconds of capped CPU after the user presses the power button.
+     * SIGUSR1 cuts its sleep short, so leaving the screen-off state is instant.
+     */
+    static void writeScreenState(String state) {
+        // One writer whenever possible: if the daemon is alive it does the work,
+        // and the signal means it starts now instead of at the next poll. If it
+        // is not running, do the work here - the screen change must never leave
+        // a CPU cap behind for even a few seconds.
+        exec("mkdir -p " + DIR + "/state && echo " + state + " > " + DIR + "/state/screen; "
+           + "p=$(cat " + DIR + "/daemon.pid 2>/dev/null); "
+           + "if [ -n \"$p\" ] && [ -d \"/proc/$p\" ]; then "
+           + "  kill -USR1 \"$p\" 2>/dev/null; "
+           + "else sh " + DIR + "/scripts/engine.sh screen-" + state + " >/dev/null 2>&1; fi; "
+           + "exit 0");
+    }
+
+    /** Progress text the engine publishes while it is applying or reverting. */
+    static String progress() {
+        return exec("cat " + DIR + "/state/progress 2>/dev/null");
+    }
+
+    /** Human readable summary of what is currently applied. */
+    static String status() {
+        return exec("sh " + DIR + "/scripts/engine.sh status 2>/dev/null");
     }
 
     static void writeWhitelist(String[] pkgs) {
