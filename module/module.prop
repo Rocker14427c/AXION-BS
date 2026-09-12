@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v2.1
-versionCode=21
+version=v3.0
+versionCode=30
 author=Axion SPSM
-description=v2.1 snapshot-restore, no data saver, even 6-app home. ResukiSU.
+description=v3.0 journaled apply/revert - every change recorded and restored. Options screen, screen-aware deep sleep. RMX3430.
