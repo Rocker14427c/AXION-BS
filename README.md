@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.0.2**.
+Current module: **v3.0.3**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -74,7 +74,7 @@ would have taken 8 seconds.
 
 ## Install (ResukiSU)
 
-1. Download `Axion-SPSM-v3.0.2-RMX3430.zip` from
+1. Download `Axion-SPSM-v3.0.3-RMX3430.zip` from
    [Releases](https://github.com/Rocker14427c/AXION-BS/releases).
 2. **ResukiSU → Modules → Install from storage** → zip → **Reboot**.
 3. Open **Super Power Saving** → grant root → **Allow**.
@@ -169,6 +169,58 @@ screen receiver existed only as uncommitted files in one working tree, so a
 fresh clone built an APK without the per-change opt-out screen. They are
 committed now, and `build.sh` recomputes the APK from them.
 
+## What changed in 3.0.3 — the crash that took the home screen down
+
+The first on-device run of 3.0.2 crashed, and the log from the phone was
+unambiguous:
+
+```
+java.lang.NullPointerException: Attempt to invoke virtual method
+  'android.view.WindowInsetsController ...DecorView.getWindowInsetsController()'
+  on a null object reference
+  at com.android.internal.policy.PhoneWindow.getInsetsController(PhoneWindow.java:4136)
+  at dev.axion.spsm.SpsmHomeActivity.hideSystemBars(SpsmHomeActivity.java:64)
+  at dev.axion.spsm.SpsmHomeActivity.onCreate(SpsmHomeActivity.java:38)
+```
+
+`hideSystemBars()` was called before `setContentView()`, so the window had no
+decor view yet and `PhoneWindow.getInsetsController()` threw. The activity that
+died was **the SPSM home screen** — the one the mode swaps in — and a home
+activity is restarted by the system the moment it dies. So the result was a
+crash loop and a phone with no home screen at all, which is what "the app
+crashed and many more things happened" was.
+
+Two fixes, because one of them was a whole class of failure rather than this
+one crash:
+
+- **The activity can no longer be taken down by a cosmetic call.** The decor
+  view is obtained after the content view exists, the insets call is made on
+  that view, and the whole method is guarded: hiding the status bar is never
+  worth the phone's home screen.
+- **The module no longer swaps the home in without checking.** After launching
+  the new home it asks the device which activity is actually resumed. If the
+  answer is "not ours", the user's launcher is put back immediately and
+  `home_swap` is recorded as restored, so nothing later chases a change that was
+  already undone. If the device will not answer, the swap is left alone rather
+  than undone on a guess.
+
+The second fix means this failure mode cannot leave a phone without a home
+again, whatever the reason: a crash, a ROM that ignores the role change, an
+activity disabled since. `tests/run.sh` now covers both directions — a home that
+never comes up gets the launcher back within seconds while the rest of the mode
+carries on, and a home that does come up is left alone (no false alarms).
+
+### Getting out without the app
+
+The KernelSU/ResukiSU manager's **Action** button toggles the mode with no app
+involved (module `action.sh`). If the home ever looks wrong, this puts it back:
+
+```sh
+su -c 'cmd role add-role-holder android.app.role.HOME com.android.launcher3'
+su -c 'cmd package set-home-activity com.android.launcher3/.Launcher'
+su -c 'am start -a android.intent.action.MAIN -c android.intent.category.HOME'
+```
+
 ## Measuring it
 
 Claims about battery life are worth nothing unmeasured, so the daemon measures
@@ -247,7 +299,7 @@ sh tests/run-install.sh       # the APK install fallback chain
 ```
 
 `tests/run.sh` runs the real engine scripts against a fake device tree with
-stubbed Android commands, 33 cases and 138 assertions. It asserts, among other
+stubbed Android commands, 35 cases and 153 assertions. It asserts, among other
 things, that entering and leaving the mode leaves that tree **byte-for-byte
 identical**, that a value you changed yourself is never overwritten, that a
 crash-and-reboot puts the phone back, that a normal boot touches nothing at all,

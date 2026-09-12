@@ -50,3 +50,18 @@ STUCK
 - ResukiSU -> Modules -> remove Axion Super Power Saving -> reboot
   (removal reverts first, then uninstalls itself)
 - Read-only diagnostic, writes nothing: su -c 'sh /sdcard/DIAG.sh'
+
+IF SOMETHING LOOKS WRONG
+------------------------
+You do not need this app to get out of the mode. In the KernelSU / ResukiSU
+manager, open this module and press its Action button: that toggles the mode off
+and puts everything back, including your normal launcher.
+
+If your home screen ever looks wrong (no launcher, or it keeps restarting),
+these three commands restore it:
+  su -c 'cmd role add-role-holder android.app.role.HOME com.android.launcher3'
+  su -c 'cmd package set-home-activity com.android.launcher3/.Launcher'
+  su -c 'am start -a android.intent.action.MAIN -c android.intent.category.HOME'
+
+A reboot also reverts an unfinished session: nothing this module changes
+survives a boot.

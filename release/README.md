@@ -1,7 +1,7 @@
 # Release artifacts
 
 The file to flash is the one matching the newest release:
-**`Axion-SPSM-v3.0.2-RMX3430.zip`**
+**`Axion-SPSM-v3.0.3-RMX3430.zip`**
 
 `tools/makezip.sh` writes it here, taking the version from `module/module.prop`,
 so the file name, the zip's `module.prop` and the app's version stamp cannot
@@ -9,7 +9,8 @@ disagree.
 
 | file | release |
 |---|---|
-| `Axion-SPSM-v3.0.2-RMX3430.zip` | [v3.0.2](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0.2) — current |
+| `Axion-SPSM-v3.0.3-RMX3430.zip` | [v3.0.3](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0.3) — current |
+| `Axion-SPSM-v3.0.2-RMX3430.zip` | [v3.0.2](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0.2) |
 | `Axion-SPSM-v3.0.1-RMX3430.zip` | [v3.0.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0.1) |
 | `Axion-SPSM-v3.0-RMX3430.zip` | [v3.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0) |
 
@@ -22,7 +23,7 @@ To attach one as a proper release asset from a machine that can reach GitHub's
 upload host:
 
 ```sh
-gh release upload v3.0.2 release/Axion-SPSM-v3.0.2-RMX3430.zip
+gh release upload v3.0.3 release/Axion-SPSM-v3.0.3-RMX3430.zip
 ```
 
 Rebuild after any change to `module/` or `app/`:
