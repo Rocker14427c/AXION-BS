@@ -50,7 +50,9 @@ kv_write() { # kv_write target value
 snap_kv() {
   for _t in "$@"; do
     [ -n "$_t" ] || continue
-    printf '%s\t%s\n' "$_t" "$(kv_read "$_t")"
+    # Values are encoded so that one record is always one line, whatever the
+    # value holds; restore_kv decodes them again on the way out.
+    printf '%s\t%s\n' "$_t" "$(enc_val "$(kv_read "$_t")")"
   done
 }
 
@@ -78,16 +80,18 @@ apply_kv() {
 # "externally changed", and a change the user made after us is still respected.
 restore_kv() {
   [ -f "$1" ] || return 0
-  while IFS='	' read -r _t _v || [ -n "$_t" ]; do
+  while IFS=$TAB read -r _t _v || [ -n "$_t" ]; do
     [ -n "$_t" ] || continue
     [ "$_v" = "(MISSING)" ] && continue
     if [ -f "$2" ]; then
+      # Both sides are in the encoded form, so this comparison does not care
+      # what the value contains.
       _was=$(snap_get "$(cat "$2" 2>/dev/null)" "$_t")
-      _cur=$(kv_read "$_t")
+      _cur=$(enc_val "$(kv_read "$_t")")
       # Still ours to undo? If not, a newer value wins.
       [ -n "$_was" ] && [ "$_cur" != "$_was" ] && continue
     fi
-    kv_write "$_t" "$_v"
+    kv_write "$_t" "$(unesc "$_v")"
   done < "$1"
 }
 
@@ -175,8 +179,11 @@ meta_brightness_cap() {
 snapshot_brightness_cap() { snap_kv "$BL_PATH" @system:screen_brightness @system:screen_brightness_mode; }
 apply_brightness_cap() {
   _cap=$(cfg brightness_cap 160)
-  snap_val=$(rd "$BL_PATH")
-  if [ -n "$snap_val" ] && [ "$snap_val" != "0" ]; then
+  _cur=$(rd "$BL_PATH")
+  # A cap lowers the screen; it never raises it. Someone who keeps the panel
+  # darker than the cap gets to keep their eyesight - and their battery. 0 means
+  # the panel is off, which is not ours to change either.
+  if [ -n "$_cur" ] && [ "$_cur" != "0" ] && [ "$_cur" -gt "$_cap" ] 2>/dev/null; then
     w "$_cap" "$BL_PATH"
   fi
   sput system screen_brightness_mode 0
@@ -223,7 +230,7 @@ apply_wifi_off() {
 }
 restore_wifi_off() {
   restore_kv "$1" "$2"
-  _on=$(sed -n 's/^@global:wifi_on	//p' "$1" 2>/dev/null | head -1)
+  _on=$(snap_file_val "$1" @global:wifi_on)
   case "$_on" in
     1|true|on) has svc && svc wifi enable >/dev/null 2>&1
                has cmd && cmd wifi set-wifi-enabled enabled >/dev/null 2>&1 ;;
@@ -237,7 +244,7 @@ snapshot_bt_off() { snap_kv @global:bluetooth_on; }
 apply_bt_off() { has svc && svc bluetooth disable >/dev/null 2>&1; }
 restore_bt_off() {
   restore_kv "$1" "$2"
-  _on=$(sed -n 's/^@global:bluetooth_on	//p' "$1" 2>/dev/null | head -1)
+  _on=$(snap_file_val "$1" @global:bluetooth_on)
   case "$_on" in 1|true|on) has svc && svc bluetooth enable >/dev/null 2>&1 ;; esac
 }
 
@@ -248,7 +255,7 @@ snapshot_nfc_off() { snap_kv @global:nfc_on; }
 apply_nfc_off() { has svc && svc nfc disable >/dev/null 2>&1; }
 restore_nfc_off() {
   restore_kv "$1" "$2"
-  _on=$(sed -n 's/^@global:nfc_on	//p' "$1" 2>/dev/null | head -1)
+  _on=$(snap_file_val "$1" @global:nfc_on)
   case "$_on" in 1|true|on) has svc && svc nfc enable >/dev/null 2>&1 ;; esac
 }
 
@@ -274,7 +281,7 @@ apply_location_off() {
 }
 restore_location_off() {
   restore_kv "$1" "$2"
-  _m=$(sed -n 's/^@secure:location_mode	//p' "$1" 2>/dev/null | head -1)
+  _m=$(snap_file_val "$1" @secure:location_mode)
   case "$_m" in 3|1|true) has cmd && cmd location set-location-enabled true >/dev/null 2>&1 ;; esac
 }
 
@@ -372,7 +379,12 @@ apply_app_restrict() {
   _bucket=$(cfg bucket_level restricted)
   case "$_bucket" in restricted|rare|frequent) ;; *) _bucket=restricted ;; esac
   _list="$ORIG_DIR/app_restrict.tsv"
-  : > "$_list"
+  # The deep phase is applied again on every screen-off cycle, and re-applying
+  # over a record of our own making would save our value as if it were the
+  # user's - leaving every app restricted after the mode is switched off. The
+  # record is written once per idle period; releasing the phase clears it.
+  [ -f "$_list" ] || : > "$_list"
+  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   managed_packages | while read -r _pkg; do
     [ -n "$_pkg" ] || continue
     _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
@@ -381,7 +393,12 @@ apply_app_restrict() {
           | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
     [ -n "$_oo" ] || _oo=-
     [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && continue
-    printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" "deny" >> "$_list"
+    # Only the first sighting of a package in this idle period is a record of
+    # what it looked like before we touched it.
+    case "$_known" in
+      *" $_pkg "*) ;;
+      *) printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" "deny" >> "$_list" ;;
+    esac
     [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
     [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
   done
@@ -389,7 +406,7 @@ apply_app_restrict() {
 restore_app_restrict() {
   _list="$ORIG_DIR/app_restrict.tsv"
   [ -f "$_list" ] || return 0
-  while IFS='	' read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
+  while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
     if [ "$_ob" != "-" ]; then
       _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
@@ -403,6 +420,9 @@ restore_app_restrict() {
       [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
     fi
   done < "$_list"
+  # The idle period is over: the next one starts from whatever the phone looks
+  # like then, not from this record.
+  rm -f "$_list"
 }
 
 meta_freeze_google() {
@@ -428,10 +448,18 @@ apply_freeze_google() {
 restore_freeze_google() {
   restore_kv "$1" "$2"
   for _p in $GOOGLE_PKGS; do
+    # Unsuspending always: suspending is the change we make, and leaving one
+    # behind would keep an app dead until the next reboot.
     pm unsuspend "$_p" >/dev/null 2>&1
-    pm enable "$_p" >/dev/null 2>&1
+    # Enabling is only right for a package that was enabled before we touched
+    # it. A Play Store somebody disabled on purpose must not come back to life
+    # because the mode was switched off.
+    _st=$(awk -F'\t' -v p="$_p" '$1==p{print $2; exit}' "$1" 2>/dev/null)
+    case "$_st" in
+      disabled*) ;;
+      *) pm enable "$_p" >/dev/null 2>&1 ;;
+    esac
   done
-  pm enable --user 0 com.google.android.gms >/dev/null 2>&1
 }
 
 # ============================================================ Doze / power
@@ -440,8 +468,13 @@ meta_deep_doze() {
   echo "Power|Force deep doze while asleep|Puts the device into Doze the moment the screen goes off instead of waiting for the system timers, and releases it the instant you wake it. The single biggest idle saving. Background apps cannot poll while you sleep, so turn this off if you rely on them reaching you with the screen off.|1|deep|battery,breaks-features"
 }
 snapshot_deep_doze() {
-  _st=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mState=\([A-Z_]*\).*/\1/p' | head -1)
-  printf 'deviceidle\t%s\n' "${_st:-UNKNOWN}"
+  # Record the force flag, which is exactly what this knob changes. mState is a
+  # transient the system moves on its own, so recording it makes a healthy phone
+  # look broken: as soon as we let go, the state machine steps and the old value
+  # never matches again. If a dump has no force flag, say so rather than record
+  # something that will not hold.
+  _f=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+  printf 'deviceidle-force\t%s\n' "${_f:-unknown}"
 }
 apply_deep_doze() {
   dumpsys deviceidle force-idle deep >/dev/null 2>&1 && touch "$STATE/doze_forced"
@@ -464,7 +497,10 @@ meta_battery_saver() {
 }
 snapshot_battery_saver() { snap_kv @global:low_power @global:low_power_sticky @global:battery_saver_constants; }
 apply_battery_saver() { apply_kv "@global:low_power=1" "@global:low_power_sticky=1"; }
-restore_battery_saver() { restore_kv "$1" "$2"; sdel global battery_saver_constants; }
+# No extra cleanup here: if the ROM had battery_saver_constants before us it is
+# in the snapshot and gets written back, and if it did not, restore_kv deletes
+# it. Unconditionally deleting it threw away a setting that was never ours.
+restore_battery_saver() { restore_kv "$1" "$2"; }
 
 meta_sync_off() {
   echo "Power|Stop account sync|Background account sync stops, so mail and contacts do not refresh until you exit.|0|session|breaks-features"

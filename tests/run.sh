@@ -117,26 +117,26 @@ system,com.android.messaging,10183
 user,com.whatsapp,10199
 EOF
   printf 'secure.double_tap_to_wake' >/dev/null
-  echo 1 > "$S/settings/secure.double_tap_to_wake"
-  echo 1 > "$S/settings/system.double_tap_to_wake"
-  echo 1 > "$S/settings/secure.tap_to_wake"
-  echo 1 > "$S/settings/secure.doze_always_on"
-  echo 1 > "$S/settings/system.screen_brightness_mode"
-  echo 30000 > "$S/settings/system.screen_off_timeout"
-  echo 1 > "$S/settings/global.animator_duration_scale"
-  echo 1 > "$S/settings/global.transition_animation_scale"
-  echo 1 > "$S/settings/global.window_animation_scale"
-  echo 1 > "$S/settings/system.haptic_feedback_enabled"
-  echo 1 > "$S/settings/system.accelerometer_rotation"
-  echo 1 > "$S/settings/global.wifi_on"
-  echo 1 > "$S/settings/global.wifi_scan_always_enabled"
-  echo 1 > "$S/settings/global.bluetooth_on"
-  echo 1 > "$S/settings/global.nfc_on"
-  echo 1 > "$S/settings/global.ble_scan_always_enabled"
-  echo 1 > "$S/settings/global.network_recommendations_enabled"
-  echo 1 > "$S/settings/global:auto_sync" 2>/dev/null || echo 1 > "$S/settings/global.auto_sync"
-  echo 1 > "$S/settings/global.low_power"
-  echo 1 > "$S/settings/secure.location_mode"
+  printf '%s' 1 > "$S/settings/secure.double_tap_to_wake"
+  printf '%s' 1 > "$S/settings/system.double_tap_to_wake"
+  printf '%s' 1 > "$S/settings/secure.tap_to_wake"
+  printf '%s' 1 > "$S/settings/secure.doze_always_on"
+  printf '%s' 1 > "$S/settings/system.screen_brightness_mode"
+  printf '%s' 30000 > "$S/settings/system.screen_off_timeout"
+  printf '%s' 1 > "$S/settings/global.animator_duration_scale"
+  printf '%s' 1 > "$S/settings/global.transition_animation_scale"
+  printf '%s' 1 > "$S/settings/global.window_animation_scale"
+  printf '%s' 1 > "$S/settings/system.haptic_feedback_enabled"
+  printf '%s' 1 > "$S/settings/system.accelerometer_rotation"
+  printf '%s' 1 > "$S/settings/global.wifi_on"
+  printf '%s' 1 > "$S/settings/global.wifi_scan_always_enabled"
+  printf '%s' 1 > "$S/settings/global.bluetooth_on"
+  printf '%s' 1 > "$S/settings/global.nfc_on"
+  printf '%s' 1 > "$S/settings/global.ble_scan_always_enabled"
+  printf '%s' 1 > "$S/settings/global.network_recommendations_enabled"
+  printf '%s' 1 > "$S/settings/global:auto_sync" 2>/dev/null || printf '%s' 1 > "$S/settings/global.auto_sync"
+  printf '%s' 1 > "$S/settings/global.low_power"
+  printf '%s' 1 > "$S/settings/secure.location_mode"
   echo com.android.launcher3 > "$S/home_role"
   echo com.android.launcher3/.Launcher > "$S/home_activity"
   # The radio state the settings above describe, so a correct revert has to
@@ -165,6 +165,17 @@ run_shell() { # run_shell script args...
 
 # Dump of everything the engine could possibly have touched. This is the whole
 # point of the suite: on/off must be a no-op on this dump.
+journal_entries_states() {
+  _n=0
+  for _f in "$WORK/spsm/journal"/*.state; do
+    [ -f "$_f" ] || continue
+    case "$(cat "$_f" 2>/dev/null)" in
+      applied|restored-drift) _n=$((_n + 1)) ;;
+    esac
+  done
+  echo "$_n"
+}
+
 stop_daemons() {
   _p=$(cat "$WORK/spsm/daemon.pid" 2>/dev/null)
   [ -n "$_p" ] && kill "$_p" 2>/dev/null
@@ -433,6 +444,31 @@ else
 fi
 [ ! -f "$WORK/spsm/state/needs_restore" ]; check "no restore marker on a clean boot" $?
 
+# A journal left behind by a session that DID finish is just paper: every knob
+# in it is marked restored. Booting must not force anything on account of it.
+make_tree; make_stubs; seed_stub_state
+enable_knobs cpu_cap
+screen_off
+run_engine activate >/dev/null 2>&1
+run_engine screen-off >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ "$(journal_entries_states)" = "0" ]
+check "the finished session left no knob marked applied" $?
+# The user now sets the phone up their own way and reboots.
+screen_on
+echo 0 > "$ROOT/sys/devices/system/cpu/cpu6/online"
+echo powersave > "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor"
+echo 25 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+dump_state "$WORK/paper_before"
+run_shell "$REPO/module/post-fs-data.sh" >"$WORK/out.pfd13b" 2>&1
+dump_state "$WORK/paper_after"
+if diff -q "$WORK/paper_before" "$WORK/paper_after" >/dev/null; then
+  ok "a finished journal does not force anything on the next boot"
+else
+  bad "a finished journal does not force anything on the next boot"
+  show_diff "$WORK/paper_before" "$WORK/paper_after"
+fi
+
 say "14. a boot after a crash does put the phone back"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_offline_big cpu_cap
@@ -502,6 +538,46 @@ rm -f "$WORK/spsm/state/active"
 kill "$DPID" 2>/dev/null
 wait "$DPID" 2>/dev/null
 
+say "17. the shipped defaults are a valid, fully reversible session"
+make_tree; make_stubs; seed_stub_state
+# No config file at all: this is what the phone does the first time it is used.
+dump_state "$WORK/def_before"
+run_engine activate >"$WORK/out.act17" 2>&1
+check "activate with no config exits 0" $?
+dump_state "$WORK/def_mid"
+[ "$(sha256sum "$WORK/def_before" | awk '{print $1}')" != "$(sha256sum "$WORK/def_mid" | awk '{print $1}')" ]
+check "the defaults actually change the device" $?
+# The deep knobs are the ones that only exist while the phone is asleep, and
+# they are where the overnight saving comes from.
+screen_off
+run_engine screen-off >"$WORK/out.so17" 2>&1
+grep -q "snap deep_doze" "$WORK/spsm/spsm.log"
+check "deep doze is on by default once asleep" $?
+grep -q "snap app_restrict" "$WORK/spsm/spsm.log"
+check "background restriction is on by default once asleep" $?
+grep -q "snap cpu_cap" "$WORK/spsm/spsm.log"
+check "cpu cap is on by default once asleep" $?
+grep -q "snap freeze_google" "$WORK/spsm/spsm.log" && bad "freeze_google must stay off by default" || ok "freeze_google stays off by default"
+screen_on
+run_engine screen-on >"$WORK/out.son17" 2>&1
+run_engine deactivate >"$WORK/out.dea17" 2>&1
+dump_state "$WORK/def_after"
+if diff -q "$WORK/def_before" "$WORK/def_after" >/dev/null; then
+  ok "the defaults revert byte-for-byte"
+else
+  bad "the defaults revert byte-for-byte"
+  show_diff "$WORK/def_before" "$WORK/def_after"
+fi
+run_engine verify >"$WORK/out.ver17" 2>&1
+grep -q 'drift=0' "$WORK/out.ver17"
+DRIFT_OK=$?
+check "no drift from a default session" $DRIFT_OK
+[ "$DRIFT_OK" = "0" ] || {
+  echo "    --- engine drift log ---"
+  grep -E "DRIFT|left|keep " "$WORK/spsm/spsm.log" | tail -8 | sed 's/^/    /'
+  echo "    --- verify output: $(cat "$WORK/out.ver17") ---"
+}
+
 say "18. the mode measures its own idle drain"
 make_tree; make_stubs; seed_stub_state
 mkdir -p "$WORK/spsm/state"
@@ -550,46 +626,6 @@ rm -f "$WORK/spsm/state/active"
 kill "$DPID" 2>/dev/null
 wait "$DPID" 2>/dev/null
 
-say "17. the shipped defaults are a valid, fully reversible session"
-make_tree; make_stubs; seed_stub_state
-# No config file at all: this is what the phone does the first time it is used.
-dump_state "$WORK/def_before"
-run_engine activate >"$WORK/out.act17" 2>&1
-check "activate with no config exits 0" $?
-dump_state "$WORK/def_mid"
-[ "$(sha256sum "$WORK/def_before" | awk '{print $1}')" != "$(sha256sum "$WORK/def_mid" | awk '{print $1}')" ]
-check "the defaults actually change the device" $?
-# The deep knobs are the ones that only exist while the phone is asleep, and
-# they are where the overnight saving comes from.
-screen_off
-run_engine screen-off >"$WORK/out.so17" 2>&1
-grep -q "snap deep_doze" "$WORK/spsm/spsm.log"
-check "deep doze is on by default once asleep" $?
-grep -q "snap app_restrict" "$WORK/spsm/spsm.log"
-check "background restriction is on by default once asleep" $?
-grep -q "snap cpu_cap" "$WORK/spsm/spsm.log"
-check "cpu cap is on by default once asleep" $?
-grep -q "snap freeze_google" "$WORK/spsm/spsm.log" && bad "freeze_google must stay off by default" || ok "freeze_google stays off by default"
-screen_on
-run_engine screen-on >"$WORK/out.son17" 2>&1
-run_engine deactivate >"$WORK/out.dea17" 2>&1
-dump_state "$WORK/def_after"
-if diff -q "$WORK/def_before" "$WORK/def_after" >/dev/null; then
-  ok "the defaults revert byte-for-byte"
-else
-  bad "the defaults revert byte-for-byte"
-  show_diff "$WORK/def_before" "$WORK/def_after"
-fi
-run_engine verify >"$WORK/out.ver17" 2>&1
-grep -q 'drift=0' "$WORK/out.ver17"
-DRIFT_OK=$?
-check "no drift from a default session" $DRIFT_OK
-[ "$DRIFT_OK" = "0" ] || {
-  echo "    --- engine drift log ---"
-  grep -E "DRIFT|left|keep " "$WORK/spsm/spsm.log" | tail -8 | sed 's/^/    /'
-  echo "    --- verify output: $(cat "$WORK/out.ver17") ---"
-}
-
 say "19. an exit cannot be undone by a screen-off already in flight"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap app_restrict deep_doze
@@ -628,6 +664,221 @@ check "no lock left behind" $LOCK_OK
 }
 run_engine verify >"$WORK/out.ver19" 2>&1
 grep -q 'drift=0' "$WORK/out.ver19"; check "nothing drifted" $?
+
+say "20. a dim screen the user chose is not brightened, during or after"
+make_tree; make_stubs; seed_stub_state
+enable_knobs brightness_cap
+screen_on
+echo 10 > "$ROOT/sys/class/leds/lcd-backlight/brightness"   # darker than the cap
+run_engine activate >"$WORK/out.act20" 2>&1
+check "activate exits 0" $?
+[ "$(cat "$ROOT/sys/class/leds/lcd-backlight/brightness")" = "10" ]
+check "the cap did not brighten a darker screen (it is a cap, not a level)" $?
+run_engine deactivate >"$WORK/out.dea20" 2>&1
+check "deactivate exits 0" $?
+[ "$(cat "$ROOT/sys/class/leds/lcd-backlight/brightness")" = "10" ]
+check "the user's own brightness survived the exit" $?
+run_engine verify >"$WORK/out.ver20" 2>&1
+grep -q 'drift=0' "$WORK/out.ver20"; check "no drift" $?
+
+say "21. exiting a session that changed nothing touches nothing"
+make_tree; make_stubs; seed_stub_state
+run_engine dump-knobs >/dev/null 2>&1
+# The user has turned every knob off. Turning the mode on now does nothing at
+# all, so turning it off must not quietly "fix" any of their own choices.
+while IFS='|' read -r _id _rest; do echo "knob.$_id=0" >> "$WORK/spsm/config"; done < "$WORK/spsm/knobs.list"
+screen_on
+echo 0 > "$ROOT/sys/devices/system/cpu/cpu6/online"          # core parked on purpose
+echo powersave > "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor"
+echo 300 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+run_engine activate >"$WORK/out.act21" 2>&1
+run_engine deactivate >"$WORK/out.dea21" 2>&1
+check "the round trip exits 0" $?
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu6/online")" = "0" ]
+check "the core the user parked stayed parked" $?
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor")" = "powersave" ]
+check "the governor the user chose stayed" $?
+[ "$(cat "$ROOT/sys/class/leds/lcd-backlight/brightness")" = "300" ]
+check "the brightness the user chose stayed" $?
+
+say "22. re-applying the idle phase keeps the original app state"
+make_tree; make_stubs; seed_stub_state
+enable_knobs app_restrict
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+# The mode is on and idle. It is applied again without ever being released
+# first - a second tap on Turn on, or resuming after a reboot.
+run_engine activate >"$WORK/out.act22" 2>&1
+run_engine deactivate >"$WORK/out.dea22" 2>&1
+[ "$(cat "$WORK/stub/bucket/com.spotify.music")" = "20" ]
+check "spotify bucket returned to its original 20 (got $(cat "$WORK/stub/bucket/com.spotify.music"))" $?
+[ "$(grep -o 'allow' "$WORK/stub/appop/com.spotify.music" | head -1)" = "allow" ]
+check "spotify background permission returned to allow" $?
+
+say "23. a setting the mode never touched is not deleted on exit"
+make_tree; make_stubs; seed_stub_state
+echo "v=1,night" > "$WORK/stub/settings/global.battery_saver_constants"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ -f "$WORK/stub/settings/global.battery_saver_constants" ]
+check "the ROM's battery saver constants are still there" $?
+[ "$(cat "$WORK/stub/settings/global.battery_saver_constants")" = "v=1,night" ]
+check "and still hold their value" $?
+
+say "24. exiting does not wake a package the user had disabled"
+make_tree; make_stubs; seed_stub_state
+enable_knobs freeze_google
+echo disabled-user > "$WORK/stub/pkg/com.android.vending.enabled"
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+run_engine screen-on >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/pkg/com.android.vending.enabled")" = "disabled-user" ]
+check "Play Store is still disabled by the user's choice (got $(cat "$WORK/stub/pkg/com.android.vending.enabled"))" $?
+[ "$(cat "$WORK/stub/pkg/com.google.android.gms.enabled" 2>/dev/null || echo default)" != "disabled-user" ]
+check "Play services is still usable" $?
+
+say "25. a value containing a tab is not mistaken for an external change"
+make_tree; make_stubs; seed_stub_state
+enable_knobs wifi_off
+# A settings row holding a literal tab: WiFi off is applied through svc/cmd, so
+# this row is snapshotted but never written by us. It must survive, and it must
+# not be misreported as "changed externally" just because it contains a tab.
+printf 'always	scan' > "$WORK/stub/settings/global.wifi_scan_always_enabled"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+run_engine verify >"$WORK/out.ver25" 2>&1
+[ "$(cat "$WORK/stub/settings/global.wifi_scan_always_enabled")" = "$(printf 'always	scan')" ]
+check "the tab-bearing value is unchanged" $?
+grep -q 'drift=0' "$WORK/out.ver25"; check "no drift" $?
+grep -q 'left-alone=0' "$WORK/out.ver25"
+check "nothing was misreported as externally changed ($(cat "$WORK/out.ver25"))" $?
+
+say "26. a value containing a literal backslash-n survives the journal"
+make_tree; make_stubs; seed_stub_state
+enable_knobs wifi_off
+# A value that merely LOOKS like our escape syntax. If the encoder and the
+# decoder are not exact inverses, this is where it shows.
+printf '%s' 'line\nnext' > "$WORK/stub/settings/global.wifi_scan_always_enabled"
+screen_on
+run_engine activate >"$WORK/out.act26" 2>&1
+run_engine deactivate >"$WORK/out.dea26" 2>&1
+printf '%s' 'line\nnext' > "$WORK/want26"
+cp "$WORK/stub/settings/global.wifi_scan_always_enabled" "$WORK/got26"
+if cmp -s "$WORK/want26" "$WORK/got26"; then
+  ok "the escaped-looking value came back byte for byte"
+else
+  bad "the escaped-looking value came back byte for byte"
+  od -c "$WORK/want26" | head -2 | sed 's/^/    want: /'
+  od -c "$WORK/got26"  | head -2 | sed 's/^/    got : /'
+fi
+
+say "26b. a value that really spans lines survives the journal"
+make_tree; make_stubs; seed_stub_state
+enable_knobs wifi_off
+# Some Settings rows hold embedded newlines. The journal is one record per line,
+# so a value like this used to be put back truncated at its first line.
+printf 'line1\nline2\nline3' > "$WORK/stub/settings/global.wifi_scan_always_enabled"
+screen_on
+run_engine activate >"$WORK/out.act26b" 2>&1
+run_engine deactivate >"$WORK/out.dea26b" 2>&1
+printf 'line1\nline2\nline3' > "$WORK/want26b"
+cp "$WORK/stub/settings/global.wifi_scan_always_enabled" "$WORK/got26b"
+if cmp -s "$WORK/want26b" "$WORK/got26b"; then
+  ok "the multi-line value came back byte for byte"
+else
+  bad "the multi-line value came back byte for byte"
+  od -c "$WORK/want26b" | head -2 | sed 's/^/    want: /'
+  od -c "$WORK/got26b"  | head -2 | sed 's/^/    got : /'
+fi
+
+say "27. re-entering after an unfinished exit still restores the true original"
+make_tree; make_stubs; seed_stub_state
+enable_knobs cpu_cap
+screen_off
+run_engine activate >/dev/null 2>&1
+run_engine screen-off >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+check "the cap is applied" $?
+# The exit was interrupted after it had already marked the mode off: the
+# journal is the only record of what the phone looked like before.
+rm -f "$WORK/spsm/state/active"
+run_engine activate >"$WORK/out.act27" 2>&1
+run_engine deactivate >"$WORK/out.dea27" 2>&1
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+check "the original ceiling came back, not the capped one (got $(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq"))" $?
+run_engine verify >"$WORK/out.ver27" 2>&1
+grep -q 'drift=0' "$WORK/out.ver27"; check "no drift" $?
+
+say "28. a lock left by a dead process is taken at once"
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/spsm/lock"
+# pid 4194303 will not exist: a process that died holding the lock. Its mtime is
+# fresh, so only a liveness check can tell that it is safe to take.
+echo 4194303 > "$WORK/spsm/lock/pid"
+screen_on
+START=$(date +%s)
+run_engine activate >"$WORK/out.act28" 2>&1
+ACT_RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+check "activate succeeds instead of waiting out the stale-lock timer" $ACT_RC
+[ "$ELAPSED" -lt 10 ]
+check "and it did so immediately (${ELAPSED}s)" $?
+[ ! -d "$WORK/spsm/lock" ]; check "the lock was released" $?
+
+say "29. releasing doze does not look like an unmet promise"
+make_tree; make_stubs; seed_stub_state
+enable_knobs deep_doze
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+screen_on
+run_engine screen-on >"$WORK/out.son29" 2>&1
+run_engine deactivate >/dev/null 2>&1
+run_engine verify >"$WORK/out.ver29" 2>&1
+grep -q 'drift=0' "$WORK/out.ver29"; check "no drift after releasing doze" $?
+grep -q 'left-alone=0' "$WORK/out.ver29"
+LEFT_OK=$?
+check "doze was not misreported as an external change ($(cat "$WORK/out.ver29"))" $LEFT_OK
+[ "$LEFT_OK" = "0" ] || grep -E "keep |DRIFT" "$WORK/spsm/spsm.log" | tail -4 | sed 's/^/    /' 
+
+say "30. the emergency brightness lift still exists, and still fires"
+make_tree; make_stubs; seed_stub_state
+# A revert that never finished: our cap is on the panel, the journal still says
+# it is ours, and the mode is no longer flagged on. This is the only situation
+# the net is for - a phone that is quietly unreadable.
+mkdir -p "$WORK/spsm/journal"
+printf 'brightness_cap\t10\n' > "$WORK/spsm/journal/brightness_cap.applied"
+printf 'applied\n' > "$WORK/spsm/journal/brightness_cap.state"
+screen_on
+echo 10 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; safety_unlock' >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/class/leds/lcd-backlight/brightness")" = "128" ]
+check "the net lifted a stuck dark cap (got $(cat "$ROOT/sys/class/leds/lcd-backlight/brightness"))" $?
+
+# ...but while the mode is on, that same dark panel is deliberate and must be
+# left alone. The net must not fight the mode it belongs to.
+echo 10 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+touch "$WORK/spsm/state/active"
+run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; safety_unlock' >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/class/leds/lcd-backlight/brightness")" = "10" ]
+check "the net stays out of the way while the mode is on" $?
+rm -f "$WORK/spsm/state/active"
+
+# And a value the user owns is not ours to lift, even when it is dark.
+rm -f "$WORK/spsm/journal/brightness_cap.applied" "$WORK/spsm/journal/brightness_cap.state"
+echo 10 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; safety_unlock' >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/class/leds/lcd-backlight/brightness")" = "10" ]
+check "the net does not touch a brightness it never set" $?
+
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

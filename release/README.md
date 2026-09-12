@@ -1,20 +1,31 @@
 # Release artifacts
 
-`Axion-SPSM-v<version>-RMX3430.zip` is the flashable module, written here by
-`tools/makezip.sh` (which takes its version from `module/module.prop`, so the
-file name and the zip contents cannot disagree).
+The file to flash is the one matching the newest release:
+**`Axion-SPSM-v3.0.1-RMX3430.zip`**
 
-It is committed rather than only attached to the GitHub release because the
+`tools/makezip.sh` writes it here, taking the version from `module/module.prop`,
+so the file name, the zip's `module.prop` and the app's version stamp cannot
+disagree.
+
+| file | release |
+|---|---|
+| `Axion-SPSM-v3.0.1-RMX3430.zip` | [v3.0.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0.1) — current |
+| `Axion-SPSM-v3.0-RMX3430.zip` | [v3.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.0) |
+
+Zips are committed rather than only attached to the GitHub release because the
 release-assets endpoint (`uploads.github.com`) is not reachable from every build
-environment, and a release with no downloadable file is worse than a commit with
-one. Download it from here, or from the release page, which links to this path
-at the tag.
+environment, and a release with no downloadable file is worse than a commit that
+has one. Older versions stay available at their tags either way.
 
-To attach it to the release as a proper asset from a machine that can reach
-GitHub's upload host:
+To attach one as a proper release asset from a machine that can reach GitHub's
+upload host:
 
 ```sh
-gh release upload v3.0 release/Axion-SPSM-v3.0-RMX3430.zip
+gh release upload v3.0.1 release/Axion-SPSM-v3.0.1-RMX3430.zip
 ```
 
-Rebuild after any change to `module/` or `app/`: `./build.sh && ./tools/makezip.sh`.
+Rebuild after any change to `module/` or `app/`:
+
+```sh
+./build.sh && ./tools/makezip.sh
+```

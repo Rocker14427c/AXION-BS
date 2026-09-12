@@ -30,11 +30,16 @@ knob_apply() { # knob_apply id
   _fn="apply_$_id"
   [ "$(type "$_fn" 2>/dev/null)" ] || { log "no apply function for $_id"; return 1; }
 
-  # First time this session we touch the knob, remember the original.
-  if ! j_has "$_id"; then
+  # Remember what the knob looked like before we touch it. "Before" means before
+  # THIS application, not before this session: when a value has already been
+  # released (the deep phase let go on wake) applying it again must record the
+  # value that is current then. Keeping the first snapshot of the session would
+  # restore a value the phone has since moved past.
+  _st=$(j_state "$_id")
+  if ! j_has "$_id" || [ -z "$_st" ] || [ "$_st" = "restored" ] || [ "$_st" = "left" ]; then
     _snap=$("snapshot_$_id" 2>/dev/null)
     j_record_orig "$_id" "$_snap"
-    log "snap $_id: $(printf '%s' "$_snap" | tr '\n' ' ' | cut -c1-160)"
+    log "snap $_id: $(unesc "$_snap" | tr '\n' ' ' | cut -c1-160)"
   fi
 
   _before=$("snapshot_$_id" 2>/dev/null)
@@ -70,8 +75,10 @@ knob_revert() { # knob_revert id
 
   # Both snapshots go to the restore function: it decides per value whether
   # that value is still ours to undo.
-  j_orig "$_id" > "$JOURNAL/$_id.orig.txt"
-  j_applied "$_id" > "$JOURNAL/$_id.applied.txt"
+  # The journal files are already one target per line, so they are handed over
+  # as they are; restore_kv decodes each value on the way out to the device.
+  cp -f "$JOURNAL/$_id.orig" "$JOURNAL/$_id.orig.txt" 2>/dev/null
+  cp -f "$JOURNAL/$_id.applied" "$JOURNAL/$_id.applied.txt" 2>/dev/null
   "$_fn" "$JOURNAL/$_id.orig.txt" "$JOURNAL/$_id.applied.txt"
   _rc=$?
   rm -f "$JOURNAL/$_id.orig.txt" "$JOURNAL/$_id.applied.txt"
@@ -187,17 +194,26 @@ do_deactivate() {
   phase_deep_revert
   phase_session revert
 
-  # Whatever the journal says, these must never survive an exit.
-  if [ "$(journal_entries)" = "0" ]; then
-    # Nothing was recorded, so there is no "before" to be faithful to.
+  # Which safety net is right depends on whether anything was actually left
+  # behind - not on whether a journal exists. A session where every knob was
+  # switched off records nothing, and forcing cores, governor and backlight on
+  # the way out would then overwrite choices the user made for themselves.
+  # Called in this shell, not in a subshell: do_verify sets DRIFT, and both the
+  # safety decision and the closing message below read it.
+  do_verify quiet >/dev/null 2>&1
+  if [ "$(pending_knobs)" = "0" ]; then
+    log "exit: nothing of ours is left in place, so nothing needs forcing"
+  elif [ "${DRIFT:-0}" != "0" ]; then
+    # A value of ours is still in place after a full revert pass. This is the
+    # case forcing exists for: better a phone that is obviously usable than one
+    # that is quietly capped.
+    log "exit: ${DRIFT} value(s) could not be restored - forcing the safety valves"
     safety_force
   else
     safety_unlock
   fi
-  sdel global battery_saver_constants
 
-  do_verify quiet
-  if [ "$DRIFT" = "0" ]; then
+  if [ "${DRIFT:-0}" = "0" ]; then
     log "revert clean: every change returned to its original value"
     progress "Off"
   else
@@ -299,7 +315,7 @@ do_verify() { # do_verify [quiet]
           kept) _ran=$((_ran + 1)) ;;
           *)
             DRIFT=$((DRIFT + 1))
-            log "DRIFT $_k: want [$(j_orig "$_k" | tr '\n' ' ')] got [$(printf '%s' "$_now" | tr '\n' ' ')]"
+            log "DRIFT $_k: want [$(unesc "$(j_orig "$_k")" | tr '\n' ' ')] got [$(unesc "$_now" | tr '\n' ' ')]"
             ;;
         esac
         ;;

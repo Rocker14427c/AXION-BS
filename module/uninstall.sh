@@ -16,7 +16,7 @@ _pending=1
 if [ -f "$SPSM_DIR/scripts/lib.sh" ]; then
   # shellcheck source=/dev/null
   . "$SPSM_DIR/scripts/lib.sh" 2>/dev/null
-  [ "$(journal_entries 2>/dev/null)" = "0" ] && _pending=0
+  [ "$(pending_knobs 2>/dev/null)" = "0" ] && _pending=0
 fi
 [ "$_pending" = "1" ] && safety_force
 

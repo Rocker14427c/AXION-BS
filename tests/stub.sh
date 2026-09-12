@@ -26,10 +26,13 @@ case "$CMD" in
     log_call "$@"
     case "$1" in
       get)
+        # printf, not echo: dash's echo reinterprets backslashes inside the
+        # value, which the real `settings get` never does. A value that
+        # genuinely contained a backslash arrived here mangled.
         v=$(sget "$2" "$3")
-        [ -n "$v" ] && echo "$v" || echo "null"
+        if [ -n "$v" ]; then printf '%s\n' "$v"; else echo "null"; fi
         ;;
-      put) printf '%s\n' "$4" > "$S/settings/$2.$3" ;;
+      put) printf '%s' "$4" > "$S/settings/$2.$3" ;;
       delete) rm -f "$S/settings/$2.$3" ;;
     esac
     ;;

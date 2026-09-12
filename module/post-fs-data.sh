@@ -22,7 +22,10 @@ SPSM_DIR=${SPSM_DIR:-/data/adb/spsm}
 # journal with entries in it, or the active flag, means the last shutdown
 # happened with the mode on. Forcing cores/governor/backlight on a normal boot
 # would overwrite the user's own settings for no reason.
-if [ "$(journal_entries)" = "0" ] && [ ! -f "$ACTIVE" ]; then
+# A journal is not the same thing as an unfinished session. Only a knob still
+# marked applied, or the active flag, means the phone may be running with values
+# of ours - force anything on any other boot and the user's own settings pay.
+if [ "$(pending_knobs)" = "0" ] && [ ! -f "$ACTIVE" ]; then
   exit 0
 fi
 

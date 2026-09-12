@@ -1,7 +1,12 @@
 #!/system/bin/sh
 # Axion SPSM v3 - installer.
+# Read the version from module.prop rather than repeating it here: a banner that
+# disagrees with the zip is how a user ends up reporting the wrong version.
+_VERSION=$(sed -n 's/^version=//p' "$MODPATH/module.prop" 2>/dev/null | head -1)
+[ -n "$_VERSION" ] || _VERSION=v?
+
 ui_print " "
-ui_print "  Axion Super Power Saving Mode v3.0"
+ui_print "  Axion Super Power Saving Mode $_VERSION"
 ui_print "  Journaled: every change is recorded before it happens"
 ui_print "  and reverted on exit - RMX3430 / AxionOS 2.7"
 ui_print " "

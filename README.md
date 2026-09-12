@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.0**.
+Current module: **v3.0.1**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -43,7 +43,8 @@ default install turns on:
 3. **Radio** (`wifi_off`, `bt_off`, `nfc_off`, `scan_always_off`) — Wi-Fi and
    background scanning are the biggest idle talkers. Mobile data stays up for
    VoLTE.
-4. **Panel and touch** (`dt2w_off`, `aod_off`) — stops the touch controller and the
+4. **Panel and touch** (`dt2w_off`, `aod_off`, `brightness_cap` — a cap that
+   only ever *lowers* the screen, so a display you keep dim stays dim) — stops the touch controller and the
    ambient panel waking the SoC.
 5. **CPU / GPU caps while asleep** (`cpu_cap`, `gpu_cap`, `ged_boost_off`) — the
    ceiling is lowered only while the screen is off, so wake-up stays instant.
@@ -73,7 +74,7 @@ would have taken 8 seconds.
 
 ## Install (ResukiSU)
 
-1. Download `Axion-SPSM-v3.0-RMX3430.zip` from
+1. Download `Axion-SPSM-v3.0.1-RMX3430.zip` from
    [Releases](https://github.com/Rocker14427c/AXION-BS/releases).
 2. **ResukiSU → Modules → Install from storage** → zip → **Reboot**.
 3. Open **Super Power Saving** → grant root → **Allow**.
@@ -84,6 +85,45 @@ Optional: add the **Super Power Save** tile in Quick Settings.
 
 If a previous version is installed, the installer undoes its leftover changes
 before installing.
+
+## What changed in 3.0.1
+
+A second, deliberately adversarial pass over every script. Ten things were
+wrong; each one was reproduced with a failing test before it was touched, and
+the test stays in the suite:
+
+- **The brightness cap could brighten your screen.** It wrote the cap
+  unconditionally, so if you kept the panel darker than the cap, switching the
+  mode on made it *brighter* — and the exit put back a value that was never
+  yours. It now only ever lowers.
+- **Exiting forced cores, governor and backlight whenever a journal existed**,
+  even for a session where every knob was switched off and nothing had been
+  recorded. Your own choices paid for it. It now forces only when a value of
+  ours is genuinely still in place.
+- **The "phone is stuck dark" net fired on a dim screen you had chosen**, on
+  every exit. It now acts only when the journal proves the value is still ours,
+  the mode is off, and the screen is on and unreadable.
+- **Re-applying the idle phase saved our own values as yours.** The deep phase
+  runs again on every screen-off cycle, and each run overwrote the record of
+  what your apps looked like — so after a second cycle (or a reboot) every app
+  stayed restricted after exit. The first record per idle period now stands.
+- **A setting the mode never touched was deleted on exit**
+  (`battery_saver_constants`), whatever it held.
+- **Sleeping Google re-enabled packages you had disabled yourself.** It now
+  only undoes its own change (unsuspend) and leaves your choices alone.
+- **An interrupted exit destroyed the record of the phone's real values.** If a
+  revert never finished, re-entering the mode made the capped value the new
+  "original". Unfinished records are now kept across sessions.
+- **A stale lock made the next action fail.** A lock left by a dead process
+  waited out a 20-second timer and then reported "busy". It is taken at once
+  when the owner is gone; the long override is reserved for a live, wedged one.
+- **A value that spans lines came back truncated** at its first line, and a
+  value containing a literal backslash-n came back as a newline. The journal is
+  one record per line with values encoded, and the codec is an exact inverse.
+- **Stepping out of doze was reported as an "external change"** by the verify
+  command, because the snapshot recorded a state the system moves by itself.
+
+`tests/run.sh` grew from 19 cases to 30 to pin all of this down.
 
 ## Measuring it
 
@@ -163,7 +203,7 @@ sh tests/run-install.sh       # the APK install fallback chain
 ```
 
 `tests/run.sh` runs the real engine scripts against a fake device tree with
-stubbed Android commands, 19 cases and 86 assertions. It asserts, among other
+stubbed Android commands, 30 cases and 119 assertions. It asserts, among other
 things, that entering and leaving the mode leaves that tree **byte-for-byte
 identical**, that a value you changed yourself is never overwritten, that a
 crash-and-reboot puts the phone back, that a normal boot touches nothing at all,
