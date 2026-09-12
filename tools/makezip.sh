@@ -9,7 +9,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MOD="$ROOT/module"
-OUT="$ROOT/build"
+OUT="$ROOT/release"
+# The zip is written into release/, not build/, because release/ is tracked: the
+# GitHub release assets endpoint is not always reachable (it is blocked from
+# some CI/sandbox networks), so the flashable zip is also committed here and the
+# release notes link to it. See release/README.md.
 
 if [ "${1:-}" = "--build" ]; then
   "$ROOT/build.sh"
