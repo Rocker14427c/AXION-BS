@@ -386,23 +386,43 @@ panel_read() {
 # previous state is passed in as a hint to skip that check where it cannot
 # change the answer: if we already knew the screen was off, a marker cannot turn
 # a dark panel into a lit one.
+# How long the app's "on" may outrank a dark panel, in seconds. The app
+# publishes the state the moment the screen changes, and that write can reach the
+# engine a fraction of a second before the backlight node actually lights, so a
+# reading of 0 can be real and momentary. That is all this window is for.
+#
+# It used to be a whole day, and that was an expensive mistake: the app writes
+# "on" every time it is opened or the screen wakes, and if the app's process is
+# then killed - which is normal for a cached app, and more likely while a power
+# saving mode is running - the marker stays at "on" with nobody left to write
+# "off". The stale marker then outranked the panel for 24 hours, so the daemon
+# was certain the screen was always on, never entered the deep phase, and the
+# entire power-saving half of the mode silently did nothing. That is exactly the
+# "no saving at all, cores normal" report this window is here to prevent.
+#
+# Bounded this way the failure is impossible: a marker that is more than a few
+# seconds old can never contradict the panel.
+SCREEN_MARK_GRACE=$(cfg screen_mark_grace 10)
+
 screen_decide() {
   _bl=$1
   _prev=$2
+  SCREEN_SRC=panel
+  PANEL_RAW=$_bl
   if [ -n "$_bl" ]; then
     case "$_bl" in
-      *[!0-9]*) ;;  # not a number: this reading says nothing, use the rest
+      *[!0-9]*) SCREEN_SRC=unreadable ;;  # not a number: this reading says nothing, use the rest
       0)
         if [ "$_prev" != "off" ]; then
           _mk=''
           [ -f "$SCREEN_MARK" ] && IFS= read -r _mk < "$SCREEN_MARK" 2>/dev/null
-          # A marker older than a day proves nothing (the app may have been
-          # uninstalled with its last "on" left behind), so it is only trusted
-          # while it is being refreshed.
-          _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
-          if [ "$_mk" = "on" ] && [ "$_age" -lt 86400 ] 2>/dev/null; then
-            SCREEN_STATE=on
-            return
+          if [ "$_mk" = "on" ]; then
+            _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
+            if [ "$_age" -le "$SCREEN_MARK_GRACE" ] 2>/dev/null; then
+              SCREEN_STATE=on
+              SCREEN_SRC="app-grace(${_age}s)"
+              return
+            fi
           fi
         fi
         SCREEN_STATE=off
@@ -425,6 +445,7 @@ screen_decide() {
       _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
       if [ "$_age" -lt 86400 ] 2>/dev/null; then
         SCREEN_STATE=$_mk
+        SCREEN_SRC=app
         return
       fi
       ;;
@@ -439,9 +460,22 @@ screen_decide() {
       Asleep|Dozing) SCREEN_STATE=off ;;
       *) SCREEN_STATE=on ;;
     esac
+    SCREEN_SRC=dumpsys
     return
   fi
   SCREEN_STATE=on
+  SCREEN_SRC=assumed
+}
+
+# What the marker says and how old it is, for the log. Only asked for on a
+# transition - it costs two processes, which is not a price a one-second poll can
+# pay on every tick.
+marker_word() {
+  [ -f "$SCREEN_MARK" ] || { printf '%s' '-'; return; }
+  _mk=''
+  IFS= read -r _mk < "$SCREEN_MARK" 2>/dev/null
+  _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
+  printf '%s@%ss' "${_mk:--}" "$_age"
 }
 
 screen_state() { # screen_state - prints on|off

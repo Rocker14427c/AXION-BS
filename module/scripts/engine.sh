@@ -380,7 +380,21 @@ applied_count() {
 
 do_status() {
   if [ -f "$ACTIVE" ]; then echo "active=1"; else echo "active=0"; fi
-  echo "screen=$(screen_state)"
+  # Called directly, not through $(screen_state): a command substitution runs in
+  # a subshell, and SCREEN_SRC/PANEL_RAW are set by the decision - asking through
+  # $( ) throws away exactly the evidence this line exists to print.
+  screen_decide "$(rd "$BL_PATH")" ''
+  echo "screen=$SCREEN_STATE"
+  # Which source answered, and whether the daemon that acts on it is alive. The
+  # second one is the difference between "the mode is doing nothing" and "the
+  # mode is not running".
+  echo "screen_source=$SCREEN_SRC"
+  echo "panel=${PANEL_RAW:--}"
+  if daemon_running; then
+    echo "daemon=$(cat "$DAEMON_PID" 2>/dev/null)"
+  else
+    echo "daemon=none"
+  fi
   echo "applied=$(applied_count)"
   echo "progress=$(cat "$PROGRESS" 2>/dev/null)"
   echo "last_exit_ok=$([ -f "$STATE/last_exit_ok" ] && echo 1 || echo 0)"
@@ -429,9 +443,24 @@ daemon_running() {
 start_daemon() {
   [ -f "$DAEMON" ] || return 0
   daemon_running && return 0
-  sh "$DAEMON" >>"$LOG" 2>&1 &
-  echo $! > "$DAEMON_PID"
-  log "daemon started (pid $(cat "$DAEMON_PID" 2>/dev/null))"
+  # Its own session when the phone has setsid: the daemon is normally started
+  # from a shell that belongs to the app, and a force-stop of that app must not
+  # be able to end the loop whose whole job is watching the screen. The daemon
+  # writes its own pid file - through setsid, $! is not the process that runs.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid sh "$DAEMON" >>"$LOG" 2>&1 &
+  else
+    sh "$DAEMON" >>"$LOG" 2>&1 &
+  fi
+  _dp=''
+  _w=0
+  while [ $_w -lt 10 ]; do
+    _dp=$(cat "$DAEMON_PID" 2>/dev/null)
+    [ -n "$_dp" ] && break
+    sleep 0.1
+    _w=$((_w + 1))
+  done
+  log "daemon started (pid ${_dp:-starting})"
 }
 
 stop_daemon() {

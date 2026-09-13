@@ -21,6 +21,11 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/lib.sh"
 
+# The pid file is written here rather than by the caller: the daemon may be
+# started through setsid, in which case the caller's $! is not the process that
+# ends up running this loop.
+printf '%s\n' "$$" > "$SPSM_DIR/daemon.pid" 2>/dev/null
+
 last_state=""
 
 # A plain `sleep` cannot be cut short, and waiting out a poll after the user
@@ -81,7 +86,22 @@ drain_report() { # drain_report - say what the sleep cost
 poked=0
 trap 'poked=1' USR1
 log "daemon start (pid $$)"
+
+# A mode that saves nothing and a mode that is not running look identical from
+# the outside, which is a bad way to find out that a daemon died. Two things
+# answer it: a heartbeat line every so many ticks, and the panel/marker evidence
+# on every decision. Both are cheap - the heartbeat counter is an integer and the
+# comparison is not even a fork.
+HEARTBEAT_TICKS=$(cfg heartbeat_ticks 60)
+ticks=0
+
+# Whether the deep phase is in place, without touching the CPU nodes.
+deep_word() {
+  [ -f "$STATE/deep_report" ] && printf 'applied' || printf 'released'
+}
+
 while true; do
+  ticks=$((ticks + 1))
   if [ ! -f "$ACTIVE" ]; then
     log "daemon: mode is off, exiting"
     break
@@ -100,7 +120,13 @@ while true; do
   screen_decide "$PANEL" "$last_state"
   now=$SCREEN_STATE
   if [ "$now" != "$last_state" ]; then
-    log "screen $last_state -> $now"
+    # Say what decided, not just what was decided: this line is what tells a log
+    # reader whether the panel answered or something else did.
+    if [ -z "$last_state" ]; then
+      log "daemon: screen is $now (panel=${PANEL:--} via $SCREEN_SRC marker=$(marker_word))"
+    else
+      log "screen $last_state -> $now (panel=${PANEL:--} via $SCREEN_SRC)"
+    fi
     if [ "$now" = "off" ]; then
       sh "$SCRIPT_DIR/engine.sh" screen-off >>"$LOG" 2>&1
       drain_note
@@ -128,6 +154,14 @@ while true; do
   # between this mode and treacle. Asleep: 3s, which still catches a wake long
   # before the phone is in anyone's hand.
   if [ "$now" = "on" ]; then nap 1; else nap 3; fi
+
+  # The heartbeat. While asleep it is the proof that the mode is awake and
+  # watching even though nothing is happening - three minutes of silence and the
+  # line says the screen is off, the caps are in place, and this process is the
+  # one that says so.
+  if [ "$HEARTBEAT_TICKS" -gt 0 ] 2>/dev/null && [ $((ticks % HEARTBEAT_TICKS)) -eq 0 ]; then
+    log "daemon alive: panel=${PANEL:--} state=$now deep=$(deep_word) caps_little=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq) ticks=$ticks"
+  fi
 done
 
 echo "daemon exiting" >>"$LOG" 2>/dev/null

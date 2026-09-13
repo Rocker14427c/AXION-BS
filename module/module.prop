@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.0.5
-versionCode=35
+version=v3.0.6
+versionCode=36
 author=Axion SPSM
-description=v3.0.5 journaled apply/revert - every change recorded and restored. Options screen, screen-aware deep sleep. RMX3430.
+description=v3.0.6 journaled apply/revert - every change recorded and restored. Options screen, screen-aware deep sleep. RMX3430.

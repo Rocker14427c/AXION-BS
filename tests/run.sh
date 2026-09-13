@@ -913,13 +913,29 @@ echo 4095 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
 [ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "on" ]
 check "the top of the range reads as on" $?
 
-# A marker left behind by the app is stale evidence, and the panel outranks it.
-# Getting this backwards is the expensive mistake: the mode would drop the phone
-# into its deep phase while somebody is using it.
+# The panel outranks the app's marker - but the app's write can genuinely arrive
+# a moment before the backlight node lights, so a marker that is only seconds old
+# is allowed to win a dark reading.
 echo on > "$WORK/spsm/state/screen"
 echo 0 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
 [ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "on" ]
-check "a dark panel with a live \"on\" from the app is not called asleep" $?
+check "a dark panel right after the app says \"on\" is not called asleep yet (the backlight has not come up)" $?
+
+# The expensive mistake, and the one that was really happening on the device:
+# the app writes "on" every time it is opened, and then its process is killed, so
+# the marker stays "on" with nobody left to write "off". Trusting that for a
+# whole day meant the daemon was certain the screen was never off, never entered
+# the deep phase, and saved nothing at all.
+echo on > "$WORK/spsm/state/screen"
+touch -d '2 hours ago' "$WORK/spsm/state/screen"
+echo 0 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+[ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "off" ]
+check "a stale \"on\" marker cannot keep the mode out of its deep phase" $?
+
+# And what decided is recorded, so a log answers the question by itself.
+run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state; echo "src=$SCREEN_SRC raw=$PANEL_RAW"' > "$WORK/out.s31"
+grep -q "src=panel raw=0" "$WORK/out.s31"
+check "the panel is named as the source when the panel decides ($(cat "$WORK/out.s31" | tr '\n' ' '))" $?
 echo off > "$WORK/spsm/state/screen"
 echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
 [ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "on" ]
@@ -1217,6 +1233,69 @@ grep -q "^deep=released$" "$WORK/out.st40b"
 check "after waking, status says the idle state is released" $?
 run_engine deactivate >/dev/null 2>&1
 
+
+say "41. the phone that saved nothing: a stale marker, and a screen that goes off"
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/spsm/state"
+echo "knob.cpu_cap=1" >> "$WORK/spsm/config"
+# Heartbeats every two ticks, so the suite does not have to wait three minutes
+# for one.
+echo "heartbeat_ticks=2" >> "$WORK/spsm/config"
+screen_on
+# What is left of the app after Android reclaims it: it wrote "on" the last time
+# it was opened, and the process that would have written "off" is long gone.
+echo on > "$WORK/spsm/state/screen"
+touch -d '3 hours ago' "$WORK/spsm/state/screen"
+echo 1 > "$WORK/spsm/state/active"
+SPSM_ROOT="$ROOT" SPSM_DIR="$WORK/spsm" SPSM_STUB="$WORK/stub" PATH="$BIN:$PATH" \
+  sh "$WORK/spsm/scripts/daemon.sh" >>"$WORK/spsm/spsm.log" 2>&1 &
+DPID=$!
+sleep 2
+echo 0 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+i=0
+while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1100000" ]; do
+  sleep 0.25; i=$((i + 1))
+done
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+check "the deep phase engages despite the stale \"on\" marker (${i}x250ms)" $?
+grep -q "screen on -> off (panel=0 via panel)" "$WORK/spsm/spsm.log"
+check "and the log names the panel as what decided it" $?
+# The heartbeat proves the daemon is alive and watching while nothing else is
+# happening - the difference between "doing nothing" and "not running".
+i=0
+while [ $i -lt 16 ] && ! grep -q "daemon alive: panel=0 state=off" "$WORK/spsm/spsm.log"; do
+  sleep 0.5; i=$((i + 1))
+done
+grep -q "daemon alive: panel=0 state=off deep=applied" "$WORK/spsm/spsm.log"
+check "the heartbeat says the state, the caps and that it is alive ($(grep -m1 'daemon alive' "$WORK/spsm/spsm.log" | sed 's/^[0-9-]* [0-9:]* //'))" $?
+echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
+i=0
+while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1800000" ]; do
+  sleep 0.25; i=$((i + 1))
+done
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+check "and the wake still releases everything (${i}x250ms)" $?
+rm -f "$WORK/spsm/state/active"
+kill "$DPID" 2>/dev/null
+wait "$DPID" 2>/dev/null
+
+say "42. status says which source decided, and whether the daemon is alive"
+make_tree; make_stubs; seed_stub_state
+screen_off
+run_engine status > "$WORK/out.st42" 2>&1
+grep -q "^screen=off$" "$WORK/out.st42"
+check "a dark panel reads as off" $?
+grep -q "^screen_source=panel$" "$WORK/out.st42"
+check "and the panel is named as the source" $?
+grep -q "^daemon=none$" "$WORK/out.st42"
+check "with the mode off, there is no daemon and status says so" $?
+screen_on
+enable_knobs timeout_short
+run_engine activate >/dev/null 2>&1
+run_engine status > "$WORK/out.st42b" 2>&1
+grep -q "^daemon=[0-9]" "$WORK/out.st42b"
+check "with the mode on, status shows the daemon's pid" $?
+run_engine deactivate >/dev/null 2>&1
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

@@ -285,6 +285,70 @@ A lock released between the check and the stat was dated from the epoch, which
 produced `WARN stale lock (1789238021s) - taking it` in the log: alarming, and
 meaning nothing. The age is only computed when there is a lock to age.
 
+## What changed in 3.0.6 — why nothing was being saved
+
+### The bug: a stale "on" from the app made the mode believe the screen was always on
+
+This is the one that mattered, and it made everything else untestable.
+
+The screen state is read from the backlight node, which is the right answer on
+this phone. But one rule sat on top of it: when the panel read 0 (dark) and the
+module had not already decided "off", the app's marker file was allowed to
+override it, and that marker was trusted for **24 hours**.
+
+The app writes "on" every time it is opened and every time the screen wakes. It
+also writes "off" when the screen turns off — but only while its process is
+alive, and a cached app gets reclaimed routinely, more so while a power saving
+mode is running. So the sequence is ordinary:
+
+1. the app is opened (it writes `on`),
+2. Android reclaims the process,
+3. the screen is turned off and nobody writes `off`,
+4. the marker still says `on`, and it is fresh as far as the old rule was
+   concerned, so it outranks the dark panel.
+
+From then on the daemon is certain the screen is on, forever. It never logs a
+screen-off transition, never enters the deep phase, never applies a CPU cap,
+never freezes Google, never restricts background work, and `drain.log` stays
+empty — which is precisely the report: *"all cores active, schedutil, apps still
+running, no saving"*. The session knobs still worked, which is why the mode
+looked like it was doing something.
+
+The fix is a bound rather than a removal: the marker may outrank a dark panel
+only while it is seconds old (the window in which the app's write can genuinely
+arrive before the backlight node lights). Anything older is stale evidence, and
+the panel decides. `tests/run.sh` case 31 fails on the old rule and case 41
+reproduces the whole device scenario end to end.
+
+### The mode can now prove it is working, and prove it is alive
+
+A mode that saves nothing and a mode that is not running look identical from the
+outside, so the daemon now says what it is doing:
+
+```
+daemon: screen is off (panel=0 via panel marker=on@10800s)   <- the decision, and its evidence
+screen on -> off (panel=0 via panel)                          <- every transition
+daemon alive: panel=0 state=off deep=applied caps_little=1100000 ticks=60   <- every few minutes
+```
+
+The heartbeat is the important one: while the phone is asleep it is the proof
+that the screen is off, that the caps are in place, and that the process saying
+so is still running. `engine.sh status` reports the same thing on demand:
+
+```
+screen=off
+screen_source=panel
+panel=0
+deep=little_max=1100000 big_max=1300000 governor=schedutil doze=forced
+daemon=2341
+```
+
+### The daemon detaches itself
+
+It is started from a shell that belongs to an app, so it now runs in its own
+session (`setsid`, when the phone has it) and writes its own pid file. A
+force-stop of the app cannot take the screen watcher down with it.
+
 ## What changed in 3.0.5 — blocking other apps, and a list that shows them all
 
 ### Other apps can now actually be blocked (a knob, and you can turn it off)
