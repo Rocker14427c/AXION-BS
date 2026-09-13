@@ -79,7 +79,13 @@ public class AppPickerActivity extends Activity {
                 convertView = getLayoutInflater().inflate(R.layout.item_app_row, parent, false);
             }
             Apps.Item it = shown.get(position);
-            ((ImageView) convertView.findViewById(R.id.icon)).setImageDrawable(it.icon);
+            ImageView icon = convertView.findViewById(R.id.icon);
+            // An app with no icon of its own still has to be pickable.
+            if (it.icon != null) {
+                icon.setImageDrawable(it.icon);
+            } else {
+                icon.setImageResource(R.drawable.ic_plus);
+            }
             ((TextView) convertView.findViewById(R.id.label)).setText(it.label);
             ((TextView) convertView.findViewById(R.id.pkg)).setText(it.pkg);
             return convertView;

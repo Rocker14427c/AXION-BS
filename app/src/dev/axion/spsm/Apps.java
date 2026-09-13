@@ -80,18 +80,50 @@ final class Apps {
         return null;
     }
 
+    /**
+     * Apps a user can put in a slot.
+     *
+     * This used to ask only for activities that answer MAIN/LAUNCHER, which is
+     * how a launcher draws its drawer - and it left out exactly the apps that
+     * matter most here. A hidden root manager, or any app whose launcher entry
+     * has been disabled, has no such activity, so it simply was not offered: the
+     * user could not allow the app they use to get out of trouble. Root managers
+     * are also the apps most likely to be hidden deliberately.
+     *
+     * So the list is built from what is installed rather than from what is in
+     * the drawer: every app that has a launcher entry, plus every user-installed
+     * app, plus the known root managers. Disabled components are matched
+     * explicitly, and each package appears once no matter how many activities it
+     * has.
+     */
     static List<Item> launchable(Context c) {
         PackageManager pm = c.getPackageManager();
-        Intent i = new Intent(Intent.ACTION_MAIN);
-        i.addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> raw = pm.queryIntentActivities(i, 0);
+        List<ApplicationInfo> installed;
+        try {
+            installed = pm.getInstalledApplications(PackageManager.MATCH_DISABLED_COMPONENTS);
+        } catch (Throwable t) {
+            installed = pm.getInstalledApplications(0);
+        }
         List<Item> out = new ArrayList<>();
-        for (ResolveInfo ri : raw) {
-            if (ri.activityInfo == null) continue;
-            String pkg = ri.activityInfo.packageName;
+        if (installed == null) return out;
+        for (ApplicationInfo ai : installed) {
+            if (ai == null || ai.packageName == null) continue;
+            String pkg = ai.packageName;
             if ("dev.axion.spsm".equals(pkg)) continue;
-            CharSequence lab = ri.loadLabel(pm);
-            Drawable ic = ri.loadIcon(pm);
+            boolean hasLauncher;
+            try {
+                hasLauncher = pm.getLaunchIntentForPackage(pkg) != null;
+            } catch (Throwable t) {
+                hasLauncher = false;
+            }
+            boolean systemApp = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+            // A system app with no launcher entry is an internal component, not
+            // something to put on a home screen; a user app is kept either way.
+            if (!hasLauncher && systemApp && !isRootManager(pkg)) continue;
+            CharSequence lab = null;
+            Drawable ic = null;
+            try { lab = pm.getApplicationLabel(ai); } catch (Throwable ignored) {}
+            try { ic = pm.getApplicationIcon(ai); } catch (Throwable ignored) {}
             out.add(new Item(pkg, lab == null ? pkg : lab.toString(), ic));
         }
         Collections.sort(out, new Comparator<Item>() {
@@ -101,6 +133,21 @@ final class Apps {
         });
         return out;
     }
+
+    /** Root/kernel managers: never hidden from the list, never restricted. */
+    static boolean isRootManager(String pkg) {
+        for (String p : ROOT_MANAGERS) {
+            if (p.equals(pkg)) return true;
+        }
+        return false;
+    }
+
+    static final String[] ROOT_MANAGERS = {
+            "com.resukisu.resukisu", "me.resukisu.resukisu", "com.resukisu.manager",
+            "com.topjohnwu.magisk", "me.weishu.kernelsu", "com.rifsxd.ksunext",
+            "com.sukisu.ultra", "com.dergoogler.mmrl", "com.franco.kernel",
+            "eu.chainfire.supersu"
+    };
 
     static void launch(Context c, String pkg) {
         if (pkg == null || pkg.length() == 0) return;
