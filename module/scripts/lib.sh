@@ -180,6 +180,13 @@ revert_verdict() { # revert_verdict now-text orig-text applied-text
   _drift=0; _kept=0
   for _t in $(snap_targets "$_orig"); do
     _o=$(snap_get "$_orig" "$_t")
+    # A target whose original could not be read is one we never changed: the
+    # apply side refuses to write a value it could not read the original of (see
+    # apply_kv). Comparing that unreadable marker against a real reading later
+    # therefore proves nothing, and calling the difference drift is a false
+    # alarm - the two keys this phone refuses to read were doing exactly that on
+    # every exit, naming a value as unrestored that was never touched.
+    [ "$(unesc "$_o")" = "(MISSING)" ] && continue
     _n=$(snap_get "$_now" "$_t")
     [ "$_n" = "$_o" ] && continue
     _a=$(snap_get "$_applied" "$_t")
@@ -435,36 +442,68 @@ screen_decide() {
     esac
   fi
 
-  # The panel was unreadable. The app's marker is the next cheapest answer; its
-  # window is generous and continuous (the app refreshes it on every change), so
-  # a slow boot or a long doze transition cannot make a live signal look stale.
+  # The panel was unreadable this tick, so something else has to answer.
   _mk=''
   [ -f "$SCREEN_MARK" ] && IFS= read -r _mk < "$SCREEN_MARK" 2>/dev/null
-  case "$_mk" in
-    on|off)
-      _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
-      if [ "$_age" -lt 86400 ] 2>/dev/null; then
-        SCREEN_STATE=$_mk
-        SCREEN_SRC=app
-        return
-      fi
-      ;;
-  esac
 
-  # Last resort, and never on the hot path: `dumpsys power` is a binder dump,
-  # which is real work on a phone we are trying to save.
-  if has dumpsys; then
-    _st=$(dumpsys power 2>/dev/null | sed -n 's/.*mWakefulness=\([A-Za-z]*\).*/\1/p' | head -1)
-    case "$_st" in
-      Awake|Dreaming) SCREEN_STATE=on ;;
-      Asleep|Dozing) SCREEN_STATE=off ;;
-      *) SCREEN_STATE=on ;;
-    esac
-    SCREEN_SRC=dumpsys
-    return
+  # A marker that is only seconds old is a real event - the app saw the screen
+  # change - so it is the best answer available, even ahead of dumpsys.
+  if [ "$_mk" = "on" ] || [ "$_mk" = "off" ]; then
+    _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
+    if [ "$_age" -le "$SCREEN_MARK_GRACE" ] 2>/dev/null; then
+      SCREEN_STATE=$_mk
+      SCREEN_SRC="app-grace(${_age}s)"
+      return
+    fi
   fi
+
+  # Then the system's own answer. It cannot be stale the way a file can - it is
+  # the power manager being asked right now - so it outranks an old marker. This
+  # phone has a readable panel, so this path is for the phone where it is not:
+  # an unreadable panel with a marker left at "on" would otherwise be frozen into
+  # believing the screen is on forever, which is the same silent no-saving
+  # failure from the other direction.
+  if has dumpsys; then
+    _r=$(screen_dumpsys)
+    case "$_r" in
+      on|off)
+        SCREEN_STATE=$_r
+        SCREEN_SRC=dumpsys
+        return
+        ;;
+    esac
+  fi
+
+  # An old marker, then plain "on" - a screen we cannot read is never allowed to
+  # be called asleep on the strength of a guess: wrongly believing "off" while
+  # somebody is using the phone is the expensive direction.
+  case "$_mk" in
+    on|off) SCREEN_STATE=$_mk; SCREEN_SRC=app; return ;;
+  esac
   SCREEN_STATE=on
   SCREEN_SRC=assumed
+}
+
+# `dumpsys power` is a binder dump, so it is cached for a few seconds and only
+# the degraded path above ever pays for it. The cache file's mtime is the clock:
+# one stat is a fraction of the dump it replaces.
+SCREEN_DUMP_CACHE=$(cfg screen_dump_cache 15)
+screen_dumpsys() { # prints on|off, from the cache when it is fresh
+  if [ -f "$STATE/screen_dump" ]; then
+    _age=$(($(date +%s) - $(stat -c %Y "$STATE/screen_dump" 2>/dev/null || echo 0)))
+    if [ "$_age" -le "$SCREEN_DUMP_CACHE" ] 2>/dev/null; then
+      cat "$STATE/screen_dump" 2>/dev/null
+      return
+    fi
+  fi
+  _st=$(dumpsys power 2>/dev/null | sed -n 's/.*mWakefulness=\([A-Za-z]*\).*/\1/p' | head -1)
+  case "$_st" in
+    Awake|Dreaming) _r=on ;;
+    Asleep|Dozing) _r=off ;;
+    *) return ;;
+  esac
+  printf '%s\n' "$_r" > "$STATE/screen_dump" 2>/dev/null
+  printf '%s' "$_r"
 }
 
 # What the marker says and how old it is, for the log. Only asked for on a

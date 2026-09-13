@@ -65,11 +65,19 @@ try_install() {
   return 1
 }
 
+# Plain first. This is the form that works on the phone this module was written
+# for: its `pm` rejects both flags below with "Unknown option" and a stack trace,
+# so trying them first cost two failed rounds and filled install.log with noise
+# before the attempt that was always going to succeed. They stay as fallbacks
+# for a ROM that does need them.
+if try_install ""; then
+  grant_app; rm -f "$tmp"; log_inst "installed OK (plain)"; exit 0
+fi
 if try_install "--disable-verification --bypass-low-target-sdk-block"; then
   grant_app; rm -f "$tmp"; log_inst "installed OK (bypass)"; exit 0
 fi
 if try_install "--disable-verification"; then
-  grant_app; rm -f "$tmp"; log_inst "installed OK"; exit 0
+  grant_app; rm -f "$tmp"; log_inst "installed OK (verification off)"; exit 0
 fi
 
 # Could be an older build signed with a different key. Drop the stale copy and
@@ -78,11 +86,11 @@ log_inst "retrying after removing the previous copy"
 pm uninstall --user 0 dev.axion.spsm >/dev/null 2>&1
 pm uninstall dev.axion.spsm >/dev/null 2>&1
 
-if try_install "--disable-verification"; then
-  grant_app; rm -f "$tmp"; log_inst "installed OK (after clean)"; exit 0
-fi
 if try_install ""; then
   grant_app; rm -f "$tmp"; log_inst "installed OK (plain, after clean)"; exit 0
+fi
+if try_install "--disable-verification"; then
+  grant_app; rm -f "$tmp"; log_inst "installed OK (after clean)"; exit 0
 fi
 
 if pm path dev.axion.spsm >/dev/null 2>&1; then

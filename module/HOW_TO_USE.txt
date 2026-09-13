@@ -1,4 +1,4 @@
-HOW TO USE - Axion Super Power Saving v3.0.6
+HOW TO USE - Axion Super Power Saving v3.0.7
 ==========================================
 ResukiSU (KernelSU). RMX3430 / AxionOS 2.7.
 
@@ -13,7 +13,7 @@ WHAT IS NEW IN v3
 - A crash or reboot cannot leave the phone capped or dark.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.0.6-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.0.7-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

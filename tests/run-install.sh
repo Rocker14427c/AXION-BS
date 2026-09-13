@@ -82,8 +82,13 @@ say "1. clean install on the first try"
 make_stubs; apk_file
 run_installer ok > "$WORK/out1" 2>&1
 check "exit 0" $?
-grep -q "installed OK (bypass)" "$WORK/spsm/install.log"; check "logged as bypass install" $?
+grep -q "installed OK (plain)" "$WORK/spsm/install.log"; check "logged as a plain install (the form this ROM accepts)" $?
 [ "$(grep -c '^pm install' "$WORK/calls/pm")" = "1" ]; check "installed in one call" $?
+if grep -q 'disable-verification' "$WORK/spsm/install.log"; then
+  bad "no rejected-flag attempt was logged before the one that works"
+else
+  ok "no rejected-flag attempt was logged before the one that works"
+fi
 [ ! -f "$WORK/calls/uninstalled" ]; check "did not remove anything" $?
 [ ! -f "$WORK/tmp/AxionSPSM.apk" ]; check "temp APK cleaned up" $?
 [ -s "$WORK/calls/appops" ]; check "appops granted after install" $?
@@ -96,7 +101,7 @@ check "exit 0" $?
 grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE" "$WORK/spsm/install.log"
 check "the real failure was recorded" $?
 [ -f "$WORK/calls/uninstalled" ]; check "stale package removed" $?
-grep -q "installed OK (after clean)" "$WORK/spsm/install.log"; check "reinstalled after the clean" $?
+grep -q "installed OK (plain, after clean)" "$WORK/spsm/install.log"; check "reinstalled after the clean" $?
 grep -q '^pm uninstall dev.axion.spsm' "$WORK/calls/pm"; check "uninstall used the real package name" $?
 
 say "3. package already present via overlay is accepted"

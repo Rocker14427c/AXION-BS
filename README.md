@@ -285,6 +285,77 @@ A lock released between the check and the stat was dated from the epoch, which
 produced `WARN stale lock (1789238021s) - taking it` in the log: alarming, and
 meaning nothing. The age is only computed when there is a lock to age.
 
+## What changed in 3.0.7 — what the device log showed
+
+The install log and the module log arrived, and they confirmed the diagnosis and
+found two more real bugs.
+
+### Confirmed: the daemon was alive and blind
+
+```
+10:02:59 daemon start (pid 11805)       <- the daemon is running
+10:02:59 screen  -> on                  <- and its first decision is "on"
+10:13:41 daemon: mode is off, exiting   <- still alive 10m43s later
+```
+
+The daemon ran for the whole session and exited on command, so it was not dead.
+Its view of the screen never changed once, although the screen was off for the
+five-to-seven minute test inside that window: it was frozen at "on", exactly as
+3.0.6 diagnosed, and the deep phase never applied.
+
+### The exit was crying wolf
+
+```
+10:13:43 WARN location_off did not return to its original value
+10:14:01 exit: 3 value(s) could not be restored - forcing the safety valves
+```
+
+Three drifted knobs were reported while only one was named. Two things were
+wrong, and both made the module distrust its own work:
+
+- a record left in `restored-drift` by an earlier session was **counted** as
+  drift on every later exit while never being retried (the revert skipped any
+  state that was not `applied`). It is now retried like an `applied` record -
+  which both makes the count honest and actually repairs what a dead session left
+  behind, since every restore function writes only what is still ours to write;
+- a target whose original could not be **read** was compared against the later
+  reading as if it were a value, and the difference was called drift. `apply_kv`
+  refuses to write such a target, so the module never changed it and it cannot be
+  drift. Those are the two keys this phone refuses to read - they were producing
+  a false alarm on every exit.
+
+### Location was switched off with no way back (a real unrevertable change)
+
+`location_off` reversed itself by reading `secure location_mode` — **the key this
+ROM refuses to read.** So it switched location off, could not prove it had, and
+left it off. That is the one thing the module promises never to do, and it was
+sitting in the log. The switch's real state is now asked of the system
+(`cmd location is-location-enabled`), written down before anything is touched,
+and only a location this module switched off is switched back on. If the state
+cannot be read, location is left alone and the log says so.
+
+### The panel-unreadable path no longer trusts an old marker either
+
+If the backlight node cannot be read at all, the app's marker used to answer for
+up to a day - the same trap from the other side. Now a marker only answers while
+it is seconds old; after that the power manager is asked directly
+(`dumpsys power`), cached for a few seconds so the degraded path costs one binder
+dump per cache window rather than one per tick, and an old marker is the last
+resort.
+
+### The installer stopped wasting two rounds per install
+
+```
+pm install --disable-verification --bypass-low-target-sdk-block -> Unknown option
+pm install --disable-verification                              -> Unknown option
+pm install                                                     -> Success
+```
+
+Both flags are rejected by this ROM's `pm`, so every install began with two
+failures and a stack trace before the attempt that always works. The plain
+install now goes first, and the flags remain as fallbacks for a ROM that needs
+them.
+
 ## What changed in 3.0.6 — why nothing was being saved
 
 ### The bug: a stale "on" from the app made the mode believe the screen was always on

@@ -165,6 +165,17 @@ case "$CMD" in
         ;;
       "deviceidle whitelist") cat "$S/deviceidle_whitelist" 2>/dev/null ;;
       "deviceidle step") : ;;
+      # The location switch is a command, not a setting - there is nothing in
+      # `settings get` that describes it, which is exactly why the module has to
+      # ask here and keep what it is told.
+      "location is-location-enabled")
+        if [ -f "$S/fail_read.cmd.location_enabled" ]; then
+          echo "cmd: Failure calling service location: Failed transaction (2147483646)"
+          exit 1
+        fi
+        cat "$S/location_enabled" 2>/dev/null || echo true
+        ;;
+      "location set-location-enabled") printf '%s\n' "$3" > "$S/location_enabled" ;;
       *) : ;;
     esac
     ;;
@@ -188,6 +199,9 @@ case "$CMD" in
         if [ -f "$S/pkg/$2.suspended" ]; then echo "    suspended=true"; else echo "    suspended=false"; fi
         ;;
       power)
+        # Counted: only the degraded path (no readable panel) may ask this, and
+        # it must ask rarely - the cache is asserted by counting these.
+        log_call "$@"
         cat "$S/screen" 2>/dev/null | grep -q off && echo "mWakefulness=Asleep" || echo "mWakefulness=Awake"
         ;;
       activity)

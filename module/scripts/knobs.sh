@@ -470,14 +470,47 @@ meta_location_off() {
   echo "Radio|Turn off location|Stops GNSS and location providers. Maps and weather will not update until you exit.|0|session|breaks-features"
 }
 snapshot_location_off() { snap_kv @secure:location_mode @secure:location_providers_allowed; }
+# The location switch is not a setting. `cmd location set-location-enabled` does
+# not appear in `settings get` at all, so there is nothing in the journal to
+# compare it against - and the first version of this knob decided how to turn it
+# back on from secure location_mode, which THIS PHONE REFUSES TO READ. The result
+# was in the log: location was switched off, nothing could prove it had been, and
+# the exit reported a value it could not restore. A change whose reversal depends
+# on a value that cannot be read is exactly the change that must never be made.
+#
+# So the real state is asked of the power manager's own command and written down
+# before anything is switched. If it cannot be read, location is left alone.
+LOC_STATE="$ORIG_DIR/location_enabled.tsv"
+
+location_enabled_now() { # prints true|false, or nothing
+  has cmd || return 1
+  _r=$(cmd location is-location-enabled 2>/dev/null | tr -d '\r' | head -1)
+  case "$_r" in
+    true|false) printf '%s' "$_r" ;;
+    *) return 1 ;;
+  esac
+}
+
 apply_location_off() {
+  if [ ! -f "$LOC_STATE" ]; then
+    _cur=$(location_enabled_now) || {
+      log "skip location: its state could not be read, so it is not ours to change"
+      return 0
+    }
+    printf '%s\n' "$_cur" > "$LOC_STATE" 2>/dev/null
+  fi
   apply_kv "@secure:location_mode=0"
   has cmd && cmd location set-location-enabled false >/dev/null 2>&1
 }
 restore_location_off() {
   restore_kv "$1" "$2"
-  _m=$(snap_file_val "$1" @secure:location_mode)
-  case "$_m" in 3|1|true) has cmd && cmd location set-location-enabled true >/dev/null 2>&1 ;; esac
+  _was=$(cat "$LOC_STATE" 2>/dev/null)
+  rm -f "$LOC_STATE"
+  # Only a location we switched off ourselves is switched back on. If it was
+  # already off when the mode started, that was the user's own choice and stays.
+  case "$_was" in
+    true) has cmd && cmd location set-location-enabled true >/dev/null 2>&1 ;;
+  esac
 }
 
 # ============================================================ Processor / GPU

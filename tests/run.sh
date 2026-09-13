@@ -152,6 +152,8 @@ EOF
   echo enable > "$S/svc.bluetooth"
   echo enable > "$S/svc.nfc"
   echo on > "$S/screen"
+  # The system's location switch, which the module has to record for itself.
+  echo true > "$S/location_enabled"
 }
 
 run_engine() { # run_engine args...
@@ -1296,6 +1298,114 @@ run_engine status > "$WORK/out.st42b" 2>&1
 grep -q "^daemon=[0-9]" "$WORK/out.st42b"
 check "with the mode on, status shows the daemon's pid" $?
 run_engine deactivate >/dev/null 2>&1
+
+say "43. a value that could not be read can never be counted as drift"
+make_tree; make_stubs; seed_stub_state
+# This ROM refuses to read these two keys at all - the exact pair from the
+# device log.
+touch "$WORK/stub/fail_read.global.ble_scan_always_enabled"
+touch "$WORK/stub/fail_read.secure.location_mode"
+enable_knobs timeout_short scan_always_off location_off
+screen_on
+run_engine activate > "$WORK/out.a43" 2>&1
+grep -q "skip @global:ble_scan_always_enabled: it could not be read" "$WORK/spsm/spsm.log"
+check "the unreadable key is skipped on the way in" $?
+run_engine deactivate > "$WORK/out.d43" 2>&1
+grep -q "revert clean" "$WORK/spsm/spsm.log"
+check "and the exit is clean, not a false alarm about it ($(grep -o 'exit: .*' "$WORK/spsm/spsm.log" | tail -1))" $?
+if grep -q "could not be restored" "$WORK/spsm/spsm.log"; then
+  bad "the exit did not claim an unreadable value it never changed was unrestored"
+else
+  ok "the exit did not claim an unreadable value it never changed was unrestored"
+fi
+
+say "44. a restore that failed once is tried again instead of being counted forever"
+make_tree; make_stubs; seed_stub_state
+enable_knobs timeout_short
+screen_on
+run_engine activate >/dev/null 2>&1
+# A session that died left this record behind in the state a failed revert
+# writes. Its change is still on the device, so it is still ours to undo.
+echo applied > "$WORK/spsm/journal/timeout_short.state"
+run_engine deactivate > "$WORK/out.d44a" 2>&1
+_before=$(cat "$WORK/spsm/journal/timeout_short.state")
+echo restored-drift > "$WORK/spsm/journal/timeout_short.state"
+# The value is put back on the device so that the second revert has real work to
+# do, exactly like a phone where the first attempt was interrupted.
+run_engine activate >/dev/null 2>&1
+echo restored-drift > "$WORK/spsm/journal/timeout_short.state"
+run_engine deactivate > "$WORK/out.d44" 2>&1
+[ "$(cat "$WORK/spsm/journal/timeout_short.state")" = "restored" ]
+check "the leftover record was reverted and closed, not just counted" $?
+grep -q "revert clean" "$WORK/spsm/spsm.log"
+check "so the exit reports a clean revert" $?
+if grep -q "value(s) could not be restored" "$WORK/spsm/spsm.log"; then
+  bad "the exit did not invent drifted knobs from an earlier session"
+else
+  ok "the exit did not invent drifted knobs from an earlier session"
+fi
+
+say "45. location is switched off only when its state can be read, and put back as it was"
+make_tree; make_stubs; seed_stub_state
+enable_knobs location_off
+screen_on
+echo true > "$WORK/stub/location_enabled"
+run_engine activate > "$WORK/out.a45" 2>&1
+[ "$(cat "$WORK/stub/location_enabled")" = "false" ]
+check "location that was on was switched off" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/location_enabled")" = "true" ]
+check "and switched back on again on exit" $?
+# Location the user had already switched off is not ours to switch on.
+make_tree; make_stubs; seed_stub_state
+enable_knobs location_off
+screen_on
+echo false > "$WORK/stub/location_enabled"
+run_engine activate >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/location_enabled")" = "false" ]
+check "location the user had off stays off (we did not switch it on)" $?
+# And when the switch cannot be read, nothing is touched at all.
+make_tree; make_stubs; seed_stub_state
+enable_knobs location_off
+screen_on
+echo true > "$WORK/stub/location_enabled"
+touch "$WORK/stub/fail_read.cmd.location_enabled"
+run_engine activate > "$WORK/out.a45b" 2>&1
+[ "$(cat "$WORK/stub/location_enabled")" = "true" ]
+check "with the state unreadable, location is left alone" $?
+grep -q "skip location: its state could not be read" "$WORK/spsm/spsm.log"
+check "and it says so in the log" $?
+run_engine deactivate > "$WORK/out.d45b" 2>&1
+grep -q "revert clean" "$WORK/spsm/spsm.log"
+check "and the exit is clean" $?
+
+say "46. an unreadable panel asks the power manager instead of believing an old marker"
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/spsm/state"
+rm -f "$ROOT/sys/class/leds/lcd-backlight/brightness"
+# What the app left behind the last time it was opened, hours ago.
+echo on > "$WORK/spsm/state/screen"
+touch -d '3 hours ago' "$WORK/spsm/state/screen"
+echo off > "$WORK/stub/screen"
+[ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "off" ]
+check "with no panel, the system's own answer is believed over an old marker" $?
+rm -f "$WORK/spsm/state/screen_dump"   # let the cache expire, as time would
+echo on > "$WORK/stub/screen"
+[ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "on" ]
+check "and in the other direction too" $?
+# A marker written seconds ago is a real event and still wins.
+echo off > "$WORK/stub/screen"
+echo on > "$WORK/spsm/state/screen"
+[ "$(run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state')" = "on" ]
+check "a marker from seconds ago still outranks it (a screen that has just woken)" $?
+# The dump is a binder call, so it is not repeated for every tick.
+rm -f "$WORK/spsm/state/screen" "$WORK/spsm/state/screen_dump"
+: > "$WORK/stub/calls"
+run_shell -c '. "$SPSM_DIR/scripts/lib.sh"; screen_state >/dev/null; screen_state >/dev/null; screen_state >/dev/null'
+_n=$(grep -c "^dumpsys power" "$WORK/stub/calls")
+[ "$_n" = "1" ]
+check "three ticks while the panel is unreadable cost exactly one dump ($_n)" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

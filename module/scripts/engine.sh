@@ -86,8 +86,15 @@ knob_revert() { # knob_revert id
 
   # Only undo what we actually applied. A knob that was disabled at apply time,
   # or already reverted, must not be touched.
+  #
+  # "restored-drift" is included on purpose: it means a previous revert ran and
+  # could not put something back, so our value may still be in place. Retrying is
+  # safe - every restore function writes only what is still ours to write - and
+  # without the retry those records are skipped forever while still being counted
+  # as drift, which is how this phone reported "3 value(s) could not be restored"
+  # while naming only one.
   case "$_st" in
-    applied) ;;
+    applied|restored-drift) ;;
     *) return 0 ;;
   esac
   [ "$(type "$_fn" 2>/dev/null)" ] || { log "no restore function for $_id"; return 1; }
