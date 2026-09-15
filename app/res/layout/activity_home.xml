@@ -49,35 +49,59 @@
         android:paddingStart="16dp"
         android:paddingEnd="16dp">
 
-        <TextClock
-            android:id="@+id/clock"
-            android:layout_width="wrap_content"
+        <TextView
+            android:id="@+id/title"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:format12Hour="h:mm"
-            android:format24Hour="HH:mm"
-            android:textColor="@color/white"
-            android:textSize="64sp"
-            android:fontFamily="sans-serif-light"
-            android:includeFontPadding="false" />
-
-        <TextClock
-            android:id="@+id/date"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:format12Hour="EEE, d MMM"
-            android:format24Hour="EEE, d MMM"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp" />
+            android:gravity="center"
+            android:letterSpacing="0.06"
+            android:text="@string/super_power_saving"
+            android:textAllCaps="true"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/battery"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="10dp"
+            android:fontFamily="sans-serif-light"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:text="100%"
+            android:textColor="@color/white"
+            android:textSize="68sp" />
+
+        <TextView
+            android:id="@+id/remaining"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:gravity="center"
             android:textColor="@color/accent"
-            android:textSize="14sp"
-            android:gravity="center" />
+            android:textSize="14sp" />
+
+        <TextClock
+            android:id="@+id/clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:format12Hour="h:mm"
+            android:format24Hour="HH:mm"
+            android:fontFamily="sans-serif-light"
+            android:includeFontPadding="false"
+            android:textColor="@color/text_secondary"
+            android:textSize="28sp" />
+
+        <TextClock
+            android:id="@+id/date"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:format12Hour="EEE, d MMM"
+            android:format24Hour="EEE, d MMM"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <LinearLayout

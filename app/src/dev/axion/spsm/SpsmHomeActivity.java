@@ -22,6 +22,7 @@ import android.widget.Toast;
 public class SpsmHomeActivity extends Activity {
     private final Handler handler = new Handler();
     private TextView battery;
+    private TextView remaining;
     private final int[] slotIds = {
             R.id.slot0, R.id.slot1, R.id.slot2, R.id.slot3, R.id.slot4, R.id.slot5
     };
@@ -35,9 +36,15 @@ public class SpsmHomeActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        hideSystemBars();
+        // setContentView first: it is what creates the window's decor view, and
+        // asking for the insets controller before that throws
+        // NullPointerException inside PhoneWindow - which, on a home activity,
+        // means the phone loses its home screen in a crash loop. This activity
+        // must be the last thing on the phone that can fail.
         setContentView(R.layout.activity_home);
+        hideSystemBars();
         battery = findViewById(R.id.battery);
+        remaining = findViewById(R.id.remaining);
         findViewById(R.id.btn_exit).setOnClickListener(v -> confirmExit());
         Apps.fillDefaults(this);
         bindSlots();
@@ -53,29 +60,36 @@ public class SpsmHomeActivity extends Activity {
     }
 
     private void hideSystemBars() {
-        Window w = getWindow();
-        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        w.setStatusBarColor(0xFF000000);
-        w.setNavigationBarColor(0xFF000000);
-        w.getAttributes().layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        if (Build.VERSION.SDK_INT >= 30) {
-            w.setDecorFitsSystemWindows(false);
-            WindowInsetsController c = w.getInsetsController();
-            if (c != null) {
-                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                c.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
-        } else {
-            View d = w.getDecorView();
-            d.setSystemUiVisibility(
+        // Cosmetic, and therefore never worth a crash: this is the home screen,
+        // and a home that dies takes the whole phone's UI with it. Every step is
+        // guarded, and the decor view is obtained explicitly so the insets
+        // controller is never asked for before the window has one.
+        try {
+            Window w = getWindow();
+            w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            w.setStatusBarColor(0xFF000000);
+            w.setNavigationBarColor(0xFF000000);
+            w.getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            View decor = w.getDecorView();
+            if (Build.VERSION.SDK_INT >= 30) {
+                w.setDecorFitsSystemWindows(false);
+                WindowInsetsController c = decor.getWindowInsetsController();
+                if (c != null) {
+                    c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                    c.setSystemBarsBehavior(
+                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
+            } else {
+                decor.setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                             | View.SYSTEM_UI_FLAG_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -153,8 +167,12 @@ public class SpsmHomeActivity extends Activity {
         } else {
             extra = getString(R.string.remaining, estimate(pct));
         }
-        battery.setText(pct + "%  |  " + extra);
+        // The way the phone's own power saving screen reads: one big number,
+        // one line under it. No build numbers, no badges.
+        battery.setText(pct + "%");
+        if (remaining != null) remaining.setText(extra);
     }
+
 
     private String estimate(int pct) {
         // ColorOS-style optimistic remaining while SPSM is on.

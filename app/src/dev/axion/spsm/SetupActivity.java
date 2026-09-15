@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -16,6 +18,8 @@ public class SetupActivity extends Activity {
     private TextView working;
     private Button toggle;
     private boolean busy;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private Runnable progressPoll;
     private final int[] slotIds = {
             R.id.slot0, R.id.slot1, R.id.slot2, R.id.slot3, R.id.slot4, R.id.slot5
     };
@@ -31,8 +35,16 @@ public class SetupActivity extends Activity {
         working = findViewById(R.id.working);
         toggle = findViewById(R.id.btn_toggle);
         Apps.fillDefaults(this);
+        // The UI being open is a chance to have the live signal running; it
+        // costs nothing and keeps the engine's view of the screen fresh.
+        ScreenReceiver.install(this);
         rootStatus.setOnClickListener(v -> checkRoot(true));
         toggle.setOnClickListener(v -> onToggle());
+        findViewById(R.id.btn_options).setOnClickListener(v -> {
+            Intent i = new Intent(this, KnobsActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        });
         if (getIntent() != null && getIntent().getBooleanExtra("toggle", false)) {
             getIntent().removeExtra("toggle");
             onToggle();
@@ -54,6 +66,12 @@ public class SetupActivity extends Activity {
         super.onResume();
         bindSlots();
         refresh();
+    }
+
+    @Override
+    protected void onPause() {
+        stopProgressPoll();
+        super.onPause();
     }
 
     private void bindSlots() {
@@ -129,16 +147,46 @@ public class SetupActivity extends Activity {
         }).start();
     }
 
+    /**
+     * While the engine works, show what it is actually doing - the engine
+     * publishes each step to /data/adb/spsm/state/progress. A real step list
+     * makes a two second switch feel immediate instead of feeling stuck.
+     */
+    private void startProgressPoll() {
+        stopProgressPoll();
+        progressPoll = new Runnable() {
+            @Override public void run() {
+                new Thread(() -> {
+                    final String p = Root.progress();
+                    if (p != null && !p.trim().isEmpty()) {
+                        runOnUiThread(() -> working.setText(p.trim()));
+                    }
+                }).start();
+                ui.postDelayed(this, 400);
+            }
+        };
+        ui.postDelayed(progressPoll, 400);
+    }
+
+    private void stopProgressPoll() {
+        if (progressPoll != null) {
+            ui.removeCallbacks(progressPoll);
+            progressPoll = null;
+        }
+    }
+
     private void runEnter() {
         busy = true;
         working.setVisibility(View.VISIBLE);
         working.setText(R.string.working);
         toggle.setEnabled(false);
+        startProgressPoll();
         new Thread(() -> {
             Root.writeWhitelist(Prefs.getAll(this));
             Root.enter();
             final boolean ok = Root.isActive();
             runOnUiThread(() -> {
+                stopProgressPoll();
                 busy = false;
                 toggle.setEnabled(true);
                 working.setVisibility(View.GONE);
@@ -163,9 +211,11 @@ public class SetupActivity extends Activity {
         working.setVisibility(View.VISIBLE);
         working.setText(R.string.working);
         toggle.setEnabled(false);
+        startProgressPoll();
         new Thread(() -> {
             Root.exit();
             runOnUiThread(() -> {
+                stopProgressPoll();
                 busy = false;
                 toggle.setEnabled(true);
                 working.setVisibility(View.GONE);
