@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The engine is plain POSIX sh and is exercised against a fake device
+      # tree, so the revert guarantee is verified on every push - no phone.
+      - name: Revert-guarantee tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq dash zip
+          sh tests/run.sh
+          sh tests/run-install.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build APK (bootstraps the toolchain)
+        run: ./build.sh --bootstrap
+
+      - name: Build flashable zip
+        run: ./tools/makezip.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Axion-SPSM
+          path: |
+            build/AxionSPSM.apk
+            build/Axion-SPSM-v*-RMX3430.zip

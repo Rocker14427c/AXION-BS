@@ -30,6 +30,7 @@ public class AppPickerActivity extends Activity {
     private List<Apps.Item> all = new ArrayList<>();
     private List<Apps.Item> shown = new ArrayList<>();
     private Adapter adapter;
+    private TextView hint;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,12 +49,44 @@ public class AppPickerActivity extends Activity {
         });
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
-            @Override public void onTextChanged(CharSequence s, int st, int b, int c) { filter(s.toString()); }
+            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {
+                filter(s.toString());
+                addTyped(s.toString());
+            }
             @Override public void afterTextChanged(Editable s) {}
         });
-        all = Apps.launchable(this);
-        // Clear option at top
-        shown = new ArrayList<>(all);
+        hint = findViewById(R.id.pick_hint);
+        // Every installed package, from two sources, read fresh each time this
+        // screen opens - so an app installed five minutes ago is already here.
+        new Thread(() -> {
+            final List<Apps.Item> items = Apps.launchable(AppPickerActivity.this);
+            runOnUiThread(() -> {
+                all = items;
+                shown = new ArrayList<>(all);
+                adapter.notifyDataSetChanged();
+                if (hint != null) {
+                    hint.setText(getString(R.string.pick_count, all.size()));
+                }
+            });
+        }).start();
+    }
+
+    /**
+     * A package name typed by hand is added as-is.
+     *
+     * The list comes from the package manager and from `pm list packages`, which
+     * between them should be everything - but "should be" is what the last two
+     * attempts at this screen said, and the user still had apps that were not
+     * offered. This is the way out that cannot fail: if it is installed, typing
+     * its package name adds it.
+     */
+    private void addTyped(String q) {
+        String pkg = q == null ? "" : q.trim();
+        if (pkg.indexOf('.') < 0 || pkg.indexOf(' ') >= 0) return;
+        for (Apps.Item it : all) {
+            if (it.pkg.equals(pkg)) return;
+        }
+        shown.add(0, new Apps.Item(pkg, pkg + "  (typed by hand)", null, "typed"));
         adapter.notifyDataSetChanged();
     }
 
@@ -79,9 +112,19 @@ public class AppPickerActivity extends Activity {
                 convertView = getLayoutInflater().inflate(R.layout.item_app_row, parent, false);
             }
             Apps.Item it = shown.get(position);
-            ((ImageView) convertView.findViewById(R.id.icon)).setImageDrawable(it.icon);
+            ImageView icon = convertView.findViewById(R.id.icon);
+            // An app with no icon of its own still has to be pickable.
+            if (it.icon != null) {
+                icon.setImageDrawable(it.icon);
+            } else {
+                icon.setImageResource(R.drawable.ic_plus);
+            }
             ((TextView) convertView.findViewById(R.id.label)).setText(it.label);
-            ((TextView) convertView.findViewById(R.id.pkg)).setText(it.pkg);
+            String sub = it.pkg;
+            if (it.tag != null && it.tag.length() > 0) {
+                sub = sub + "   · " + it.tag;
+            }
+            ((TextView) convertView.findViewById(R.id.pkg)).setText(sub);
             return convertView;
         }
     }
