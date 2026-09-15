@@ -140,7 +140,10 @@ public class AppPickerActivity extends Activity {
             }
             ((TextView) convertView.findViewById(R.id.label)).setText(it.label);
             String sub = it.pkg;
-            if (it.tag != null && it.tag.length() > 0) {
+            // Only say something when it is worth saying: every user app is a
+            // user app, but "root manager", "no launcher icon" and a system app
+            // shown on purpose are worth a word.
+            if (it.tag != null && it.tag.length() > 0 && !"user".equals(it.tag)) {
                 sub = sub + "   · " + it.tag;
             }
             ((TextView) convertView.findViewById(R.id.pkg)).setText(sub);

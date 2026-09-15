@@ -24,7 +24,7 @@ NEW IN THIS BUILD
   minutes and writes the result to /data/adb/spsm/state/probe.tsv.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.0.10-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.0.11-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

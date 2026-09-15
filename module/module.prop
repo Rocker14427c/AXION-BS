@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.0.10
-versionCode=40
+version=v3.0.11
+versionCode=41
 author=Axion SPSM
-description=v3.0.10 journaled apply/revert - every change recorded and restored. Apps added to the six slots are usable at once, system apps are out of the way in the app list, and the options screen has a Check button in the corner. RMX3430.
+description=v3.0.11 journaled apply/revert - every change recorded and restored. Apps added to the six slots are usable at once, system apps are out of the way in the app list, and the options screen has a Check button in the corner. RMX3430.
