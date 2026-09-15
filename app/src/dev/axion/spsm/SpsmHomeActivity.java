@@ -35,8 +35,13 @@ public class SpsmHomeActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        hideSystemBars();
+        // setContentView first: it is what creates the window's decor view, and
+        // asking for the insets controller before that throws
+        // NullPointerException inside PhoneWindow - which, on a home activity,
+        // means the phone loses its home screen in a crash loop. This activity
+        // must be the last thing on the phone that can fail.
         setContentView(R.layout.activity_home);
+        hideSystemBars();
         battery = findViewById(R.id.battery);
         findViewById(R.id.btn_exit).setOnClickListener(v -> confirmExit());
         Apps.fillDefaults(this);
@@ -53,29 +58,36 @@ public class SpsmHomeActivity extends Activity {
     }
 
     private void hideSystemBars() {
-        Window w = getWindow();
-        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        w.setStatusBarColor(0xFF000000);
-        w.setNavigationBarColor(0xFF000000);
-        w.getAttributes().layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        if (Build.VERSION.SDK_INT >= 30) {
-            w.setDecorFitsSystemWindows(false);
-            WindowInsetsController c = w.getInsetsController();
-            if (c != null) {
-                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                c.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
-        } else {
-            View d = w.getDecorView();
-            d.setSystemUiVisibility(
+        // Cosmetic, and therefore never worth a crash: this is the home screen,
+        // and a home that dies takes the whole phone's UI with it. Every step is
+        // guarded, and the decor view is obtained explicitly so the insets
+        // controller is never asked for before the window has one.
+        try {
+            Window w = getWindow();
+            w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            w.setStatusBarColor(0xFF000000);
+            w.setNavigationBarColor(0xFF000000);
+            w.getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            View decor = w.getDecorView();
+            if (Build.VERSION.SDK_INT >= 30) {
+                w.setDecorFitsSystemWindows(false);
+                WindowInsetsController c = decor.getWindowInsetsController();
+                if (c != null) {
+                    c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                    c.setSystemBarsBehavior(
+                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
+            } else {
+                decor.setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                             | View.SYSTEM_UI_FLAG_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -153,8 +165,40 @@ public class SpsmHomeActivity extends Activity {
         } else {
             extra = getString(R.string.remaining, estimate(pct));
         }
-        battery.setText(pct + "%  |  " + extra);
+        battery.setText(pct + "%  |  " + extra + versionSuffix());
     }
+
+    /**
+     * Which build is actually installed, on the home screen.
+     *
+     * This exists because of a round of support that neither side could settle:
+     * a log arrived that turned out to have been written by scripts two versions
+     * older than the zip the user had just flashed, and nothing in the log or in
+     * the app said so. Reading the scripts' own stamp and comparing it with the
+     * module's reported version makes "did my flash take effect" a thing you can
+     * see at a glance instead of a thing we guess at.
+     */
+    private String versionSuffix() {
+        if (versionLine != null) return versionLine;
+        // One shell variable at a time, and no nested quoting: this string is
+        // assembled by Java and evaluated by su, so every quote has to be right.
+        String cmd =
+                "d=$(cat " + Root.DIR + "/moddir 2>/dev/null); "
+              + "mod=$(sed -n 's/^version=//p' \"$d/module.prop\" 2>/dev/null | head -1); "
+              + "stamp=$(cat " + Root.DIR + "/state/script_version 2>/dev/null); "
+              + "[ -n \"$stamp\" ] || stamp=unknown; "
+              + "if [ -n \"$mod\" ] && [ \"$mod\" != \"$stamp\" ]; then "
+              + "echo \"  |  STALE SCRIPTS: running $stamp, module is $mod\"; "
+              + "else echo \"  |  scripts $stamp\"; fi";
+        String out = Root.exec(cmd);
+        if (out == null) return "";
+        out = out.trim();
+        if (out.length() > 90) out = out.substring(0, 90);
+        versionLine = out;
+        return out;
+    }
+
+    private String versionLine;
 
     private String estimate(int pct) {
         // ColorOS-style optimistic remaining while SPSM is on.
