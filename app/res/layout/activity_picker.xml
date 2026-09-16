@@ -30,6 +30,26 @@
         android:textColorHint="@color/text_hint"
         android:textSize="14sp" />
 
+    <CheckBox
+        android:id="@+id/show_system"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:text="@string/pick_show_system"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/pick_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="6dp"
+        android:textColor="@color/text_hint"
+        android:textSize="11sp" />
+
     <ListView
         android:id="@+id/list"
         android:layout_width="match_parent"

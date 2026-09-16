@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v2.1
-versionCode=21
+version=v3.4.0
+versionCode=48
 author=Axion SPSM
-description=v2.1 snapshot-restore, no data saver, even 6-app home. ResukiSU.
+description=v3.4.0 journaled apply/revert - every change recorded and restored. Redesigned power-saving home (Realme-style clock, 3x2 app grid, edit mode), recents that really close an app, and the launcher's own recents screen switched off while the mode is on. RMX3430.

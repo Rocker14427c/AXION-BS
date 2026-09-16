@@ -19,6 +19,26 @@ final class Prefs {
 
     static void setSlot(Context c, int i, String pkg) {
         sp(c).edit().putString(KEY_SLOT + i, pkg == null ? "" : pkg).apply();
+        syncWhitelist(c);
+    }
+
+    /**
+     * Writes the six slots to the module's keep-list and tells the engine.
+     *
+     * The six slots ARE the "keep working" list, so the module has to be told
+     * every time it changes: an app added to a slot is freed at once if the
+     * module had blocked it, and an app taken out becomes subject to the mode
+     * again. Without this the mode kept blocking an app the user had just added,
+     * and opening it answered "app suspended".
+     */
+    static void syncWhitelist(Context c) {
+        // Same writer the turn-on path uses, so there is one quoting and one
+        // format for the file both of them read.
+        final String[] slots = getAll(c);
+        new Thread(() -> {
+            Root.writeWhitelist(slots);
+            Root.exec("sh " + Root.DIR + "/scripts/engine.sh allow >/dev/null 2>&1");
+        }).start();
     }
 
     static String[] getAll(Context c) {

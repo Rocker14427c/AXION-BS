@@ -1,33 +1,58 @@
 #!/system/bin/sh
-# Late-start: copy scripts, resume SPSM after reboot if it was on.
-# Overlay APK is enough; do not pm-install every boot (that left a user copy).
+# Axion SPSM v3 - late_start service.
+#
+# Responsibilities, in order:
+#   1. wait for the system to finish booting
+#   2. publish a fresh copy of the scripts and the knob list
+#   3. if the last shutdown happened while SPSM was on, REVERT rather than
+#      resume - a reboot is not a reason for someone to be stuck in a mode
+#      they cannot see the exit for. resume_on_boot=1 restores the old
+#      behaviour for anyone who wants it.
+#   4. otherwise start the screen-aware daemon
 
 MODDIR=${0%/*}
-SPSM_DIR=/data/adb/spsm
+SPSM_DIR=${SPSM_DIR:-/data/adb/spsm}
+
 mkdir -p "$SPSM_DIR"
 
 i=0
-while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 60 ]; do
+while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 90 ]; do
   sleep 2
   i=$((i + 1))
 done
-sleep 5
+sleep 3
 
 echo "$MODDIR" > "$SPSM_DIR/moddir"
-cp -af "$MODDIR/scripts/"*.sh "$SPSM_DIR/" 2>/dev/null
-chmod 755 "$SPSM_DIR/"*.sh 2>/dev/null
+mkdir -p "$SPSM_DIR/scripts"
+cp -af "$MODDIR/scripts/." "$SPSM_DIR/scripts/" 2>/dev/null
+chmod 755 "$SPSM_DIR/scripts/"*.sh 2>/dev/null
+# The same stamp the installer writes, refreshed on every boot: if these two ever
+# disagree with module.prop, the phone is running stale scripts.
+_VERSION=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | head -1)
+[ -n "$_VERSION" ] && printf '%s\n' "$_VERSION" > "$SPSM_DIR/state/script_version" 2>/dev/null
 
-# Resume only if user left SPSM on
-if [ -f "$SPSM_DIR/active" ] && [ ! -f "$SPSM_DIR/disable" ]; then
-  rm -f "$SPSM_DIR/exiting"
-  sh "$MODDIR/scripts/enter.sh" >> "$SPSM_DIR/spsm.log" 2>&1
+ENGINE="$SPSM_DIR/scripts/engine.sh"
+[ -f "$ENGINE" ] || ENGINE="$MODDIR/scripts/engine.sh"
+
+# Publish the knob list for the options screen.
+sh "$ENGINE" dump-knobs >> "$SPSM_DIR/spsm.log" 2>&1
+
+# --- crash / reboot recovery -------------------------------------------------
+if [ -f "$SPSM_DIR/state/needs_restore" ] || { [ -d "$SPSM_DIR/journal" ] && [ -f "$SPSM_DIR/state/active" ]; }; then
+  RESUME=$(sed -n 's/^resume_on_boot=//p' "$SPSM_DIR/config" 2>/dev/null | tail -1)
+  if [ "$RESUME" = "1" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') service: resuming SPSM after reboot" >> "$SPSM_DIR/spsm.log"
+    sh "$ENGINE" activate >> "$SPSM_DIR/spsm.log" 2>&1
+  else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') service: reverting SPSM left over from last boot" >> "$SPSM_DIR/spsm.log"
+    sh "$ENGINE" deactivate >> "$SPSM_DIR/spsm.log" 2>&1
+  fi
+  rm -f "$SPSM_DIR/state/needs_restore"
 fi
 
-while true; do
-  if [ -f "$SPSM_DIR/active" ] && [ ! -f "$SPSM_DIR/exiting" ] && [ ! -f "$SPSM_DIR/disable" ]; then
-    sh "$MODDIR/scripts/watchdog.sh" >> "$SPSM_DIR/spsm.log" 2>&1
-    sleep 20
-  else
-    sleep 60
-  fi
-done
+# --- daemon ------------------------------------------------------------------
+# The engine starts and stops the daemon itself; all we do here is make sure
+# one is running if the mode is on (e.g. it was resumed above).
+if [ -f "$SPSM_DIR/state/active" ]; then
+  sh "$ENGINE" start-daemon >> "$SPSM_DIR/spsm.log" 2>&1
+fi

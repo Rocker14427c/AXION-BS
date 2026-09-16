@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A thin plus for an empty slot: the thick one read as a button. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#66FFFFFF"
+        android:pathData="M11.25,5h1.5v6.25H19v1.5h-6.25V19h-1.5v-6.25H5v-1.5h6.25z" />
+</vector>

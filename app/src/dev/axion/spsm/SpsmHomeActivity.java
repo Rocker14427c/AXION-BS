@@ -22,6 +22,10 @@ import android.widget.Toast;
 public class SpsmHomeActivity extends Activity {
     private final Handler handler = new Handler();
     private TextView battery;
+    private TextView remaining;
+    private View editButton;
+    /** While this is true a tap on a filled slot takes that app out of it. */
+    private boolean editing;
     private final int[] slotIds = {
             R.id.slot0, R.id.slot1, R.id.slot2, R.id.slot3, R.id.slot4, R.id.slot5
     };
@@ -35,47 +39,131 @@ public class SpsmHomeActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        hideSystemBars();
-        setContentView(R.layout.activity_home);
+        // setContentView first: it is what creates the window's decor view, and
+        // asking for the insets controller before that throws
+        // NullPointerException inside PhoneWindow - which, on a home activity,
+        // means the phone loses its home screen in a crash loop. This activity
+        // must be the last thing on the phone that can fail.
+        // A home screen that fails to inflate leaves the phone with no home at
+        // all - a black screen and no way back except reinstalling. So the
+        // normal layout is attempted, and a plain one is built in code if it
+        // cannot be shown for any reason.
+        try {
+            setContentView(R.layout.activity_home);
+        } catch (Throwable t) {
+            setContentView(fallbackHome());
+        }
+        styleSystemBars();
         battery = findViewById(R.id.battery);
-        findViewById(R.id.btn_exit).setOnClickListener(v -> confirmExit());
+        remaining = findViewById(R.id.remaining);
+        View exit = findViewById(R.id.btn_exit);
+        if (exit != null) exit.setOnClickListener(v -> confirmExit());
+        // A visible way into recents, and a long press on the empty space of the
+        // home. The swipe alone is not enough: swiping up from the bottom edge
+        // is the SYSTEM's gesture on this phone - Android takes it for its own
+        // navigation and opens the launcher's recents before this activity is
+        // ever asked, which is the launcher being started all over again.
+        View recentsBtn = findViewById(R.id.btn_recents);
+        if (recentsBtn != null) recentsBtn.setOnClickListener(v -> openRecents());
+        // Editing the six apps from the home screen itself: the pencil turns the
+        // slots into something you can take an app out of, and turns into a tick
+        // while it is on. Taking an app out empties the slot, so the "+" is there
+        // to put another app in - no separate screen, and no way to get stuck in
+        // it (the tick, or leaving the screen, ends it).
+        editButton = findViewById(R.id.btn_edit);
+        if (editButton != null) editButton.setOnClickListener(v -> setEditing(!editing));
+        View root = findViewById(R.id.home_root);
+        if (root != null) {
+            // Only the space the buttons do not use: the six slots take their own
+            // long presses first (Apps.bindSlot returns true), so holding an app
+            // still means "change this app".
+            root.setOnLongClickListener(v -> { openRecents(); return true; });
+        }
         Apps.fillDefaults(this);
         bindSlots();
         registerReceiver(batRx, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
     }
 
+    /**
+     * The smallest home that still works: the name of the mode and a way out.
+     * Only used if the real layout cannot be shown.
+     */
+    private View fallbackHome() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(0xFF000000);
+        box.setGravity(android.view.Gravity.CENTER);
+        box.setPadding(40, 40, 40, 40);
+        TextView t = new TextView(this);
+        t.setText(R.string.super_power_saving);
+        t.setTextColor(0xFFFFFFFF);
+        t.setTextSize(18);
+        t.setGravity(android.view.Gravity.CENTER);
+        box.addView(t);
+        android.widget.Button b = new android.widget.Button(this);
+        b.setText(R.string.exit);
+        b.setAllCaps(false);
+        b.setOnClickListener(v -> confirmExit());
+        box.addView(b);
+        android.widget.Button r = new android.widget.Button(this);
+        r.setText(R.string.recents_button);
+        r.setAllCaps(false);
+        r.setOnClickListener(v -> openRecents());
+        box.addView(r);
+        return box;
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
-        hideSystemBars();
-        bindSlots();
+        styleSystemBars();
+        try {
+            bindSlots();
+        } catch (Throwable ignored) {
+        }
         handler.post(tick);
     }
 
-    private void hideSystemBars() {
-        Window w = getWindow();
-        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        w.setStatusBarColor(0xFF000000);
-        w.setNavigationBarColor(0xFF000000);
-        w.getAttributes().layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        if (Build.VERSION.SDK_INT >= 30) {
-            w.setDecorFitsSystemWindows(false);
-            WindowInsetsController c = w.getInsetsController();
-            if (c != null) {
-                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                c.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    /**
+     * Keeps the status bar and the navigation bar where they belong.
+     *
+     * This used to hide both, full screen and immersive. On this phone that
+     * takes away the clock, the battery and the way back to the rest of Android
+     * exactly when the user needs them most - and it saves nothing: the bar is
+     * drawn by the same compositor either way. So the bars stay visible and only
+     * their colour is set, to match the black background.
+     */
+    private void styleSystemBars() {
+        // Cosmetic, and therefore never worth a crash: this is the home screen,
+        // and a home that dies takes the whole phone's UI with it. Every step is
+        // guarded, and the decor view is obtained explicitly so the insets
+        // controller is never asked for before the window has one.
+        try {
+            Window w = getWindow();
+            w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            w.setStatusBarColor(0xFF000000);
+            w.setNavigationBarColor(0xFF000000);
+            w.getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            View decor = w.getDecorView();
+            if (Build.VERSION.SDK_INT >= 30) {
+                // Content below the bars, never behind them.
+                w.setDecorFitsSystemWindows(true);
+                WindowInsetsController c = decor.getWindowInsetsController();
+                if (c != null) {
+                    // White icons: the bar sits on the black home screen.
+                    c.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+                    // And the bars themselves, asked for by name. The theme used
+                    // to request full screen, which hides the status bar and
+                    // leaves it hiding again a second after a swipe from the top.
+                    // That item is gone; this is the other half of the same fix,
+                    // so even a window that came up hidden is asked to show them.
+                    c.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                }
+            } else {
+                decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             }
-        } else {
-            View d = w.getDecorView();
-            d.setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -96,26 +184,151 @@ public class SpsmHomeActivity extends Activity {
         // Swallow back; this is the home.
     }
 
+    private float touchStartY;
+    private float touchStartX;
+
+    /**
+     * A swipe that reaches this activity opens SPSM's own recents.
+     *
+     * <p>The system's recents belong to the launcher, and using them starts the
+     * whole launcher process - which is exactly what this mode can least afford.
+     * The gesture is read here and never consumed, so taps and long presses on
+     * the six slots keep working normally.
+     *
+     * <p>An upward swipe from the bottom of the screen does not reach this
+     * activity at all on this phone: that edge belongs to Android's gesture
+     * navigation, and the system opens the launcher's recents with it. This is
+     * why the Recents button and the long press exist - they are the ways in
+     * that the system cannot take away.
+     */
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        try {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    touchStartY = ev.getY();
+                    touchStartX = ev.getX();
+                    break;
+                case android.view.MotionEvent.ACTION_UP:
+                    float dy = touchStartY - ev.getY();
+                    float dx = ev.getX() - touchStartX;
+                    float need = 60 * getResources().getDisplayMetrics().density;
+                    // Up, left or right - whichever of them the system leaves to
+                    // us. A swipe up from the bottom edge is normally taken by
+                    // gesture navigation, which opens the launcher's recents.
+                    if (dy > need && Math.abs(dx) < dy) openRecents();
+                    else if (Math.abs(dx) > need && Math.abs(dx) > Math.abs(dy)) openRecents();
+                    break;
+                default:
+                    break;
+            }
+        } catch (Throwable ignored) {
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    private void openRecents() {
+        try {
+            startActivity(new Intent(this, SpsmRecentsActivity.class));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Edit mode: slots show a badge, and a tap takes the app out. */
+    private void setEditing(boolean on) {
+        editing = on;
+        try {
+            if (editButton != null) {
+                ((android.widget.ImageButton) editButton)
+                        .setImageResource(on ? R.drawable.ic_check : R.drawable.ic_edit);
+                editButton.setContentDescription(getString(on ? R.string.edit_done : R.string.edit));
+            }
+            TextView hint = findViewById(R.id.home_hint);
+            if (hint != null) hint.setText(on ? R.string.edit_hint : R.string.swipe_for_recents);
+        } catch (Throwable ignored) {
+        }
+        bindSlots();
+    }
+
     private void bindSlots() {
         for (int i = 0; i < 6; i++) {
             final int index = i;
             LinearLayout slot = findViewById(slotIds[i]);
             Apps.bindSlot(this, slot, i, (idx, longPress) -> {
+                String pkg = Prefs.getSlot(SpsmHomeActivity.this, idx);
+                boolean filled = pkg != null && pkg.length() > 0;
+                // Holding an app always means "choose another one for this slot",
+                // whether or not the slots are being edited.
                 if (longPress) {
                     AppPickerActivity.open(SpsmHomeActivity.this, idx);
+                    return;
+                }
+                if (editing && filled) {
+                    // Out of the slot: the module is told at once (Prefs.setSlot
+                    // does that), the slot is empty, and "+" is ready for another
+                    // app.
+                    Prefs.setSlot(SpsmHomeActivity.this, idx, "");
+                    Toast.makeText(SpsmHomeActivity.this, R.string.slot_removed,
+                            Toast.LENGTH_SHORT).show();
+                    bindSlots();
+                    return;
+                }
+                if (!filled) {
+                    AppPickerActivity.open(SpsmHomeActivity.this, idx);
                 } else {
-                    String pkg = Prefs.getSlot(SpsmHomeActivity.this, idx);
-                    if (pkg == null || pkg.length() == 0) {
-                        AppPickerActivity.open(SpsmHomeActivity.this, idx);
-                    } else {
-                        Apps.launch(SpsmHomeActivity.this, pkg);
-                    }
+                    Apps.launch(SpsmHomeActivity.this, pkg);
                 }
             });
+            // The badge only exists while editing, and only on a slot with an app
+            // in it - an empty slot already says "Add".
+            View badge = slot.findViewById(R.id.badge);
+            if (badge != null) {
+                String pk = Prefs.getSlot(this, i);
+                boolean has = pk != null && pk.length() > 0;
+                badge.setVisibility(editing && has ? View.VISIBLE : View.GONE);
+            }
         }
     }
 
+    /**
+     * The way out, as a large dark sheet that comes up from the bottom edge:
+     * one sentence, Cancel in grey, Exit in red.
+     *
+     * Still a plain dialog underneath - the same two answers, the same
+     * doExit() - so nothing about leaving the mode depends on the skin. A
+     * platform that refuses the custom window still gets a working dialog.
+     */
     private void confirmExit() {
+        try {
+            final android.app.Dialog d = new android.app.Dialog(this);
+            View sheet = getLayoutInflater().inflate(R.layout.dialog_exit, null);
+            View cancel = sheet.findViewById(R.id.dlg_cancel);
+            View exit = sheet.findViewById(R.id.dlg_exit);
+            if (cancel != null) cancel.setOnClickListener(v -> d.dismiss());
+            if (exit != null) {
+                exit.setOnClickListener(v -> {
+                    d.dismiss();
+                    doExit();
+                });
+            }
+            d.setContentView(sheet);
+            Window w = d.getWindow();
+            if (w != null) {
+                w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0x00000000));
+                w.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT);
+                w.setGravity(android.view.Gravity.BOTTOM);
+                w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                WindowManager.LayoutParams lp = w.getAttributes();
+                lp.dimAmount = 0.65f;
+                w.setAttributes(lp);
+            }
+            d.setCanceledOnTouchOutside(true);
+            d.show();
+            return;
+        } catch (Throwable ignored) {
+        }
+        // Any phone that would not show that: the plain dialog, unchanged.
         new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle(R.string.exit_title)
                 .setMessage(R.string.exit_msg)
@@ -139,6 +352,16 @@ public class SpsmHomeActivity extends Activity {
     }
 
     private void updateBattery(Intent intent) {
+        // Never throws: this runs on the home screen, and the home screen going
+        // down takes the phone's interface with it. A missing or odd battery
+        // reading is not worth that.
+        try {
+            updateBatteryText(intent);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void updateBatteryText(Intent intent) {
         if (intent == null) return;
         int lvl = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         int scl = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
@@ -153,8 +376,12 @@ public class SpsmHomeActivity extends Activity {
         } else {
             extra = getString(R.string.remaining, estimate(pct));
         }
-        battery.setText(pct + "%  |  " + extra);
+        // The way the phone's own power saving screen reads: one big number,
+        // one line under it. No build numbers, no badges.
+        if (battery != null) battery.setText(pct + "%");
+        if (remaining != null) remaining.setText(extra);
     }
+
 
     private String estimate(int pct) {
         // ColorOS-style optimistic remaining while SPSM is on.
