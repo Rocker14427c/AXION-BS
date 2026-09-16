@@ -254,6 +254,10 @@ public class SpsmHomeActivity extends Activity {
         for (int i = 0; i < 6; i++) {
             final int index = i;
             LinearLayout slot = findViewById(slotIds[i]);
+            // The fallback layout has no slots. This is the one screen whose
+            // failure takes the phone's interface with it, so a missing slot is
+            // skipped rather than thrown over.
+            if (slot == null) continue;
             Apps.bindSlot(this, slot, i, (idx, longPress) -> {
                 String pkg = Prefs.getSlot(SpsmHomeActivity.this, idx);
                 boolean filled = pkg != null && pkg.length() > 0;
@@ -301,6 +305,12 @@ public class SpsmHomeActivity extends Activity {
     private void confirmExit() {
         try {
             final android.app.Dialog d = new android.app.Dialog(this);
+            // No title strip: the sheet draws its own title, and a platform title
+            // bar above it would be an empty band of a different colour.
+            try {
+                d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            } catch (Throwable ignored) {
+            }
             View sheet = getLayoutInflater().inflate(R.layout.dialog_exit, null);
             View cancel = sheet.findViewById(R.id.dlg_cancel);
             View exit = sheet.findViewById(R.id.dlg_exit);
