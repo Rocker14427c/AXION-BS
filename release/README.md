@@ -1,7 +1,7 @@
 # Release artifacts
 
 The file to flash is the one matching the newest release:
-**`Axion-SPSM-v3.4.0-RMX3430.zip`**
+**`Axion-SPSM-v3.4.1-RMX3430.zip`**
 
 `tools/makezip.sh` writes it here, taking the version from `module/module.prop`,
 so the file name, the zip's `module.prop` and the app's version stamp cannot
@@ -9,7 +9,8 @@ disagree.
 
 | file | release |
 |---|---|
-| `Axion-SPSM-v3.4.0-RMX3430.zip` | [v3.4.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.4.0) — current |
+| `Axion-SPSM-v3.4.1-RMX3430.zip` | [v3.4.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.4.1) — current |
+| `Axion-SPSM-v3.4.0-RMX3430.zip` | [v3.4.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.4.0) — do not use: the app closed itself on opening |
 | `Axion-SPSM-v3.3.1-RMX3430.zip` | [v3.3.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.3.1) |
 | `Axion-SPSM-v3.3.0-RMX3430.zip` | [v3.3.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.3.0) |
 | `Axion-SPSM-v3.2.0-RMX3430.zip` | [v3.2.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.2.0) |

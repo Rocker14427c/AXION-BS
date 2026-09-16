@@ -253,7 +253,8 @@ public class SpsmHomeActivity extends Activity {
     private void bindSlots() {
         for (int i = 0; i < 6; i++) {
             final int index = i;
-            LinearLayout slot = findViewById(slotIds[i]);
+            // View, never a widget: the layout decides what a slot is.
+            View slot = findViewById(slotIds[i]);
             // The fallback layout has no slots. This is the one screen whose
             // failure takes the phone's interface with it, so a missing slot is
             // skipped rather than thrown over.

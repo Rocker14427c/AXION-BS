@@ -19,6 +19,19 @@ if [ "${1:-}" = "--bootstrap" ]; then
   shift
 fi
 
+# ------------------------------------------------------------------ audit
+# Every view this app asks for must be one the layout actually declares, and must
+# be held as a type the layout's view can be. This is not a lint: v3.4.0 shipped a
+# slot layout whose root changed from LinearLayout to FrameLayout while two
+# activities went on casting it, and the phone found it - a ClassCastException on
+# resume, which on the home screen means no home screen. It compiles, and no test
+# of the scripts can see it, so it is checked here, and the build stops on it.
+if command -v python3 >/dev/null 2>&1; then
+  if ! python3 "$ROOT/tests/audit-ids.py"; then
+    die "the app's view lookups do not match its layouts (see above)"
+  fi
+fi
+
 # ---------------------------------------------------------------- toolchain
 ENV_FILE="$ROOT/sdk/toolchain.env"
 if [ -f "$ENV_FILE" ]; then
@@ -135,6 +148,25 @@ say "6/6 sign (v1+v2+v3)"
 
 python3 "$ROOT/tools/apkpack.py" verify "$OUT/AxionSPSM.apk" | tail -1
 
+# -------------------------------------------------- 5b. check the APK itself
+# The source audit above reads the app; this reads what the user would install.
+# v3.4.0's crash was a Java type problem that the compiler accepted, so the last
+# thing to do before staging is to prove the methods in this dex are the fixed
+# ones - and that the one that crashed is not in it any more.
+_SLOT="ILdev/axion/spsm/Apps\$SlotClick;)V"
+if ! python3 "$ROOT/tools/dexcheck.py" "$OUT/AxionSPSM.apk" \
+    "Ldev/axion/spsm/Apps;->bindSlot(Landroid/content/Context;Landroid/view/View;$_SLOT" \
+    "Ldev/axion/spsm/SetupActivity;->bindSlots()V" \
+    "Ldev/axion/spsm/SpsmHomeActivity;->bindSlots()V" \
+    "Ldev/axion/spsm/SpsmHomeActivity;->confirmExit()V"; then
+  die "the APK does not carry the methods this source says it does"
+fi
+if python3 "$ROOT/tools/dexcheck.py" "$OUT/AxionSPSM.apk" \
+    "Ldev/axion/spsm/Apps;->bindSlot(Landroid/content/Context;Landroid/widget/LinearLayout;$_SLOT" \
+    >/dev/null 2>&1; then
+  die "the APK still carries the slot method that crashed on the phone"
+fi
+
 # ------------------------------------------------------------ 6. stage
 mkdir -p "$ROOT/module/app" "$ROOT/module/system/app/AxionSPSM"
 cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/app/AxionSPSM.apk"
@@ -143,7 +175,13 @@ cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/system/app/AxionSPSM/AxionSPSM.apk"
 # ------------------------------------------------------------ 7. assert version
 # Cheap insurance: the APK and module.prop must agree, or the phone shows one
 # version and the manager shows another.
-BADGE="$("$AAPT2" dump badging "$OUT/AxionSPSM.apk" 2>/dev/null | head -1)"
+# Written to a file first: aapt2 is a JVM that prints a lot, and piping it into
+# `head -1` lets head close the pipe while aapt2 is still writing. Under
+# pipefail that kills the build with a SIGPIPE (141) at the very last step, on
+# some runs and not others - a flaky build is worse than no build.
+"$AAPT2" dump badging "$OUT/AxionSPSM.apk" 2>/dev/null > "$OUT/badging.txt" || true
+BADGE="$(head -1 "$OUT/badging.txt")"
+[ -n "$BADGE" ] || die "could not read the built APK back with aapt2"
 case "$BADGE" in
   *"versionCode='$VCODE'"*) ;;
   *) die "APK versionCode does not match module.prop ($VCODE): $BADGE" ;;

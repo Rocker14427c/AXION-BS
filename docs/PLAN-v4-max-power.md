@@ -144,6 +144,19 @@ Shipped as v3.2.0, corrected in v3.4.0:
   estimate near the bottom, white/grey only, exit as a dark sheet from the bottom
   with a red Exit).
 
+Corrected again in v3.4.1: **v3.4.0 shipped a build that could not be opened at
+all** — the redesigned app containers became `FrameLayout`s (they had to, for the
+edit badge) while the setup screen and the home screen went on casting them to
+`LinearLayout`, which Android refuses on resume. The source compiles, and no test
+of the scripts inflates a layout, so nothing in the pipeline saw it: the phone
+found it. The screens now ask for a plain `View`, and three checks were added —
+a source audit of every view lookup against its layout, a read of the *built
+APK's* dex for the fixed method signatures, and a test case that replays the
+crash through the audit so the audit is known to work. The rule that came out of
+it: **an app build is not shippable until something has opened every screen's
+start-up path**, and where that cannot be done off the phone, the checks above
+stand in for it.
+
 ### Stage 4 — system components, by proof rather than by prediction
 *(supersedes the earlier "user apps only" choice: that rule was safe but left the
 non-essential system services untouched even when diagnostics can identify them)*
@@ -193,6 +206,17 @@ few percent, opt-in, per item — which is exactly the policy you described.
    as working and safe, with a one-screen list of what it will do and one tap back.
 
 ---
+
+## 4b. What v3.4.1 changed in the engine
+
+- The per-app loops (suspend every app outside the six slots, release them on
+  exit, freeze/unfreeze the Google packages) ran one app at a time: three shell
+  commands each, about a dozen apps, and the v3.3.1 log showed a 45-second exit
+  where the power-mode release itself took one second. They run together now, and
+  the results are written down afterwards in the same order as before, so the
+  journal is byte-for-byte the same kind of record.
+- Every step of an apply and a revert is timed, and any step over two seconds is
+  named in the log: a slow exit can now be attributed instead of guessed at.
 
 ## 5. How breakage is avoided (your instruction, taken literally)
 

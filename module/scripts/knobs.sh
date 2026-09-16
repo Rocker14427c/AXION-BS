@@ -1139,26 +1139,31 @@ snapshot_freeze_google() {
   done
 }
 apply_freeze_google() {
+  # Together: these are the slowest single calls on the phone.
   for _p in $(google_packages); do
-    pm suspend "$_p" >/dev/null 2>&1
-    am force-stop "$_p" >/dev/null 2>&1
+    ( pm suspend "$_p" >/dev/null 2>&1
+      am force-stop "$_p" >/dev/null 2>&1 ) &
   done
+  wait
 }
 restore_freeze_google() {
   restore_kv "$1" "$2"
   for _p in $(google_packages); do
     # Unsuspending always: suspending is the change we make, and leaving one
     # behind would keep an app dead until the next reboot.
-    pm unsuspend "$_p" >/dev/null 2>&1
+    #
     # Enabling is only right for a package that was enabled before we touched
     # it. A Play Store somebody disabled on purpose must not come back to life
-    # because the mode was switched off.
+    # because the mode was switched off - which is why the decision is read from
+    # the snapshot here, before the work is handed to the background.
     _st=$(awk -F'\t' -v p="$_p" '$1==p{print $2; exit}' "$1" 2>/dev/null)
     case "$_st" in
-      disabled*) ;;
-      *) pm enable "$_p" >/dev/null 2>&1 ;;
+      disabled*) ( pm unsuspend "$_p" >/dev/null 2>&1 ) & ;;
+      *) ( pm unsuspend "$_p" >/dev/null 2>&1
+           pm enable "$_p" >/dev/null 2>&1 ) & ;;
     esac
   done
+  wait
 }
 
 # ============================================================ Doze / power
@@ -1223,33 +1228,57 @@ snapshot_block_other_apps() {
 # restore.
 BLOCKED_BY_US="$STATE/blocked_by_us.tsv"
 
+# Suspend every app that is not in the six slots.
+#
+# The per-app work runs TOGETHER rather than one app after another. Each app
+# costs this phone three commands (a dumpsys read, the suspend, a force-stop),
+# and there are a dozen of them: done in a row that is the better part of half a
+# minute, done together it is about as long as the slowest single app. The
+# results are collected and only then written down, so the journal (which one
+# app was suspended by us) is still built the same way and in the same order.
 apply_block_other_apps() {
   # A second application in the same session (the deep phase runs again on every
   # screen-off) must not re-record anything: the list is what we suspended, once.
   [ -f "$BLOCKED_BY_US" ] || : > "$BLOCKED_BY_US"
-  blockable_packages | while read -r _p; do
+  _d=$SPSM_DIR/.tmp
+  mkdir -p "$_d" 2>/dev/null
+  _r="$_d/block.$$"
+  : > "$_r"
+  for _p in $(blockable_packages); do
     [ -n "$_p" ] || continue
-    # An app that is already suspended is somebody else's decision - the user's,
-    # or another tool's. Never ours to take over, and never ours to release.
-    if dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true'; then
-      continue
-    fi
-    if pm suspend --user 0 "$_p" >/dev/null 2>&1 || pm suspend "$_p" >/dev/null 2>&1; then
-      grep -qxF "$_p" "$BLOCKED_BY_US" 2>/dev/null || printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
-      am force-stop "$_p" >/dev/null 2>&1
-    fi
+    (
+      # An app that is already suspended is somebody else's decision - the user's,
+      # or another tool's. Never ours to take over, and never ours to release.
+      dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && exit 0
+      if pm suspend --user 0 "$_p" >/dev/null 2>&1 || pm suspend "$_p" >/dev/null 2>&1; then
+        am force-stop "$_p" >/dev/null 2>&1
+        printf '%s\n' "$_p" >> "$_r"
+      fi
+    ) &
   done
+  wait
+  # One writer, in a stable order, as before.
+  sort -u "$_r" 2>/dev/null | while read -r _p; do
+    [ -n "$_p" ] || continue
+    grep -qxF "$_p" "$BLOCKED_BY_US" 2>/dev/null || printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
+  done
+  rm -f "$_r"
 }
 
 restore_block_other_apps() {
   [ -f "$BLOCKED_BY_US" ] || return 0
+  # Together, like the apply: releasing a dozen apps one at a time is most of a
+  # slow exit.
   while read -r _p; do
     [ -n "$_p" ] || continue
-    # Only if it is still suspended: if something else has since had an opinion
-    # about this app, that opinion wins.
-    dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' || continue
-    pm unsuspend --user 0 "$_p" >/dev/null 2>&1 || pm unsuspend "$_p" >/dev/null 2>&1
+    (
+      # Only if it is still suspended: if something else has since had an opinion
+      # about this app, that opinion wins.
+      dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' || exit 0
+      pm unsuspend --user 0 "$_p" >/dev/null 2>&1 || pm unsuspend "$_p" >/dev/null 2>&1
+    ) &
   done < "$BLOCKED_BY_US"
+  wait
   rm -f "$BLOCKED_BY_US"
 }
 

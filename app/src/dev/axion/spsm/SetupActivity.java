@@ -64,7 +64,14 @@ public class SetupActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        bindSlots();
+        // The slots are not what this screen is FOR - the switch is. A view
+        // problem in a row of icons must never be the reason the app cannot be
+        // opened, which is exactly what happened once: a slot held as the wrong
+        // widget threw here, on resume, and took the whole app with it.
+        try {
+            bindSlots();
+        } catch (Throwable ignored) {
+        }
         refresh();
     }
 
@@ -76,7 +83,11 @@ public class SetupActivity extends Activity {
 
     private void bindSlots() {
         for (int i = 0; i < 6; i++) {
-            LinearLayout slot = findViewById(slotIds[i]);
+            // View, never a widget: the slot layout's root is a FrameLayout so
+            // that a slot can carry its edit badge. Holding it as a LinearLayout
+            // threw a ClassCastException here, on resume, and took the whole app
+            // down as soon as it was opened.
+            View slot = findViewById(slotIds[i]);
             Apps.bindSlot(this, slot, i, (idx, longPress) -> AppPickerActivity.open(SetupActivity.this, idx));
         }
     }

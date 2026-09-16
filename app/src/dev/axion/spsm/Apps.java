@@ -7,8 +7,8 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.view.View;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -38,7 +38,17 @@ final class Apps {
 
     private Apps() {}
 
-    static void bindSlot(final Context c, LinearLayout slot, final int index, final SlotClick click) {
+    /**
+     * Bind one of the six slots.
+     *
+     * <p>The slot is a View, not a LinearLayout: the layout's own root decides
+     * what it is, and that changed once (a FrameLayout, so the edit badge could
+     * sit over the icon). Holding it as a specific widget meant a
+     * ClassCastException the moment the layout moved on - which is a crash on
+     * the phone, and on the home screen it means no home at all. So this asks for
+     * nothing more than View.
+     */
+    static void bindSlot(final Context c, View slot, final int index, final SlotClick click) {
         ImageView icon = slot.findViewById(R.id.icon);
         TextView label = slot.findViewById(R.id.label);
         String pkg = Prefs.getSlot(c, index);
@@ -54,7 +64,7 @@ final class Apps {
                 // real name and icon from a background thread.
                 icon.setImageResource(R.drawable.ic_plus_thin);
                 label.setText(pkg);
-                final LinearLayout fSlot = slot;
+                final View fSlot = slot;
                 final String fPkg = pkg;
                 new Thread(() -> {
                     final Resolved slow = resolve(c, fPkg);

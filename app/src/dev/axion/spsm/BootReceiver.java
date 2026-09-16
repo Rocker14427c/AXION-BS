@@ -13,9 +13,16 @@ public class BootReceiver extends BroadcastReceiver {
         ScreenReceiver.install(context);
         new Thread(() -> {
             if (!Root.available() || !Root.isActive()) return;
-            Intent i = new Intent(context, SpsmHomeActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            context.startActivity(i);
+            try {
+                Intent i = new Intent(context, SpsmHomeActivity.class);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(i);
+            } catch (Throwable ignored) {
+                // A boot that cannot show the power-saving home must still boot:
+                // the mode puts everything back on its own, with or without the
+                // app, and a crash in a boot receiver is a much worse phone than
+                // a missing home screen.
+            }
         }).start();
     }
 }

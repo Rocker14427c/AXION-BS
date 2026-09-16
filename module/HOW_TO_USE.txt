@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.4.0.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.4.1.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -19,7 +19,26 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.4.0)
+NEW IN THIS BUILD (v3.4.1)
+- Fixed: v3.4.0 closed itself the moment it was opened. The row of app containers
+  on the setup and home screens had changed from one kind of container to another
+  (it had to, for the small badge that edit mode uses), and two screens were still
+  asking the system for the old kind. Android refuses that at the moment the
+  screen appears, which is why the app died instantly and left no chance to reach
+  a switch. Both screens now ask for the plain kind, which is what they actually
+  use - the badge, the tap and the hold all work exactly as in v3.4.0.
+  The build now checks this class of mistake three times over: against the source,
+  against the built app, and against the row of containers themselves.
+- Faster, and honest about it: switching off used to take about 45 seconds. Most
+  of that was the long list of apps being suspended and released one at a time;
+  those now run together, so the same work finishes in a fraction of it. Nothing
+  about what is changed has changed - only how long the phone spends doing it.
+- The log now names any step that takes more than two seconds, so a slow exit can
+  be pointed at rather than guessed at.
+- The build can no longer fail at random on the last step (a tool being closed off
+  mid-sentence used to abort the release build once in a while).
+
+NEW IN v3.4.0 (already in this build)
 - New home screen, in the spirit of a phone's own super power saving mode: a
   nearly black screen, the large centred clock kept exactly as it was with the
   date under it, a 3x2 grid of large rounded app containers, the battery reading

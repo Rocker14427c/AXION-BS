@@ -149,6 +149,7 @@ phase_session() { # apply|revert
   [ "$_mode" = revert ] && _list=$(knobs_reversed) || _list=$(knobs_all)
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
+    _t0=$(date +%s)
     if [ "$_mode" = apply ]; then
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
       progress "Applying: $(knob_meta "$_k" | cut -d'|' -f2)"
@@ -156,6 +157,13 @@ phase_session() { # apply|revert
     else
       knob_revert "$_k"
     fi
+    _d=$(( $(date +%s) - _t0 ))
+    # A step that takes more than a couple of seconds is worth naming: this
+    # phone spends about a fifth of a second on every settings read, so a whole
+    # exit is minutes of these added up, and the log is the only place that can
+    # say which step is spending them. (v3.3.1's exit took 45s and nothing in the
+    # log said where.)
+    [ "$_d" -ge 2 ] && log "  slow: $_mode $_k took ${_d}s"
   done
 }
 
@@ -164,6 +172,7 @@ phase_deep() { # apply|revert
   [ "$_mode" = revert ] && _list=$(knobs_reversed) || _list=$(knobs_all)
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
+    _t0=$(date +%s)
     if [ "$_mode" = apply ]; then
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
       progress "Idle: $(knob_meta "$_k" | cut -d'|' -f2)"
@@ -171,6 +180,8 @@ phase_deep() { # apply|revert
     else
       knob_revert "$_k"
     fi
+    _d=$(( $(date +%s) - _t0 ))
+    [ "$_d" -ge 2 ] && log "  slow: $_mode $_k took ${_d}s"
   done
 }
 
@@ -179,7 +190,10 @@ phase_deep() { # apply|revert
 phase_deep_revert() {
   for _k in $(knobs_reversed); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
+    _t0=$(date +%s)
     knob_revert "$_k"
+    _d=$(( $(date +%s) - _t0 ))
+    [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
   done
 }
 

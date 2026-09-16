@@ -58,12 +58,15 @@ public class SpsmRecentsActivity extends Activity {
         View close = findViewById(R.id.btn_close);
         if (close != null) close.setOnClickListener(v -> finish());
         adapter = new Adapter();
-        list.setAdapter(adapter);
-        list.setOnItemClickListener((p, v, position, id) -> switchTo(rows.get(position)));
-        list.setOnItemLongClickListener((p, v, position, id) -> {
-            confirmClose(rows.get(position));
-            return true;
-        });
+        try {
+            list.setAdapter(adapter);
+            list.setOnItemClickListener((p, v, position, id) -> switchTo(rows.get(position)));
+            list.setOnItemLongClickListener((p, v, position, id) -> {
+                confirmClose(rows.get(position));
+                return true;
+            });
+        } catch (Throwable ignored) {
+        }
         load();
     }
 

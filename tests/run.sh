@@ -2542,6 +2542,71 @@ check "and it comes up from the bottom edge" $?
 grep -q "setTitle(R.string.exit_title)" "$ACT" && grep -q "doExit()" "$ACT"
 check "while the plain dialog is still the fallback underneath it" $?
 
+say "69. no screen of this app can be opened into a crash"
+# The owner reported, from the phone: opening the app threw
+#   java.lang.ClassCastException: android.widget.FrameLayout cannot be cast to
+#   android.widget.LinearLayout   at SetupActivity.bindSlots(SetupActivity.java:79)
+# The slot layout's root changed from LinearLayout to FrameLayout (so a slot could
+# carry its edit badge) and two activities went on casting those slots. It
+# compiled, and no test of the scripts could see it. This case is the net that
+# catches that whole family of bug, and it proves the net works.
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$REPO/tests/audit-ids.py" > "$WORK/out.audit69" 2>&1
+  check "every view lookup matches the layout it comes from ($(tail -1 "$WORK/out.audit69"))" $?
+  grep -q "no view is held as something its layout is not" "$WORK/out.audit69"
+  check "and the audit read the app rather than guessing" $?
+
+  # The audit is only worth having if it fails on the bug it was written for:
+  # put the cast back into a copy of the tree and demand that it is caught.
+  rm -rf "$WORK/app69"; mkdir -p "$WORK/app69"
+  cp -r "$REPO/app" "$WORK/app69/app"
+  ls "$WORK/app69/app/src/dev/axion/spsm" >/dev/null 2>&1 || bad "the copy of the app tree was made"
+  sed -i 's/View slot = findViewById(slotIds\[i\]);/LinearLayout slot = findViewById(slotIds[i]);/' \
+      "$WORK/app69/app/src/dev/axion/spsm/SetupActivity.java"
+  grep -q "LinearLayout slot = findViewById(slotIds\[i\])" "$WORK/app69/app/src/dev/axion/spsm/SetupActivity.java"
+  check "the copy has the crash that shipped put back into it" $?
+  python3 "$REPO/tests/audit-ids.py" "$WORK/app69" > "$WORK/out.audit69b" 2>&1
+  [ $? != 0 ]
+  check "and the audit refuses it" $?
+  grep -q "WRONG-TYPE" "$WORK/out.audit69b"
+  check "naming the type it found instead ($(grep -m1 WRONG-TYPE "$WORK/out.audit69b" | cut -c1-90)…)" $?
+  grep -q "SetupActivity.java" "$WORK/out.audit69b"
+  check "and the file and line to look at" $?
+
+  # The build stops on it too, so a broken app cannot be packaged again.
+  grep -q "audit-ids.py" "$REPO/build.sh"
+  check "the build runs the same audit and stops on it" $?
+else
+  ok "python3 is not installed here: the audit was skipped (the build does run it)"
+fi
+
+  # And the APK, not just the source: this reads the dex of the built APK and
+  # demands the fixed method is in it and the broken one is not.
+  grep -q "dexcheck.py" "$REPO/build.sh"
+  check "the build also checks the APK it is about to stage" $?
+  if [ -f "$REPO/build/AxionSPSM.apk" ]; then
+    python3 "$REPO/tools/dexcheck.py" "$REPO/build/AxionSPSM.apk" \
+      "Ldev/axion/spsm/Apps;->bindSlot(Landroid/content/Context;Landroid/view/View;ILdev/axion/spsm/Apps\$SlotClick;)V" \
+      > "$WORK/out.dex69" 2>&1
+    check "the built APK carries the fixed slot method ($(tail -1 "$WORK/out.dex69"))" $?
+    python3 "$REPO/tools/dexcheck.py" "$REPO/build/AxionSPSM.apk" \
+      "Ldev/axion/spsm/Apps;->bindSlot(Landroid/content/Context;Landroid/widget/LinearLayout;ILdev/axion/spsm/Apps\$SlotClick;)V" \
+      >/dev/null 2>&1 && bad "the built APK still carries the method that crashed"
+    ok "and not the one that crashed"
+  else
+    ok "no built APK here to read (the build checks it before every release)"
+  fi
+
+# The two screens that can be opened blind must not die on a view problem: the
+# app's own switch is worth more than a row of icons.
+grep -q "try {" "$REPO/app/src/dev/axion/spsm/SetupActivity.java" && \
+  grep -q "} catch (Throwable ignored)" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"
+check "opening the app cannot be taken down by a slot" $?
+grep -q "if (slot == null) continue;" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "the home screen skips a missing slot rather than throwing over it" $?
+grep -q "static void bindSlot(final Context c, View slot" "$REPO/app/src/dev/axion/spsm/Apps.java"
+check "and nothing anywhere holds a slot as a specific widget" $?
+
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
