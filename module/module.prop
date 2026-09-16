@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.1.1
-versionCode=44
+version=v3.2.0
+versionCode=45
 author=Axion SPSM
-description=v3.1.1 journaled apply/revert - every change recorded and restored. No longer enters a CPU power state this phone will not leave, releases a leftover one, status bar visible. RMX3430.
+description=v3.2.0 journaled apply/revert - every change recorded and restored. SPSM has its own lightweight recents (swipe up), so the launcher is never started to switch apps. RMX3430.

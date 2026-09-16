@@ -149,6 +149,46 @@ public class SpsmHomeActivity extends Activity {
         // Swallow back; this is the home.
     }
 
+    private float touchStartY;
+    private float touchStartX;
+
+    /**
+     * Swiping up opens SPSM's own recents.
+     *
+     * <p>The system's recents belong to the launcher, and using them starts the
+     * whole launcher process - which is exactly what this mode can least afford.
+     * The gesture is read here, never consumed, so taps and long presses on the
+     * six slots keep working normally.
+     */
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        try {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    touchStartY = ev.getY();
+                    touchStartX = ev.getX();
+                    break;
+                case android.view.MotionEvent.ACTION_UP:
+                    float dy = touchStartY - ev.getY();
+                    float dx = Math.abs(touchStartX - ev.getX());
+                    float need = 60 * getResources().getDisplayMetrics().density;
+                    if (dy > need && dx < dy) openRecents();
+                    break;
+                default:
+                    break;
+            }
+        } catch (Throwable ignored) {
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    private void openRecents() {
+        try {
+            startActivity(new Intent(this, SpsmRecentsActivity.class));
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void bindSlots() {
         for (int i = 0; i < 6; i++) {
             final int index = i;

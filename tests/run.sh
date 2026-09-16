@@ -1738,6 +1738,16 @@ for m in re.finditer(r'<string name="([a-z_]+)"[^>]*>(.*?)</string>', xml, re.S)
     strings[m.group(1)] = re.findall(r'%\d+\$([sdf])', m.group(2))
 
 src_dir = os.path.join(repo, 'app/src/dev/axion/spsm')
+
+# Which methods in this app hand back text? A number placeholder fed by one of
+# them is the bug that blanked the home screen (estimate() returns the text
+# "2 hr 15 min" and was passed to a %d), and this is what catches it again.
+str_methods = set()
+for fn in sorted(os.listdir(src_dir)):
+    if fn.endswith('.java'):
+        str_methods |= set(re.findall(r'\bString\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
+                                      open(os.path.join(src_dir, fn)).read()))
+
 bad = []
 for fn in sorted(os.listdir(src_dir)):
     if not fn.endswith('.java'):
@@ -1782,8 +1792,19 @@ for fn in sorted(os.listdir(src_dir)):
                        % (fn, name, len(want), len(parts)))
             continue
         for kind, arg in zip(want, parts):
-            if kind in 'df' and not re.search(r'(\.size\(\)|\.length\b|^[0-9]+$|pct|count|hours)', arg):
-                bad.append('%s: %s wants a number, got "%s"' % (fn, name, arg))
+            if kind not in 'df':
+                continue
+            # Text reaching a number placeholder is the failure mode. Locals and
+            # arithmetic (min, hrs, hrs / 24, all.size()) are numbers by
+            # construction and must not be flagged.
+            looks_text = (arg.startswith('"') or arg.startswith("'")
+                          or '.toString()' in arg or 'getString(' in arg
+                          or 'String.format' in arg)
+            for m in str_methods:
+                if re.search(r'\b' + re.escape(m) + r'\s*\(', arg):
+                    looks_text = True
+            if looks_text:
+                bad.append('%s: %s wants a number, got text "%s"' % (fn, name, arg))
 print('\n'.join(bad))
 sys.exit(1 if bad else 0)
 PY57
@@ -1969,6 +1990,45 @@ run_engine activate >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
 [ -f "$WORK/stub/pkg/com.example.game.suspended" ]
 check "an app the user suspended is still suspended after the mode is off" $?
+
+say "61. SPSM's recents reads the phone's task list and switches without the launcher"
+# The dump below is the phone's own output (narzo 50A, Android 16, AxionOS).
+# Reading it is what lets SPSM show recents without starting the Pulse launcher,
+# whose RecentsActivity is itself one of the tasks in the list.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+run_engine recents > "$WORK/out.r61" 2>&1
+[ "$(wc -l < "$WORK/out.r61")" = "2" ]
+check "only the apps worth switching to are listed ($(tr '\n' ' ' < "$WORK/out.r61"))" $?
+grep -q "^1455	com.termux	com.termux/.app.TermuxActivity	725551$" "$WORK/out.r61"
+check "the newest task is read with its id, package and activity" $?
+grep -q "^1454	com.openai.chatgpt" "$WORK/out.r61"
+check "and the one after it" $?
+grep -q "dev.axion.spsm" "$WORK/out.r61"
+if [ $? = 0 ]; then bad "the SPSM home is not offered as somewhere to switch to"; else ok "the SPSM home is not offered as somewhere to switch to"; fi
+grep -q "RecentsActivity" "$WORK/out.r61"
+if [ $? = 0 ]; then bad "and the launcher's recents task is not listed either"; else ok "and the launcher's recents task is not listed either"; fi
+
+run_engine recents-switch 1455 > "$WORK/out.sw61" 2>&1
+[ "$(cat "$WORK/stub/task_in_front")" = "1455" ]
+check "switching moves that task to the front" $?
+grep -q "am task move-to-front 1455" "$WORK/stub/calls" || grep -q "move-to-front 1455" "$WORK/stub/calls"
+check "through the system, not by starting the launcher" $?
+run_engine recents-remove 1454 >/dev/null 2>&1
+grep -q "^1454$" "$WORK/stub/tasks_removed"
+check "closing a task closes that task" $?
+# Nothing that comes from the screen may become shell syntax.
+run_engine recents-switch '1455; reboot' > "$WORK/out.bad61" 2>&1
+grep -q "not a task id" "$WORK/out.bad61"
+check "a task id that is not a number is refused" $?
+run_engine recents-switch 1455 'com.termux/.app.TermuxActivity; rm -rf /' > "$WORK/out.bad61b" 2>&1
+[ ! -f "$WORK/stub/task_restarted_bad" ] && [ -f "$WORK/stub/task_in_front" ]
+check "and a component that is not a component name is refused" $?
+# A ROM that prints something unexpected must yield nothing, not nonsense.
+printf 'no tasks here\n' > "$WORK/stub/recents.dump"
+run_engine recents > "$WORK/out.r61b" 2>&1
+[ ! -s "$WORK/out.r61b" ]
+check "an unexpected dump yields an empty list rather than rubbish" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

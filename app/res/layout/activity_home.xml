@@ -142,7 +142,7 @@
         android:layout_height="wrap_content"
         android:gravity="center"
         android:paddingBottom="16dp"
-        android:text="@string/hold_to_change"
+        android:text="@string/swipe_for_recents"
         android:textColor="@color/text_hint"
         android:textSize="11sp" />
 </LinearLayout>

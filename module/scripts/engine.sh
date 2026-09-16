@@ -7,6 +7,7 @@
 #   engine.sh screen-on     revert the deep knobs
 #   engine.sh set <knob> <0|1>   flip one knob live
 #   engine.sh verify        re-read everything and report drift
+#   engine.sh recents       the task list, read without starting the launcher
 #   engine.sh status        machine-readable state for the APK
 #   engine.sh dump-knobs    write knobs.list for the APK options screen
 #
@@ -22,6 +23,8 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/knobs.sh"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/recents.sh"
 
 # ------------------------------------------------------------------ one knob
 
@@ -729,6 +732,9 @@ case "$CMD" in
   verify)     do_verify ;;
   probe)      do_probe ;;
   allow)      do_allow ;;
+  recents)        do_recents ;;
+  recents-switch) recents_switch "$2" "$3" ;;
+  recents-remove) recents_remove "$2" ;;
   version)    echo "scripts=$(scripts_stamp) module=$(spsm_version) code=$SPSM_CODE_VERSION" ;;
   status)     do_status ;;
   dump-knobs) do_dump_knobs ;;
@@ -737,6 +743,6 @@ case "$CMD" in
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|status|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch|recents-remove|status|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac

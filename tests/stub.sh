@@ -107,6 +107,17 @@ case "$CMD" in
     log_call "$@"
     case "$1" in
       get-standby-bucket) cat "$S/bucket/$2" 2>/dev/null || echo 10 ;;
+      task)
+        # am task move-to-front <id> / am task remove <id>
+        case "$2" in
+          move-to-front)
+            printf '%s\n' "$3" > "$S/task_in_front"
+            printf '%s\n' "${_task_component:-}" > "$S/task_front_component"
+            ;;
+          remove) printf '%s\n' "$3" >> "$S/tasks_removed" ;;
+          *) ;;
+        esac
+        ;;
       set-standby-bucket) printf '%s\n' "$3" > "$S/bucket/$2" ;;
       start)
         # am start -a ... -c android.intent.category.HOME
@@ -250,7 +261,16 @@ case "$CMD" in
         # `dumpsys activity activities` is what the module reads to see which
         # activity is actually on screen; the format below is the one Android
         # prints (topResumedActivity=ActivityRecord{... <component> ...}).
-        if [ "$2" = "activities" ]; then
+        if [ "$2" = "recents" ]; then
+          # The task list, in the shape this ROM prints. The fixture is the phone's
+          # real output, so the parser is tested against the format it must read.
+          if [ -f "$S/recents.dump" ]; then
+            cat "$S/recents.dump"
+          else
+            echo "ACTIVITY MANAGER RECENT TASKS (dumpsys activity recents)"
+            echo "No recent tasks."
+          fi
+        elif [ "$2" = "activities" ]; then
           printf '    topResumedActivity=ActivityRecord{cafe1 u0 %s t879}\n' \
             "$(cat "$S/resumed" 2>/dev/null || echo com.android.launcher3/.Launcher)"
         else

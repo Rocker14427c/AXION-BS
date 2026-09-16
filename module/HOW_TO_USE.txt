@@ -17,6 +17,13 @@ INSTALLING OVER AN OLDER VERSION
   another version to restore, which is what makes the exit log complain.
 
 NEW IN THIS BUILD
+- SPSM has its own recents. Swipe up on the power-saving home (or hold the
+  screen) and the task list appears; tap an app to switch to it, hold an app to
+  close it. The phone's own recents belong to the launcher: using them starts
+  Pulse/Quickstep and its RecentsActivity every time, which is a lot of memory
+  and CPU for a mode running off a nearly empty battery. SPSM reads the task list
+  itself and switches tasks directly, so the launcher never starts. The list is
+  read only while the screen is open - nothing is kept running in between.
 - The processor's Low Power mode is no longer entered at all. The last build
   recorded the value correctly but the phone did not accept leaving the state
   (the log shows the write going in and the node still reading Low Power mode),
@@ -47,7 +54,7 @@ NEW IN THIS BUILD
   does not come back the log names it and shows both sides.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.1.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.2.0-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
