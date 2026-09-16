@@ -80,7 +80,12 @@ public class SpsmHomeActivity extends Activity {
             root.setOnLongClickListener(v -> { openRecents(); return true; });
         }
         Apps.fillDefaults(this);
-        bindSlots();
+        try {
+            bindSlots();
+        } catch (Throwable ignored) {
+            // The clock, the battery and the way out are the parts that must
+            // survive; the six slots are the part that must not take them down.
+        }
         registerReceiver(batRx, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
     }
 
@@ -250,15 +255,33 @@ public class SpsmHomeActivity extends Activity {
         bindSlots();
     }
 
+    /**
+     * Bind the six slots, one at a time, and let none of them cost the screen.
+     *
+     * In this mode this activity IS the phone's home. A home that cannot be drawn
+     * is much worse than a home with five icons in it, so a slot that cannot be
+     * bound is skipped - the same reason the setup screen's row is wrapped: this
+     * project has already shipped a build that died on opening because a slot was
+     * held as the wrong kind of widget, and the phone found it instead of us.
+     */
     private void bindSlots() {
         for (int i = 0; i < 6; i++) {
+            try {
+                bindSlot(i);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void bindSlot(final int i) {
+        {
             final int index = i;
             // View, never a widget: the layout decides what a slot is.
             View slot = findViewById(slotIds[i]);
             // The fallback layout has no slots. This is the one screen whose
             // failure takes the phone's interface with it, so a missing slot is
             // skipped rather than thrown over.
-            if (slot == null) continue;
+            if (slot == null) return;
             Apps.bindSlot(this, slot, i, (idx, longPress) -> {
                 String pkg = Prefs.getSlot(SpsmHomeActivity.this, idx);
                 boolean filled = pkg != null && pkg.length() > 0;

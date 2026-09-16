@@ -29,6 +29,10 @@ NEW IN THIS BUILD (v3.4.1)
   use - the badge, the tap and the hold all work exactly as in v3.4.0.
   The build now checks this class of mistake three times over: against the source,
   against the built app, and against the row of containers themselves.
+- A problem with one of those containers can no longer take a screen down with it.
+  On the power-saving home screen - which is your phone's home while the mode is
+  on - the six slots are bound one at a time, and a slot that cannot be bound is
+  skipped: five icons and a working Exit are better than a home that will not draw.
 - Faster, and honest about it: switching off used to take about 45 seconds. Most
   of that was the long list of apps being suspended and released one at a time;
   those now run together, so the same work finishes in a fraction of it. Nothing

@@ -2602,8 +2602,13 @@ fi
 grep -q "try {" "$REPO/app/src/dev/axion/spsm/SetupActivity.java" && \
   grep -q "} catch (Throwable ignored)" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"
 check "opening the app cannot be taken down by a slot" $?
-grep -q "if (slot == null) continue;" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+grep -q "if (slot == null) return;" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "the home screen skips a missing slot rather than throwing over it" $?
+# In this mode this activity IS the phone's home, so the slots are bound one at
+# a time and a failure in one of them is skipped: five icons beat no home.
+grep -q "private void bindSlot(final int i) {" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "^                bindSlot(i);" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "and each of its six slots is bound on its own, so one cannot take the home down" $?
 grep -q "static void bindSlot(final Context c, View slot" "$REPO/app/src/dev/axion/spsm/Apps.java"
 check "and nothing anywhere holds a slot as a specific widget" $?
 

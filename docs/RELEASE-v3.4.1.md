@@ -26,7 +26,12 @@ Three checks now stand between this class of bug and a release, and all three ru
 2. **`tools/dexcheck.py`** reads the *built APK's* dex and demands the fixed method signature is in it and the one that crashed is not. The source being right is not the same as the APK being right, and the APK is what gets flashed.
 3. **A test case** replays the shipped crash: it puts the old cast back into a copy of the app tree and fails the suite if the audit does not catch it. A net that has never caught anything is a net of unknown size.
 
-Two screens can also no longer be taken down by a view problem at all: the setup screen's slot row and the recents list are wrapped, so a fault there costs the icons, not the app.
+Three screens can also no longer be taken down by a view problem at all. The setup
+screen's slot row is wrapped, so a fault there costs the icons and not the app; the
+recents list is wrapped the same way; and on the power-saving home screen — which
+*is* the phone's home while the mode is on — the six slots are bound one at a time,
+and a slot that cannot be bound is skipped. Five icons and a working Exit beat a
+home that cannot be drawn.
 
 ### Faster exit
 
@@ -46,4 +51,5 @@ The release build could fail on its last step at random: a JVM tool's output was
 
 ### Files
 
-`release/Axion-SPSM-v3.4.1-RMX3430.zip` — APK v3.4.1 (49), 29 options, suite 69 cases / 419 checks green, install test 22/0.
+`release/Axion-SPSM-v3.4.1-RMX3430.zip` — APK v3.4.1 (49), 29 options, suite 69 cases
+/ 420 checks green, install test 22/0. sha256 `7efedf9fb519af7df1bf917f43d1eec60f27d705557e6a15cafc84e9320189f4` (1,675,484 bytes).
