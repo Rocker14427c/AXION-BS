@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v2.1
-versionCode=21
+version=v3.0.12
+versionCode=42
 author=Axion SPSM
-description=v2.1 snapshot-restore, no data saver, even 6-app home. ResukiSU.
+description=v3.0.12 journaled apply/revert - every change recorded and restored. Fixes the crash that blanked the power-saving home screen after v3.0.9, restores the app header, and names any value that fails to come back. RMX3430.

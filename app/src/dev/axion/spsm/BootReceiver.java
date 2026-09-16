@@ -9,6 +9,8 @@ public class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         // Module service.sh re-applies CPU/suspend. If the mode was on,
         // bring the 6-app home up after unlock.
+        // Start listening for screen changes for as long as this process lives.
+        ScreenReceiver.install(context);
         new Thread(() -> {
             if (!Root.available() || !Root.isActive()) return;
             Intent i = new Intent(context, SpsmHomeActivity.class);
