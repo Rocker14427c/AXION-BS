@@ -1,38 +1,103 @@
-HOW TO USE — Axion Super Power Saving v2.1
-==========================================
+HOW TO USE - Axion Super Power Saving
+=====================================
 ResukiSU (KernelSU). RMX3430 / AxionOS 2.7.
 
-v2 difference vs 1.8:
-- Snapshot of every node/prop/setting BEFORE any write
-- Exit restores from those files (sysfs first, not settings-only)
-- Does NOT freeze every app (that took 1–2 min and cooked the phone)
-- Does NOT kill logd / persist.log.tag (Logfox keeps working)
-- Does NOT deep-doze (that made the power button miss and 4–5s reboot)
-- DT2W off only while SPSM is on; restored from snapshot on exit
-- A55 cores stay online; A75 offline only while SPSM is on
+HOW IT WORKS
+- Every change is written down before it is made, and put back on exit.
+- A value you change yourself after us is never overwritten.
+- Nothing is held while you are using the phone: the heavy savings (deep sleep,
+  background app limits, CPU/GPU limits) apply while the screen is off and are
+  released the moment you wake it. That is what makes the mode feel normal to
+  use and still drain almost nothing overnight.
+- A crash or reboot cannot leave the phone capped or dark.
+
+INSTALLING OVER AN OLDER VERSION
+- Switch the mode off first (door -> Exit), then install, then reboot. Installing
+  a different version while the mode is on leaves one version's journal for
+  another version to restore, which is what makes the exit log complain.
+
+NEW IN THIS BUILD
+- Fixed: leaving SPSM could leave the processor in MediaTek's Low Power mode
+  (a `powersave` governor) and then spend a minute forcing the safety valves.
+  The value is now recorded the way the node is written, so the exit always
+  restores it. If the node reads as a state we do not recognise, it is left
+  completely alone and the log says so.
+- The status bar is visible again in the power-saving home screen. Hiding it
+  saved nothing and took away the clock, the battery and the way back.
+- Proven by test: after an exit nothing is left suspended, including when you
+  add an app to a slot while the mode is on.
+- The app list no longer buries you: system apps are hidden, with a "Show system
+  apps" switch and by-name search when you do want one. Root apps and anything
+  you installed yourself are always listed.
+- An app you add to one of the six slots is usable straight away. An app you take
+  out is paused again. Apps you suspended yourself are left alone.
+- The app and the power-saving home screen carry no build numbers any more, and
+  the options read in plain words.
+- Every option has one "Check" button in the top right of the Options screen.
+  It says what will happen, then tests each option on your phone for about five
+  minutes and writes the result to /data/adb/spsm/state/probe.tsv.
+- Fixed: the power-saving home screen could come up blank on the build after
+  v3.0.9 - a text value was passed to a number placeholder and the screen died on
+  the first battery reading. The screen now falls back to a working one if it
+  cannot be drawn, and the build checks every placeholder against the code.
+- Fixed: the app header reads "Super power saving mode" again.
+- Fixed: a value that did come back was sometimes reported as unrestored (it
+  printed the same value twice). Values are compared as read, and when one really
+  does not come back the log names it and shows both sides.
 
 INSTALL
-1. ResukiSU → Modules → Install from storage → Axion-SPSM-v2.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.1.0-RMX3430.zip
 2. Reboot.
-3. App drawer → Super Power Saving
-4. ResukiSU Superuser → Allow
+3. App drawer -> Super Power Saving
+4. ResukiSU Superuser -> Allow
 
 TURN ON
-1. Pick 6 apps. Turn on → confirm.
-2. Should take a few seconds, not minutes.
-3. Black 6-app home. Door top-left to exit.
-4. Log: /data/adb/spsm/spsm.log  and  /data/adb/spsm/snap/MANIFEST
+1. Options -> untick anything you do not want changed. Press Check if you want to
+   know first which options do anything on this phone.
+2. Pick six apps.
+3. Turn on. The black home appears in about a second; the rest finishes behind it.
+4. /data/adb/spsm/spsm.log and /data/adb/spsm/journal/ hold the details.
 
 WHILE ON
-- Power button wakes. DT2W is off (same as realme SPSM).
-- Incoming calls / Jio VoLTE stay up. Mobile data stays on.
-- Wi-Fi off while the screen is off.
-- Google Play services sleep.
-- logd stays running so you can record a log.
+- The six apps you chose work normally. Nothing else is held open.
+- Power button wakes instantly (the limits are released on wake).
+- Calls, SMS and mobile data keep working, unless you ticked "Turn off mobile
+  data". Wi-Fi, Bluetooth, NFC and location are switched off only if you left
+  those options ticked, and come back on exit if they were on before.
+- Anything that saves nothing on this phone says so under the option: press
+  Check to have each option tried and measured.
+- Logging stays on, so you can record a log while the mode runs.
 
 TURN OFF
-- Door → Exit. Snapshot is restored. DT2W comes back if it was on.
+- Door -> Exit. Everything is put back from the journal.
+- Or: su -c 'sh /data/adb/spsm/exit.sh'
+
+HOW MUCH IT SAVED
+- /data/adb/spsm/drain.log - one line per sleep, e.g.
+  2026-09-10 23:41:02 screen off 84% -> 82% in 421 min (0.28%/h)
+- /data/adb/spsm/spsm.log - what was applied, what was put back.
+
+CHECKING THAT IT REVERTED
+- su -c 'sh /data/adb/spsm/scripts/engine.sh verify'
+  Small drift count = all good. "left-alone" means you changed that value
+  yourself while the mode was on, so it was deliberately not overwritten.
 
 STUCK
-- ResukiSU → Modules → remove Axion Super Power Saving → reboot
-- or: su -c 'sh /data/adb/spsm/exit.sh'
+- ResukiSU -> Modules -> remove Axion Super Power Saving -> reboot
+  (removal reverts first, then uninstalls itself)
+- Read-only diagnostic, writes nothing: su -c 'sh /sdcard/DIAG.sh'
+
+IF SOMETHING LOOKS WRONG
+------------------------
+You do not need this app to get out of the mode. In the KernelSU / ResukiSU
+manager, open this module and press its Action button: that toggles the mode off
+and puts everything back, including your normal launcher.
+
+If your home screen ever looks wrong (no launcher, or it keeps restarting),
+these three commands restore it:
+  su -c 'cmd role add-role-holder android.app.role.HOME com.android.launcher3'
+  su -c 'cmd package set-home-activity com.android.launcher3/.Launcher'
+  su -c 'am start -a android.intent.action.MAIN -c android.intent.category.HOME'
+
+A reboot also reverts an unfinished session: nothing this module changes
+survives a boot.

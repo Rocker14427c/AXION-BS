@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v2.1
-versionCode=21
+version=v3.1.0
+versionCode=43
 author=Axion SPSM
-description=v2.1 snapshot-restore, no data saver, even 6-app home. ResukiSU.
+description=v3.1.0 journaled apply/revert - every change recorded and restored. Fixes the CPU Low Power mode being left on after exit, keeps the status bar visible, and proves nothing stays suspended. RMX3430.
