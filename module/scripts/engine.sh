@@ -256,6 +256,16 @@ do_deactivate() {
   # one race that could leave a change behind on exit.
   rm -f "$ACTIVE"
 
+  # The CPU power mode goes back first, ahead of everything else.
+  #
+  # While it is engaged the kernel owns the governor: the deep revert writes
+  # schedutil back into the CPUs, and if Low Power mode is still on the kernel
+  # puts powersave straight back - which is exactly the "want [schedutil] got
+  # [powersave]" phantom that has followed this module since v3.0.9, and the
+  # 41-second exit it caused. knobs_reversed would reach it last; it has to be
+  # first. The call is idempotent, so the session pass that follows is a no-op.
+  knob_revert mtk_low_power
+
   # Deep phase first (it holds the system-wide switches), then the session.
   phase_deep_revert
   phase_session revert

@@ -229,6 +229,9 @@ screen_on()  { echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"; echo 
 enable_knobs() { # enable_knobs id...
   for k in "$@"; do echo "knob.$k=1" >> "$WORK/spsm/config"; done
 }
+disable_knobs() { # disable_knobs id... - for options whose default is on
+  for k in "$@"; do echo "knob.$k=0" >> "$WORK/spsm/config"; done
+}
 
 # ==========================================================================
 say "1. on -> off returns the device to exactly its previous state"
@@ -1889,14 +1892,15 @@ check "the value really did not come back" $?
 grep -q "WARN cpu_cap did not return: /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq: want \[1800000\] got \[1100000\]" "$WORK/spsm/spsm.log"
 check "and the log names that one value and both sides" $?
 
-say "59. the CPU power mode is never entered, and a leftover one is released"
+say "59. the cap and the phone's power mode are separate things"
 # v3.1.0 wrote 0 at exit and the node still read 1 (the phone's own log:
 #   WARN cpu_cap did not return: cpufreq_power_mode: want [0] got [1]).
-# A state this phone has not accepted leaving must not be entered at all, so the
-# cap no longer writes it - and a leftover Low Power mode from an older version is
-# released on the way in, retried until it settles.
+# The cap no longer writes the power mode at all - the power mode has its own
+# option (mtk_low_power, case 62). What these checks hold on to is that the cap
+# still caps, and that a power mode somebody else set is not the cap's business.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs mtk_low_power
 F="$ROOT/proc/cpufreq/cpufreq_power_mode"
 printf 'Default(Normal) mode\n' > "$F"
 screen_on
@@ -1918,40 +1922,45 @@ if [ $? = 0 ]; then bad "with no false drift reported"; else ok "with no false d
 grep -q "revert clean" "$WORK/spsm/spsm.log" || grep -q "0 drifted" "$WORK/spsm/spsm.log"
 check "so the exit is clean and quick" $?
 
-# A phone left in Low Power mode by an older version is put back.
+# A phone already in Low Power mode - the state the user's own battery saver put
+# it in - is left exactly as it is: we never set it, so it is not ours to clear.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs mtk_low_power
 F="$ROOT/proc/cpufreq/cpufreq_power_mode"
 printf 'Low Power mode\n' > "$F"
 screen_on
-run_engine activate > "$WORK/out.a59" 2>&1
+run_engine activate >/dev/null 2>&1
 screen_off
 run_engine screen-off >> "$WORK/out.a59" 2>&1
-[ "$(cat "$F")" = "0" ]
-check "activating releases a Low Power mode left behind earlier" $?
-grep -q "released the CPU Low Power mode left behind" "$WORK/spsm/spsm.log"
-check "and says so in the log" $?
+[ "$(cat "$F")" = "Low Power mode" ]
+check "a Low Power mode somebody else set survives the cap" $?
+screen_on
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$F")" = "Low Power mode" ]
+check "and is still there after the mode is off" $?
 
-# If the phone refuses to leave it, that is reported plainly - and it is not
-# claimed as a change we made and then failed to undo.
+# The node cannot be read at all. The cap must not care, and must not record it
+# as something it changed - that record is what used to make the exit chase a
+# value the module never wrote.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs mtk_low_power
 F="$ROOT/proc/cpufreq/cpufreq_power_mode"
-printf 'Low Power mode\n' > "$F"
-chmod 400 "$F"                       # writable only by the kernel, as on refusal
+chmod 000 "$F"
 screen_on
-run_engine activate > "$WORK/out.a59b" 2>&1
+run_engine activate >/dev/null 2>&1
 screen_off
-run_engine screen-off >> "$WORK/out.a59b" 2>&1
+run_engine screen-off >/dev/null 2>&1
 chmod 644 "$F"
-[ "$(cat "$F")" = "Low Power mode" ]
-check "a refused release leaves the state untouched" $?
-grep -q "did not accept leaving it; a reboot clears it" "$WORK/spsm/spsm.log"
-check "and the log tells the user what to do" $?
+grep -q "cpufreq_power_mode" "$WORK/spsm/journal/cpu_cap.orig"
+if [ $? = 0 ]; then bad "an unreadable power mode is not journaled by the cap"; else ok "an unreadable power mode is not journaled by the cap"; fi
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+check "and the cap applies anyway" $?
 screen_on
-run_engine deactivate > "$WORK/out.d59b" 2>&1
+run_engine deactivate >/dev/null 2>&1
 grep -q "did not return" "$WORK/spsm/spsm.log"
-if [ $? = 0 ]; then bad "nothing is reported as a failed restore that we never changed"; else ok "nothing is reported as a failed restore that we never changed"; fi
+if [ $? = 0 ]; then bad "with nothing reported that was never ours"; else ok "with nothing reported that was never ours"; fi
 
 say "60. no app stays suspended after an exit, however the slots moved"
 # The v3.0.12 log showed the app being added to a slot mid-session, which makes
@@ -2029,6 +2038,177 @@ printf 'no tasks here\n' > "$WORK/stub/recents.dump"
 run_engine recents > "$WORK/out.r61b" 2>&1
 [ ! -s "$WORK/out.r61b" ]
 check "an unexpected dump yields an empty list rather than rubbish" $?
+
+say "62. the phone's Low Power mode: entered on request, left on exit, verified"
+# The phone measured this itself: writing 1 reads "Low Power mode", writing 0
+# reads "Default(Normal) mode" about a second later. The exit used to read the
+# node too soon and report a change that had in fact worked.
+make_tree; make_stubs; seed_stub_state
+enable_knobs mtk_low_power
+F="$ROOT/proc/cpufreq/cpufreq_power_mode"
+printf 'Default(Normal) mode\n' > "$F"
+screen_on
+run_engine activate > "$WORK/out.a62" 2>&1
+grep -q "cpu low power mode engaged" "$WORK/spsm/spsm.log"
+check "turning the mode on engages Low Power mode while the screen is still on" $?
+screen_off
+run_engine screen-off >> "$WORK/out.a62" 2>&1
+run_engine deactivate > "$WORK/out.d62" 2>&1
+grep -q "cpu low power mode released to its original state" "$WORK/spsm/spsm.log"
+check "and the exit releases it, on the record" $?
+grep -q "did not accept leaving" "$WORK/spsm/spsm.log"
+if [ $? = 0 ]; then bad "without calling a change that worked unrestored"; else ok "without calling a change that worked unrestored"; fi
+grep -q "revert clean" "$WORK/spsm/spsm.log"
+check "so the exit is clean and quick, with no safety pass" $?
+# The reverse of the same claim: the governor the deep phase writes back must be
+# there, and the power mode must be off. Whichever order they ran in, both are
+# true now - so a change that made one undefine the other would be caught.
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor")" = "schedutil" ]
+check "the processor is back on its normal governor" $?
+[ "$(cat "$F")" = "0" ]
+check "and out of Low Power mode" $?
+# Released FIRST, before the deep phase writes the governor back. While Low
+# Power mode is on this kernel owns the governor and puts powersave straight
+# back over a schedutil write, which is the phantom drift and the 41-second exit
+# in the v3.1.0 log. knobs_reversed would reach it last, so the call has to come
+# before phase_deep_revert - and that is a property of the source.
+awk '/^do_deactivate\(\)/,/^}/' module/scripts/engine.sh > "$WORK/da62.sh"
+_a=$(grep -n "knob_revert mtk_low_power" "$WORK/da62.sh" | head -1 | cut -d: -f1)
+_b=$(grep -n "phase_deep_revert" "$WORK/da62.sh" | head -1 | cut -d: -f1)
+[ -n "$_a" ] && [ -n "$_b" ] && [ "$_a" -lt "$_b" ]
+check "and is released before the deep reverts touch the processors (lines $_a and $_b)" $?
+
+# A phone that was already in Low Power mode by its owner's choice gets it back.
+make_tree; make_stubs; seed_stub_state
+enable_knobs mtk_low_power
+printf 'Low Power mode\n' > "$ROOT/proc/cpufreq/cpufreq_power_mode"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "1" ]
+check "a phone already in Low Power mode is still in it after the mode is off" $?
+
+# The option can be switched off on its own, and then nothing is touched.
+make_tree; make_stubs; seed_stub_state
+disable_knobs mtk_low_power cpu_cap
+printf 'Default(Normal) mode\n' > "$ROOT/proc/cpufreq/cpufreq_power_mode"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "Default(Normal) mode" ]
+check "with the option off, the power mode is not touched at all" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "Default(Normal) mode" ]
+check "on exit as well" $?
+
+# A state we do not recognise is never written, and never lands in the journal as
+# something we will later try to put back.
+make_tree; make_stubs; seed_stub_state
+enable_knobs mtk_low_power
+printf 'Sports mode\n' > "$ROOT/proc/cpufreq/cpufreq_power_mode"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "Sports mode" ]
+check "an unknown power state is left exactly as it was" $?
+grep -q "does not read as a state we can put back" "$WORK/spsm/spsm.log"
+check "and the log says why" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "Sports mode" ]
+check "and the exit does not invent a value for it" $?
+grep -q "did not return" "$WORK/spsm/spsm.log"
+if [ $? = 0 ]; then bad "and does not report it as a change we failed to undo"; else ok "and does not report it as a change we failed to undo"; fi
+
+# A phone that will not enter Low Power mode is left alone, told so plainly, and
+# the exit is still clean: nothing was changed, so nothing has to come back.
+make_tree; make_stubs; seed_stub_state
+enable_knobs mtk_low_power
+F="$ROOT/proc/cpufreq/cpufreq_power_mode"
+printf 'Default(Normal) mode\n' > "$F"
+chmod 400 "$F"                       # readable, as the phone is; not writable
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q "did not accept Low Power mode; leaving it as it is" "$WORK/spsm/spsm.log"
+check "a phone that refuses Low Power mode is told so, not forced" $?
+[ "$(cat "$F")" = "Default(Normal) mode" ]
+check "and its state is untouched" $?
+chmod 644 "$F"
+run_engine deactivate > "$WORK/out.d62b" 2>&1
+grep -q "revert clean" "$WORK/spsm/spsm.log"
+check "and the exit is clean" $?
+
+say "63. window blur off, and back on again"
+make_tree; make_stubs; seed_stub_state
+enable_knobs blur_off
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -f "$WORK/stub/settings/global.disable_window_blurs" ]
+check "turning the mode on disables window blur" $?
+[ "$(cat "$WORK/stub/settings/global.disable_window_blurs")" = "1" ]
+check "with the value the framework reads" $?
+run_engine deactivate > "$WORK/out.d63" 2>&1
+# It was not set before we touched it, so "back" means gone, not zero.
+[ ! -e "$WORK/stub/settings/global.disable_window_blurs" ]
+check "and the exit removes it, because it was not there before" $?
+run_engine verify > "$WORK/out.v63" 2>&1
+grep -q "drift=0" "$WORK/out.v63"
+check "with nothing left behind ($(cat "$WORK/out.v63"))" $?
+
+# And a value the user had set themselves comes back as itself.
+make_tree; make_stubs; seed_stub_state
+enable_knobs blur_off
+echo 0 > "$WORK/stub/settings/global.disable_window_blurs"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/global.disable_window_blurs")" = "0" ]
+check "a blur setting the user already had is put back as it was" $?
+
+say "64. every option in the list is complete, reversible and described"
+# The audit for "no bugs left": an option that is offered to the user but has no
+# snapshot, apply or restore function is a promise the module cannot keep. This
+# walks the list the app shows and checks each one end to end.
+make_tree; make_stubs; seed_stub_state
+run_engine dump-knobs > "$WORK/out.knobs64" 2>&1
+grep -c "^" "$WORK/out.knobs64" >/dev/null
+cat > "$WORK/audit64.sh" <<'SH64'
+. "$1/scripts/lib.sh"
+. "$1/scripts/knobs.sh"
+for k in $(knobs_all); do
+  for fn in "meta_$k" "snapshot_$k" "apply_$k" "restore_$k"; do
+    if ! type "$fn" >/dev/null 2>&1; then
+      echo "MISSING $fn"
+    fi
+  done
+  echo "$k|$(knob_meta "$k" | awk -F'|' 'NF!=6{print "BADMETA"}')"
+done
+SH64
+run_shell "$WORK/audit64.sh" "$WORK/spsm" > "$WORK/out.a64" 2>&1
+grep -q "MISSING" "$WORK/out.a64"
+if [ $? = 0 ]; then bad "every option has all its functions ($(grep MISSING "$WORK/out.a64" | head -3 | tr '\n' ' '))"; else ok "every option has its snapshot, apply and restore functions"; fi
+grep -q "BADMETA" "$WORK/out.a64"
+if [ $? = 0 ]; then bad "every option's description has exactly six fields"; else ok "every option's description has exactly six fields"; fi
+
+# And the same list, end to end on the device: every option applied on its own,
+# then the whole device compared field by field with how it started.
+make_tree; make_stubs; seed_stub_state
+screen_on
+dump_state "$WORK/before64"
+for k in $(sh -c '. '"$WORK/spsm"'/scripts/lib.sh; . '"$WORK/spsm"'/scripts/knobs.sh; knobs_all'); do
+  enable_knobs "$k"
+done
+screen_on
+run_engine activate > "$WORK/out.a64b" 2>&1
+screen_off
+run_engine screen-off >> "$WORK/out.a64b" 2>&1
+run_engine deactivate > "$WORK/out.d64b" 2>&1
+screen_on            # the comparison starts from a phone that was on, so end there
+dump_state "$WORK/after64"
+cmp -s "$WORK/before64" "$WORK/after64"
+_rc=$?
+[ "$_rc" = "0" ] || { echo "--- what did not come back:"; diff "$WORK/before64" "$WORK/after64" | head -10; }
+check "with every option on at once, the device still comes back byte for byte" $_rc
+run_engine verify > "$WORK/out.v64" 2>&1
+grep -q "drift=0" "$WORK/out.v64"
+check "and the module agrees nothing is left ($(cat "$WORK/out.v64"))" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

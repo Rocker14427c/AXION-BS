@@ -79,12 +79,15 @@ and your verification on the phone before the next stage starts.
 - Exit back to ~1 s: with the power mode restored there is no safety pass.
 
 ### Stage 2 — the in-use savings  *(each its own toggle, in the order shown)*
-1. **`mtk_low_power`** — MediaTek Low Power mode, **blocked until the release path
-   is proven on the phone**. v3.1.0 wrote `0` at exit and the node still read
-   `1`; v3.1.1 therefore stopped entering the state at all and releases a leftover
-   one on the way in. The release has to be demonstrated on the device (one
-   command, section 6) before this returns as an option — the node, the write
-   format and the timing were all wrong once already.
+1. **`mtk_low_power`** — MediaTek Low Power mode. **Shipped in v3.3.0, unblocked.**
+   The blocking question was answered on the device: with SPSM off, writing `1`
+   reads `Low Power mode`, writing `0` reads `Default(Normal) mode` **about a
+   second later**. v3.1.0's `want [0] got [1]` was a read taken in the same breath
+   as the write — there was never a refusal. The option records the token, verifies
+   entering, verifies leaving (retried up to two seconds), never writes a state it
+   cannot map, and is on by default with its own switch. `do_deactivate()` releases
+   it before `phase_deep_revert`, which is what removes the phantom `powersave`
+   drift and the 41-second exit.
 2. **`cap_in_use`** (today's `cap_always`, on by default in the emergency preset):
    CPU/GPU ceilings and the offline cores held while you use the phone.
 3. **`ppm_hard_limit`** — use `/proc/ppm/policy/hard_userlimit_max_cpu_freq`
@@ -96,6 +99,15 @@ and your verification on the phone before the next stage starts.
    the mode is on, not only while asleep), plus `max_cached_processes` and the
    cached-app freezer verified enabled on this ROM. Plain-language warning, own
    toggle, own probe verdict.
+
+6. **`blur_off`** — window blur off for the duration of the mode (shipped in
+   v3.3.0, **off by default**: it changes how the interface looks, so it is offered
+   rather than applied on the user's behalf). Move it into the emergency preset
+   only after the phone confirms it and the appearance is acceptable.
+
+Still open in Stage 2: item 2 (the default for `cap_always`), item 3 (the
+kernel-enforced `/proc/ppm` ceiling), item 4 (the brightness probe measured with
+the screen on) and item 5 (culling with the screen on).
 
 ### Stage 3 — the lightest possible recents  *(your choice)*
 - A small **Recents** screen inside SPSM, opened from the home screen.

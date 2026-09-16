@@ -1,14 +1,17 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.3.0.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
 - A value you change yourself after us is never overwritten.
-- Nothing is held while you are using the phone: the heavy savings (deep sleep,
-  background app limits, CPU/GPU limits) apply while the screen is off and are
-  released the moment you wake it. That is what makes the mode feel normal to
-  use and still drain almost nothing overnight.
+- Nothing you cannot see is held while you are using the phone: deep sleep, the
+  background app limits and the CPU/GPU ceilings apply while the screen is off
+  and are released the moment you wake it. The processor's own Low Power mode is
+  the exception - it is meant to be on while you use the phone, and it is on by
+  default (Options -> "Keep the processor in Low Power mode" to switch it off).
+  The CPU/GPU ceilings can be held while you use it too, with the switch
+  "Keep power limits while using the phone" - that one is off unless you ask.
 - A crash or reboot cannot leave the phone capped or dark.
 
 INSTALLING OVER AN OLDER VERSION
@@ -16,45 +19,32 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD
-- SPSM has its own recents. Swipe up on the power-saving home (or hold the
-  screen) and the task list appears; tap an app to switch to it, hold an app to
-  close it. The phone's own recents belong to the launcher: using them starts
-  Pulse/Quickstep and its RecentsActivity every time, which is a lot of memory
-  and CPU for a mode running off a nearly empty battery. SPSM reads the task list
-  itself and switches tasks directly, so the launcher never starts. The list is
-  read only while the screen is open - nothing is kept running in between.
-- The processor's Low Power mode is no longer entered at all. The last build
-  recorded the value correctly but the phone did not accept leaving the state
-  (the log shows the write going in and the node still reading Low Power mode),
-  and a mode you cannot leave is worse than one you never enter. SPSM now
-  releases a Low Power mode left behind by an older version on the way in, and
-  says plainly in the log if this phone refuses to leave it.
-- The status bar is visible again in the power-saving home screen. Hiding it
-  saved nothing and took away the clock, the battery and the way back.
-- Proven by test: after an exit nothing is left suspended, including when you
-  add an app to a slot while the mode is on.
-- The app list no longer buries you: system apps are hidden, with a "Show system
-  apps" switch and by-name search when you do want one. Root apps and anything
-  you installed yourself are always listed.
-- An app you add to one of the six slots is usable straight away. An app you take
-  out is paused again. Apps you suspended yourself are left alone.
-- The app and the power-saving home screen carry no build numbers any more, and
-  the options read in plain words.
-- Every option has one "Check" button in the top right of the Options screen.
-  It says what will happen, then tests each option on your phone for about five
-  minutes and writes the result to /data/adb/spsm/state/probe.tsv.
-- Fixed: the power-saving home screen could come up blank on the build after
-  v3.0.9 - a text value was passed to a number placeholder and the screen died on
-  the first battery reading. The screen now falls back to a working one if it
-  cannot be drawn, and the build checks every placeholder against the code.
-- Fixed: the app header reads "Super power saving mode" again.
-- Fixed: a value that did come back was sometimes reported as unrestored (it
-  printed the same value twice). Values are compared as read, and when one really
-  does not come back the log names it and shows both sides.
+NEW IN THIS BUILD (v3.3.0)
+- The processor's Low Power mode is now used, and it is the bigger saving of this
+  build: for as long as the mode is on, the chip runs in its own low-power state
+  instead of only while the screen is off. This is the setting the older builds
+  could not leave - the phone was measured afterwards and it does leave it, about
+  a second after being told to. So the whole path is written around that
+  measurement: entering is verified, leaving is verified and retried for up to
+  two seconds, and if the phone ever refuses to leave, the log says so plainly
+  instead of pretending. A state the module cannot read is never written at all.
+- The exit now lets go of that power mode FIRST, before anything else is put
+  back. While the chip is in Low Power mode the kernel owns the processor speed
+  settings, so an exit that wrote them back before would have them overwritten
+  again - the "phantom" drift and the 41-second exit in older logs. Nothing about
+  the exit is slower for this; it is simply in the right order now.
+- New option, off unless you want it: "Turn off window blur" (Options ->
+  Display). Blurred panels are redrawn by the graphics chip behind every frame;
+  this stops that while the mode is on. It makes the interface look plainer.
+- "Keep power limits while using the phone" is the existing switch for holding
+  the CPU/GPU ceilings while you use it. It is off by default: turn it on if you
+  want the slowest, longest-lasting phone rather than a normal-feeling one.
+- Recents (swipe up on the power-saving home) arrived in v3.2.0 and are
+  unchanged: the phone's own recents belong to the launcher, so SPSM reads the
+  task list itself and switches tasks directly, and the launcher never starts.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.2.0-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.3.0-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
@@ -69,6 +59,8 @@ TURN ON
 WHILE ON
 - The six apps you chose work normally. Nothing else is held open.
 - Power button wakes instantly (the limits are released on wake).
+- The phone is slower than usual on purpose: the processor is in Low Power mode
+  for as long as the mode is on. Switch that option off if you want it back.
 - Calls, SMS and mobile data keep working, unless you ticked "Turn off mobile
   data". Wi-Fi, Bluetooth, NFC and location are switched off only if you left
   those options ticked, and come back on exit if they were on before.

@@ -85,6 +85,12 @@ case "$CMD" in
         # pm enable|disable [--user N] <target>
         _st=default; [ "$1" = "disable" ] && _st=disabled-user
         shift; [ "$1" = "--user" ] && shift 2
+        # Enabling a package the ROM already has enabled changes nothing, and
+        # the real command leaves no trace of having been asked. Recording one
+        # anyway made the round-trip test read the stub's own bookkeeping as the
+        # device not coming back: "pm enable" is what the mode runs on the way
+        # out for every package it suspended.
+        if [ "$_st" = "default" ] && [ ! -f "$S/pkg/$1.enabled" ]; then return 0; fi
         printf '%s\n' "$_st" > "$S/pkg/$1.enabled" ;;
       suspend|unsuspend)
         # pm suspend [--user N] <pkg> - the --user form is what the module uses,

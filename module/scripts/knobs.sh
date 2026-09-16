@@ -669,16 +669,24 @@ pwr_mode_now() { pwr_mode_token "$(rd "$PWRMODE")"; }
 # settles a moment later. So: write, give it a moment, read, and try again - and
 # report honestly whether the phone is back in its normal mode, rather than
 # claiming a value we did not achieve.
-release_power_mode() {
+set_power_mode() { # set_power_mode <0|1>
+  _want=$1
+  case "$_want" in 0|1) ;; *) return 2 ;; esac
+  # Six tries, four tenths of a second apart: the phone was measured taking
+  # about a second to show that it had left Low Power mode, and a check that
+  # read sooner than that reported a change that had in fact worked. The wait is
+  # the whole budget - the loop leaves the moment the node agrees - so a phone
+  # that answers at once is not made to wait at all.
   _i=0
-  while [ "$_i" -lt 5 ]; do
-    w 0 "$PWRMODE"
-    sleep 0.2 2>/dev/null || :
-    [ "$(pwr_mode_now)" = "0" ] && return 0
+  while [ "$_i" -lt 6 ]; do
+    w "$_want" "$PWRMODE"
+    sleep 0.4 2>/dev/null || :
+    [ "$(pwr_mode_now)" = "$_want" ] && return 0
     _i=$((_i + 1))
   done
   return 1
 }
+release_power_mode() { set_power_mode 0; }
 
 snapshot_cpu_cap() {
   snap_kv /sys/devices/system/cpu/cpufreq/policy0/scaling_governor \
@@ -715,13 +723,10 @@ apply_cpu_cap() {
   # change that must never be made: the phone comes out of the mode slower than
   # it went in. So we do not enter it, and instead put the phone back to its
   # normal power mode if an earlier version left it in Low Power mode.
-  if [ "$(pwr_mode_now)" = "1" ]; then
-    if release_power_mode; then
-      log "released the CPU Low Power mode left behind by an earlier version"
-    else
-      log "NOTE this phone is in Low Power mode and did not accept leaving it; a reboot clears it"
-    fi
-  fi
+  # The CPU power mode is not touched here any more. It has its own option
+  # (mtk_low_power): it is a lever in its own right for saving power WHILE the
+  # screen is on, and a state this important deserves its own switch rather than
+  # riding along with a frequency ceiling.
 }
 restore_cpu_cap() { restore_kv "$1" "$2"; }
 
@@ -732,6 +737,74 @@ restore_cpu_cap() { restore_kv "$1" "$2"; }
 probe_cpu_cap() {
   printf 'power_mode\t%s\n' "$(rd "$PWRMODE")"
 }
+
+# The MediaTek power mode, as its own option.
+#
+# This is the in-use lever on this chip: engaged, the kernel runs the phone in
+# its low-power state for as long as the mode is on, not only while the screen is
+# off. It is also the state the exit used to fail to leave, so the whole path is
+# written carefully: the value is recorded as the token the node is written with,
+# entering it is verified, leaving it is verified and retried, and a state we
+# cannot read is never written at all.
+meta_mtk_low_power() {
+  echo "Power|Keep the processor in Low Power mode|Runs the phone in its own low-power processor state for as long as the mode is on, not only while the screen is off. The biggest saving while you are actually using the phone. It feels slower, and it can be switched off on its own without affecting anything else.|1|session|perf,battery"
+}
+snapshot_mtk_low_power() {
+  _m=$(pwr_mode_now)
+  # A state we cannot read is a state we must not change: (MISSING) makes
+  # apply_kv refuse to write it, here and on exit.
+  [ -n "$_m" ] || _m='(MISSING)'
+  printf '%s\t%s\n' "$PWRMODE" "$(enc_val "$_m")"
+}
+apply_mtk_low_power() {
+  [ -e "$(rp "$PWRMODE")" ] || return 0
+  case "$(pwr_mode_now)" in
+    1) return 0 ;;                # already there: nothing to change, nothing to claim
+    0) ;;
+    *) log "skip $PWRMODE: it does not read as a state we can put back"; return 0 ;;
+  esac
+  if set_power_mode 1; then
+    log "cpu low power mode engaged"
+  else
+    log "NOTE this phone did not accept Low Power mode; leaving it as it is"
+  fi
+  return 0
+}
+restore_mtk_low_power() {
+  _want=$(snap_file_val "$1" "$PWRMODE")
+  restore_kv "$1" "$2"
+  # Then confirm it settled: the read-back is the only proof on this kernel.
+  case "$_want" in
+    0|1)
+      if set_power_mode "$_want"; then
+        # A line in the log, not silence: this is the state the whole exit used
+        # to get stuck on, and "the power mode really is back where it started"
+        # is the first thing to look for in a log from the phone.
+        log "cpu low power mode released to its original state ($_want)"
+      else
+        log "NOTE this phone did not accept leaving Low Power mode; a reboot clears it"
+      fi
+      ;;
+  esac
+  return 0
+}
+probe_mtk_low_power() { printf 'power_mode\t%s\n' "$(rd "$PWRMODE")"; }
+
+# Window blur is drawn by the graphics chip every frame, behind panels and the
+# notification shade. Removing it costs nothing on a black, plain interface and
+# gives the chip less to do on every frame - a saving while the phone is in use,
+# not while it sleeps.
+# Off by default, on purpose. The saving is real but small, and unlike every
+# other option here it is a change the user SEES - so it is offered, described,
+# and left for the user to switch on, rather than being made to their phone's
+# appearance on their behalf.
+meta_blur_off() {
+  echo "Display|Turn off window blur|Stops the graphics chip redrawing blurred panels behind the interface. Saves a little on every frame while you use the phone; the screen looks plainer.|0|session|perf"
+}
+snapshot_blur_off() { snap_kv @global:disable_window_blurs; }
+apply_blur_off() { sput global disable_window_blurs 1; }
+restore_blur_off() { restore_kv "$1" "$2"; }
+probe_blur_off() { printf 'blurs_disabled\t%s\n' "$(sget global disable_window_blurs 2>/dev/null || echo unset)"; }
 
 meta_cpu_offline_big() {
   echo "Processor|Switch off the big cores|Two of the eight processor cores are switched off completely. Saves the most, but the phone feels slower if something wakes it.|0|deep|experimental"
@@ -1107,6 +1180,8 @@ freeze_google
 deep_doze
 sync_off
 battery_saver
+mtk_low_power
+blur_off
 "
 
 knobs_all() { for k in $KNOBS; do echo "$k"; done; }

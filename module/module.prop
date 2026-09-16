@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.2.0
-versionCode=45
+version=v3.3.0
+versionCode=46
 author=Axion SPSM
-description=v3.2.0 journaled apply/revert - every change recorded and restored. SPSM has its own lightweight recents (swipe up), so the launcher is never started to switch apps. RMX3430.
+description=v3.3.0 journaled apply/revert - every change recorded and restored. The processor runs in its own Low Power mode for as long as the mode is on (verified entered and left on this phone), so it saves power while you are using it too. RMX3430.
