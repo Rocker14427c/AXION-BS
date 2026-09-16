@@ -1797,6 +1797,24 @@ check "the home screen falls back to a working one if the layout cannot be shown
 grep -q 'updateBatteryText(intent)' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" \
   && grep -q 'catch (Throwable ignored) {' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "and a bad battery reading cannot take it down either" $?
+# The same class of failure, one step earlier: findViewById on a view that no
+# layout declares returns null, and the next line throws. Nothing in the build
+# notices - a layout can be edited and the code left behind.
+python3 - "$REPO" <<'PY57'
+import re, sys, os, glob
+repo = sys.argv[1]
+declared = set()
+for f in glob.glob(os.path.join(repo, 'app/res/layout/*.xml')):
+    declared |= set(re.findall(r'@\+id/([a-z_0-9]+)', open(f).read()))
+bad = []
+for f in sorted(glob.glob(os.path.join(repo, 'app/src/dev/axion/spsm/*.java'))):
+    for m in re.finditer(r'findViewById\(R\.id\.([a-z_0-9]+)\)', open(f).read()):
+        if m.group(1) not in declared:
+            bad.append('%s: %s' % (os.path.basename(f), m.group(1)))
+print('\n'.join(bad))
+sys.exit(1 if bad else 0)
+PY57
+check "every view the app looks for is declared by a layout" $?
 
 say "58. a value that came back is not called unrestored, and a real one is named"
 # From the phone's log: "cpu_cap did not return" printed the same values on both
