@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v2.1
-versionCode=21
+version=v3.1.1
+versionCode=44
 author=Axion SPSM
-description=v2.1 snapshot-restore, no data saver, even 6-app home. ResukiSU.
+description=v3.1.1 journaled apply/revert - every change recorded and restored. No longer enters a CPU power state this phone will not leave, releases a leftover one, status bar visible. RMX3430.
