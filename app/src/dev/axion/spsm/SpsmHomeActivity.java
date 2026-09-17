@@ -57,10 +57,15 @@ public class SpsmHomeActivity extends Activity {
         remaining = findViewById(R.id.remaining);
         View exit = findViewById(R.id.btn_exit);
         if (exit != null) exit.setOnClickListener(v -> confirmExit());
-        // Recents is the swipe up from the bottom, and nothing else: no button
-        // and no long press, which is what the owner asked for. The swipe is read
-        // in dispatchTouchEvent below, and the same gesture from inside another
-        // app arrives as a MAIN/HOME intent (onNewIntent).
+        // Recents is a button now, not a gesture. The owner's report on v3.5.1
+        // was that the swipe still did not work properly, and his log says why:
+        // the swipe reached the app nearly every time (the v3.5.1 log lines are
+        // all there) but the list did not open, because on a gesture-navigation
+        // phone Android takes the bottom edge for itself mid-swipe and a
+        // background activity start from a paused app is refused. So: no swipe
+        // at all. The mode asks the phone for three-button navigation
+        // (nav_buttons), and the three buttons below are drawn only if the phone
+        // refuses that switch.
         // Editing the six apps from the home screen itself: the pencil turns the
         // slots into something you can take an app out of, and turns into a tick
         // while it is on. Taking an app out empties the slot, so the "+" is there
@@ -68,6 +73,9 @@ public class SpsmHomeActivity extends Activity {
         // it (the tick, or leaving the screen, ends it).
         editButton = findViewById(R.id.btn_edit);
         if (editButton != null) editButton.setOnClickListener(v -> setEditing(!editing));
+        // Back, Home and Recents, drawn by this screen only when the phone is not
+        // showing its own three.
+        NavBar.wire(this, v -> navBack(), v -> navHome(), v -> openRecents("recents-button"));
         Apps.fillDefaults(this);
         try {
             bindSlots();
@@ -111,6 +119,7 @@ public class SpsmHomeActivity extends Activity {
     protected void onResume() {
         super.onResume();
         styleSystemBars();
+        NavBar.refresh(this);
         try {
             bindSlots();
         } catch (Throwable ignored) {
@@ -178,95 +187,76 @@ public class SpsmHomeActivity extends Activity {
         // Swallow back; this is the home.
     }
 
-    private float touchStartY;
-    private float touchStartX;
-    /** One list per gesture: the system can also hand us a cancel mid-swipe. */
-    private boolean swipeFired;
-
     /**
-     * A swipe up from the bottom of SPSM's own screen opens its recents.
+     * A MAIN/HOME intent arriving while this activity exists - what pressing
+     * Home, or coming back from inside an app, delivers.
      *
-     * <p>The owner's instruction: "only dragging bottom to up open spsm recents,
-     * like how Axion recents opens". The swipe is read here and never consumed,
-     * so taps and long presses on the six slots keep working exactly as before.
-     *
-     * <p>It is read on the MOVE, not on the UP, because of what this phone does
-     * with the bottom edge. On gesture navigation Android takes that strip for
-     * its own "go home" gesture: this activity is given the press and the first
-     * centimetre of the drag, and then an ACTION_CANCEL. v3.5.0 waited for the
-     * finger to lift, which is an event that gesture never produces - and two
-     * hundred swipes opened nothing. The move itself is the signal.
-     */
-    @Override
-    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
-        try {
-            float density = getResources().getDisplayMetrics().density;
-            float h = getResources().getDisplayMetrics().heightPixels;
-            switch (ev.getActionMasked()) {
-                case android.view.MotionEvent.ACTION_DOWN:
-                    touchStartY = ev.getY();
-                    touchStartX = ev.getX();
-                    swipeFired = false;
-                    break;
-                case android.view.MotionEvent.ACTION_MOVE: {
-                    if (swipeFired) break;
-                    float dy = touchStartY - ev.getY();
-                    float dx = Math.abs(ev.getX() - touchStartX);
-                    // Bottom third of the screen, upward, mostly vertical. 16dp of
-                    // travel is more than a tap wobbles and less than the system
-                    // takes to decide the strip is its own.
-                    if (dy > 16 * density && dx < dy && touchStartY > h * 0.66f) {
-                        swipeFired = true;
-                        openRecents("swipe");
-                    }
-                    break;
-                }
-                case android.view.MotionEvent.ACTION_UP: {
-                    if (swipeFired) break;
-                    float dy = touchStartY - ev.getY();
-                    float dx = Math.abs(ev.getX() - touchStartX);
-                    if (dy > 24 * density && dx < dy && touchStartY > h * 0.66f) {
-                        swipeFired = true;
-                        openRecents("swipe");
-                    }
-                    break;
-                }
-                default:
-                    break;
-            }
-        } catch (Throwable ignored) {
-        }
-        return super.dispatchTouchEvent(ev);
-    }
-
-    /**
-     * "Go home" while this activity exists - on a gesture-navigation phone, what
-     * a swipe up from inside an app becomes.
-     *
-     * <p>It opens the recents list for the same reason the swipe on our own
-     * screen does: on every other Android that gesture means "show me what I was
-     * doing", and redrawing the icons is the one answer nobody wants. The six
-     * apps stay one tap away - the list has its own home button. Arriving by
-     * pressing Back out of an app does not come through here at all, so Back
-     * still lands on the six apps, exactly as before.
+     * <p>v3.5.1 opened the recents list from here, reading the go-home gesture
+     * as "show me what I was doing". The owner's instruction is the opposite
+     * now: Home means the home screen. So this only comes home - the six apps -
+     * and writes one line saying it happened, because "did the button reach
+     * us?" is the question that took two builds to answer the last time a way
+     * in did not work.
      */
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        openRecents("go-home");
+        noteOpen("home");
+        try {
+            bindSlots();
+        } catch (Throwable ignored) {
+        }
     }
 
-    /** Opens the recents list, once per gesture, and says in the log how. */
+    /**
+     * The Recents button, as the shell sends it.
+     *
+     * <p>In three-button navigation the phone's own Recents button sends
+     * KEYCODE_APP_SWITCH, and a key event is delivered to the focused window
+     * first - which is this activity while the mode is on. Consuming it here is
+     * what makes that button open <em>this</em> mode's list: no launcher is
+     * started, and there is no second screen left behind to cover up.
+     */
+    @Override
+    public boolean dispatchKeyEvent(android.view.KeyEvent ev) {
+        try {
+            if (ev != null && ev.getKeyCode() == android.view.KeyEvent.KEYCODE_APP_SWITCH) {
+                if (ev.getAction() == android.view.KeyEvent.ACTION_UP && !ev.isCanceled()) {
+                    openRecents("recents-button");
+                }
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return super.dispatchKeyEvent(ev);
+    }
+
+    /** Back, on the home screen: there is nothing behind the home to go back to. */
+    private void navBack() {
+        noteOpen("back-button");
+    }
+
+    /** Home, on the home screen: it is already the home. Refreshing is all there is. */
+    private void navHome() {
+        try {
+            bindSlots();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Opens the recents list, once per press, and says in the log what opened it. */
     private void openRecents(String how) {
         long now = SystemClock.uptimeMillis();
-        // Already opening: the list stamps openedAt the moment it comes up.
+        // Already opening: the list stamps openedAt the moment it comes up, and a
+        // key press arrives as a press and a release - both would otherwise open
+        // a list of their own.
         if (now - SpsmRecentsActivity.openedAt < 700) return;
-        // Already open, and has been for a while: a "go home" from inside the
-        // list should do nothing rather than reload it.
+        // Already open: pressing Recents again should do nothing rather than
+        // reload the list the user is looking at.
         if (SpsmRecentsActivity.visible) return;
         SpsmRecentsActivity.openedAt = now;
-        noteGesture(how);
+        noteOpen(how);
         try {
             Intent i = new Intent(this, SpsmRecentsActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -278,15 +268,15 @@ public class SpsmHomeActivity extends Activity {
     /**
      * One line in the module's log, off the UI thread.
      *
-     * <p>The gesture is invisible in every other record. When it does not open
-     * the list there is nothing anywhere to say a swipe happened at all, so "did
-     * it reach the app?" - the difference between a broken gesture and a phone
-     * that keeps the bottom edge for itself - has no answer in the log.
+     * <p>A button press is invisible in every other record. When it does not
+     * open the list there is nothing anywhere to say the press happened at all,
+     * so "did it reach the app?" - the difference between a button that is not
+     * wired up and a phone that is not sending it - has no answer in the log.
      */
-    private void noteGesture(final String how) {
+    private void noteOpen(final String how) {
         new Thread(() -> {
             try {
-                Root.exec("sh " + Root.DIR + "/scripts/engine.sh gesture " + how);
+                Root.exec("sh " + Root.DIR + "/scripts/engine.sh recents-opened " + how);
             } catch (Throwable ignored) {
             }
         }).start();
@@ -302,7 +292,7 @@ public class SpsmHomeActivity extends Activity {
                 editButton.setContentDescription(getString(on ? R.string.edit_done : R.string.edit));
             }
             TextView hint = findViewById(R.id.home_hint);
-            if (hint != null) hint.setText(on ? R.string.edit_hint : R.string.swipe_for_recents);
+            if (hint != null) hint.setText(on ? R.string.edit_hint : R.string.home_hint_hold);
         } catch (Throwable ignored) {
         }
         bindSlots();

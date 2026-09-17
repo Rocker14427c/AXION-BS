@@ -2,8 +2,8 @@
 # Fake Android commands for the SPSM test harness.
 #
 # This is installed into tests' PATH under the names of the real commands
-# (settings, getprop, pm, am, cmd, svc, dumpsys, resetprop) so the REAL engine
-# scripts can be exercised without a phone. Everything is file-backed under
+# (settings, getprop, pm, am, cmd, svc, dumpsys, resetprop, ps, logcat) so the
+# REAL engine scripts can be exercised without a phone. Everything is file-backed under
 # $SPSM_STUB so the test can assert on it afterwards.
 #
 # It deliberately mimics the quirks the engine depends on:
@@ -11,6 +11,7 @@
 #   * `cmd appops get <pkg> RUN_ANY_IN_BACKGROUND` output format
 #   * `am get-standby-bucket` returning a number
 #   * `dumpsys package <pkg>` reporting `enabled=`
+#   * `ps -A -o NAME` listing process names, one per line
 
 S="$SPSM_STUB"
 CMD=${CMD_OVERRIDE:-$(basename "$0")}
@@ -96,13 +97,32 @@ case "$CMD" in
         v=$(sget "$2" "$3")
         if [ -n "$v" ]; then printf '%s\n' "$v"; else echo "null"; fi
         ;;
-      put) printf '%s' "$4" > "$S/settings/$2.$3" ;;
+      put)
+        # A ROM that accepts the command and does nothing with it. This is the
+        # failure the mode has to notice and tell the truth about - most of all
+        # for the navigation switch, where a write that quietly did not take
+        # would leave the user with no buttons at all.
+        [ -f "$S/refuse_put.$2.$3" ] && exit 0
+        printf '%s' "$4" > "$S/settings/$2.$3" ;;
       delete) rm -f "$S/settings/$2.$3" ;;
     esac
     ;;
 
   getprop)
     cat "$S/props/$1" 2>/dev/null
+    ;;
+
+  # The running processes. The phone's own list, kept as a file so a test can
+  # decide what is running while the mode is on - which is the only input the
+  # ROM-background option works from.
+  ps)
+    cat "$S/procs" 2>/dev/null
+    ;;
+
+  # The event log, as the daemon's watcher reads it: whatever the test put in
+  # eventlog is what happened on the phone, and the stream then ends.
+  logcat)
+    cat "$S/eventlog" 2>/dev/null
     ;;
 
   setprop)
@@ -133,8 +153,12 @@ case "$CMD" in
     log_call "$@"
     case "$1" in
       list)
-        # pm list packages -3
-        cat "$S/pkgs3" 2>/dev/null | sed 's/^/package:/'
+        # pm list packages -3  -> the third-party apps
+        # pm list packages -s  -> the phone's own packages
+        case "$*" in
+          *" -s"*) cat "$S/pkgs_sys" 2>/dev/null | sed 's/^/package:/' ;;
+          *)        cat "$S/pkgs3"    2>/dev/null | sed 's/^/package:/' ;;
+        esac
         ;;
       path) echo "package:/data/app/$2/base.apk" ;;
       enable|disable)
@@ -219,6 +243,13 @@ case "$CMD" in
         fi
         ;;
       set-standby-bucket) printf '%s\n' "$3" > "$S/bucket/$2" ;;
+      # ActivityManager's own "this app is idle now": the platform lever the
+      # module uses to make a stopped app give its memory back.
+      make-uid-idle)
+        [ "$2" = "--user" ] && shift 2
+        printf '%s\n' "$2" >> "$S/uid_idle" ;;
+      kill-all)
+        printf '%s\n' "$(date +%s)" >> "$S/kill_all" ;;
       start)
         # am start --task <id> -n <comp> is the last-resort way of bringing a
         # task to the front, and on this ROM it works.

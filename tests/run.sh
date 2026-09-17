@@ -96,13 +96,13 @@ make_tree() {
 make_stubs() {
   BIN="$WORK/bin"
   rm -rf "$BIN"; mkdir -p "$BIN"
-  for c in settings getprop setprop resetprop svc pm am cmd dumpsys; do
+  for c in settings getprop setprop resetprop svc pm am cmd dumpsys ps logcat; do
     printf '#!/bin/sh\nexec sh "%s/stub.sh" "$@"\n' "$REPO/tests" > "$BIN/$c"
     chmod +x "$BIN/$c"
   done
   # The dispatcher needs to know which name it was called as, which $0 gives
   # us only if we do not exec through another shell, so pass it explicitly.
-  for c in settings getprop setprop resetprop svc pm am cmd dumpsys; do
+  for c in settings getprop setprop resetprop svc pm am cmd dumpsys ps logcat; do
     cat > "$BIN/$c" <<EOF
 #!/bin/sh
 CMD_OVERRIDE=$c
@@ -237,7 +237,8 @@ dump_state() {
   # the phone's state, and each has its own assertions where it matters.
   find "$WORK/stub" -type f \
        -not -name calls -not -name force_stopped -not -name task_in_front \
-       -not -name task_started -not -name tasks_removed | sort | while read -r f; do
+       -not -name task_started -not -name tasks_removed \
+       -not -name uid_idle -not -name kill_all | sort | while read -r f; do
     case "${f#$WORK/stub/}" in
       # The module's own home screen is disabled again on the way out: that IS
       # its shipping state (the manifest ships it disabled), so a comparison
@@ -2420,21 +2421,41 @@ else
 fi
 grep -q "Type.statusBars" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "and the home screen asks for the bars to be shown" $?
-# The way into recents: a swipe up from the bottom, on SPSM's own screen and -
-# because this mode's home is the phone's home - from inside another app too.
-# Read on the MOVE, not on the lift: this phone's gesture navigation cancels the
-# touch as soon as it takes the bottom edge for its own "go home", so a reader
-# that waits for ACTION_UP never sees a bottom-edge swipe finish - which is
-# exactly what v3.5.0 did, and why two hundred swipes opened nothing.
-grep -q "dispatchTouchEvent" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q "case android.view.MotionEvent.ACTION_MOVE" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q "dy > 16 \* density" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q "touchStartY > h \* 0.66f" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
-check "a swipe up from the bottom of SPSM's own screen opens its recents" $?
-grep -q 'openRecents("go-home")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
-check "and being sent home from inside another app opens the same list" $?
-grep -q 'engine.sh gesture' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q 'gesture)' "$REPO/module/scripts/engine.sh"
+# The way into recents is three buttons now, not a swipe. On the owner's report
+# from the phone the swipe was removed outright: v3.5.1 logged the swipe
+# arriving and the list still did not come up, because on a gesture-navigation
+# phone Android takes the bottom edge for its own "go home" mid-swipe. Nothing
+# may be left of it - no touch reader, no swipe strings - and the three buttons
+# have to be wired on both of this mode's screens.
+if grep -q "dispatchTouchEvent\|ACTION_MOVE\|touchStartY\|swipeFired" \
+     "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"; then
+  bad "the swipe is gone from the home screen"
+else
+  ok "the swipe is gone from the home screen"
+fi
+if grep -rq 'name="swipe_up_recents"\|name="swipe_for_recents"\|R.string.swipe' "$REPO/app/res" "$REPO/app/src"; then
+  bad "and the hint that taught it is gone too"
+else
+  ok "and the hint that taught it is gone too"
+fi
+grep -q '@layout/nav_bar' "$REPO/app/res/layout/activity_home.xml" && \
+  grep -q '@layout/nav_bar' "$REPO/app/res/layout/activity_recents.xml"
+check "both of this mode's screens can draw the three buttons" $?
+grep -q 'name="nav_back">Back<' "$REPO/app/res/values/strings.xml" && \
+  grep -q 'name="nav_home">Home<' "$REPO/app/res/values/strings.xml" && \
+  grep -q 'name="nav_recents">Recents<' "$REPO/app/res/values/strings.xml"
+check "and the buttons are Back, Home and Recents" $?
+grep -q "NavBar.wire" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "NavBar.wire" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java"
+check "and both screens bind them rather than leaving dead controls" $?
+grep -q "KEYCODE_APP_SWITCH" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q 'openRecents("recents-button")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "the phone's own Recents button opens this mode's list" $?
+grep -q "NavBar.refresh" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "navigation_mode" "$REPO/app/src/dev/axion/spsm/NavBar.java"
+check "and the drawn buttons stay hidden while the phone has its own" $?
+grep -q 'engine.sh recents-opened' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q 'recents-opened)' "$REPO/module/scripts/engine.sh"
 check "and every open of the list is noted in the log, with what opened it" $?
 for _cb in onPause onStop onDestroy; do
   awk "/protected void $_cb\\(\\)/,/^    }/" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java" | grep -q "visible = false"
@@ -2448,11 +2469,17 @@ if grep -q "setOnLongClickListener" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivi
 else
   ok "the long press on the empty space is gone"
 fi
-grep -q 'name="swipe_up_recents">Swipe up for recent apps<' "$REPO/app/res/values/strings.xml"
-check "and the hint on the screen teaches the gesture" $?
+grep -q 'name="home_hint_hold">Hold an app to change it<' "$REPO/app/res/values/strings.xml"
+check "and the hint on the home screen says what it really does" $?
 grep -q '@+id/btn_home' "$REPO/app/res/layout/activity_recents.xml" && \
   grep -q "R.id.btn_home" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java"
 check "with a way back to the six apps from the list itself" $?
+# Clear all, on the owner's instruction: everything the list is showing is closed
+# at once, and the frozen background with it.
+grep -q '@+id/btn_clear_all' "$REPO/app/res/layout/activity_recents.xml" && \
+  grep -q "R.id.btn_clear_all" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java" && \
+  grep -q 'engine.sh clear-all' "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java"
+check "the recents screen has a Clear all button, and it runs the real thing" $?
 
 # A ROM that really has an immersive rule: it is cleared while the mode is on,
 # and put back exactly as it was on the way out.
@@ -2862,6 +2889,347 @@ run_engine deactivate >/dev/null 2>&1
 n=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 0 ]
 check "an exit with no session behind it force-stops nothing (got ${n:-0})" $?
+
+
+# ==========================================================================
+say "73. three-button navigation: Back is Back, Home is this home, Recents is this list"
+# The owner's instruction: "better to completely remove the swipe to open recents
+# and it's better if you shift the gesture mode to 3-button navigation mode, such
+# that you have easy to implement back will back, home button will take to the
+# home of spsm and recent button will open recents".
+#
+# The app half is case 66. This is the phone half: while the mode is on the phone
+# itself uses three buttons, so there are real buttons at the bottom of every
+# screen - including inside another app, which is where a home-screen control
+# could never reach. And it is the phone's own setting, journalled like the rest.
+make_tree; make_stubs; seed_stub_state
+printf '2\n' > "$WORK/stub/settings/secure.navigation_mode"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
+check "the phone is put into three-button navigation while the mode is on" $?
+grep -q "nav: three-button navigation is on (was 2)" "$WORK/spsm/spsm.log"
+check "and the log says what it was before" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
+check "gesture navigation is put back exactly as it was on exit" $?
+run_engine verify > "$WORK/out.v73" 2>&1
+grep -q "drift=0" "$WORK/out.v73"
+check "with nothing left behind ($(cat "$WORK/out.v73"))" $?
+
+# A phone that takes the command and does nothing with it: the change is put back
+# and the journal is told, so the exit does not chase a value that is already right
+# - and the screens fall back to drawing their own buttons.
+make_tree; make_stubs; seed_stub_state
+printf '2\n' > "$WORK/stub/settings/secure.navigation_mode"
+touch "$WORK/stub/refuse_put.secure.navigation_mode"
+screen_on
+run_engine activate > "$WORK/out.a73" 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
+check "a phone that refuses the switch keeps its own navigation" $?
+grep -q "nav: this phone did not take three-button navigation (still 2)" "$WORK/spsm/spsm.log"
+check "and the log says so, in words" $?
+grep -q "note nav_buttons: applied, did not take, and was put back by the module" "$WORK/spsm/spsm.log"
+check "and it is recorded as a change that was undone, not one to undo later" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v73b" 2>&1
+grep -q "drift=0" "$WORK/out.v73b"
+check "with a clean exit ($(cat "$WORK/out.v73b"))" $?
+
+# Switched off by the user: the phone's navigation is not touched at all.
+make_tree; make_stubs; seed_stub_state
+printf '2\n' > "$WORK/stub/settings/secure.navigation_mode"
+disable_knobs nav_buttons
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
+check "with the option off the phone's navigation is left alone" $?
+if grep -q "^settings put secure navigation_mode" "$WORK/stub/calls"; then
+  bad "and nothing was even asked of it"
+else
+  ok "and nothing was even asked of it"
+fi
+run_engine deactivate >/dev/null 2>&1
+
+# A phone that has never had the setting at all: the mode writes it, and the exit
+# deletes it again rather than leaving a value the phone never had.
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
+check "a phone with no navigation setting at all gets three buttons" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/settings/secure.navigation_mode" ]
+check "and the setting it never had is deleted again on exit" $?
+run_engine verify > "$WORK/out.v73c" 2>&1
+grep -q "drift=0" "$WORK/out.v73c"
+check "with nothing left behind ($(cat "$WORK/out.v73c"))" $?
+
+say "74. the background sweep: the memory the frozen apps hold is handed back"
+# The owner's numbers: 649 processes, 3.78G of 3.83G used, 47M free, one chat app
+# holding 490M. Suspending an app stops it being started; it does not give back
+# the memory it already holds. Stopping it does, and make-uid-idle is the
+# platform's own "this app is idle now".
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q "background sweep (mode on): 3 frozen app(s) stopped" "$WORK/spsm/spsm.log"
+check "switching the mode on stops the frozen apps and says how many" $?
+grep -q "free memory" "$WORK/spsm/spsm.log"
+check "and reports the memory it freed, before and after" $?
+grep -q "^am make-uid-idle com.spotify.music$" "$WORK/stub/calls"
+check "and each one is handed to ActivityManager as idle, not merely stopped" $?
+grep -q "^am kill-all$" "$WORK/stub/calls"
+check "and the phone is asked to clear what it still calls background" $?
+# Screen off: memory an app grabbed while the screen was on is given back the
+# moment it goes off. This is the half that keeps the mode saving over a long day.
+screen_off
+run_engine screen-off >/dev/null 2>&1
+grep -q "background sweep (screen off)" "$WORK/spsm/spsm.log"
+check "every screen-off sweeps again" $?
+n=$(grep -c "^am kill-all$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" -ge 2 ]
+check "so a phone left alone all afternoon keeps giving the memory back (${n:-0} sweeps)" $?
+screen_on
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v74" 2>&1
+grep -q "drift=0" "$WORK/out.v74"
+check "and the sweep leaves nothing to undo ($(cat "$WORK/out.v74"))" $?
+
+# Switched off by the user: nothing is stopped by the sweep, and no line claims it.
+make_tree; make_stubs; seed_stub_state
+disable_knobs sweep_bg
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+if grep -q "background sweep" "$WORK/spsm/spsm.log"; then
+  bad "with the option off nothing is swept"
+else
+  ok "with the option off nothing is swept"
+fi
+if grep -q "^am kill-all$" "$WORK/stub/calls"; then
+  bad "and the phone's background is not cleared either"
+else
+  ok "and the phone's background is not cleared either"
+fi
+screen_on
+run_engine deactivate >/dev/null 2>&1
+
+say "75. the ROM's own background work is restricted while the screen is off, and put back"
+# The owner's question: "Axion rom put their components all around even in system
+# server (a very large process). Can we do something for this."
+#
+# system_server itself is the phone's Android and is not touched. What is taken
+# away is its clients: a system package working in the background keeps Android
+# busy, and the switch that stops it is the one Settings already offers per app -
+# the standby bucket, plus RUN_ANY_IN_BACKGROUND. Nothing is disabled or
+# suspended, and every package is put back on wake.
+make_tree; make_stubs; seed_stub_state
+printf 'com.whatsapp\ncom.example.freebie\ncom.android.traceur\ncom.android.settings\ncom.android.providers.calendar\n' > "$WORK/stub/procs"
+printf 'com.android.traceur\ncom.android.settings\ncom.android.providers.calendar\n' > "$WORK/stub/pkgs_sys"
+printf '10\n' > "$WORK/stub/bucket/com.android.traceur"
+printf 'RUN_ANY_IN_BACKGROUND: allow\n' > "$WORK/stub/appop/com.android.traceur"
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(cat "$WORK/stub/bucket/com.android.traceur" 2>/dev/null)" = "restricted" ]
+check "a system package working in the background is put in the restricted bucket" $?
+grep -q "RUN_ANY_IN_BACKGROUND: deny" "$WORK/stub/appop/com.android.traceur"
+check "and its background running is denied - the same switch Settings offers" $?
+grep -q "^am make-uid-idle com.android.traceur$" "$WORK/stub/calls"
+check "and it is put to sleep now, not at some later point" $?
+grep -q "rom background: .* of the phone's own package(s) restricted for this idle period" "$WORK/spsm/spsm.log"
+check "and the log names what was restricted, and that it is for this idle period" $?
+[ ! -e "$WORK/stub/bucket/com.android.settings" ] && [ ! -e "$WORK/stub/appop/com.android.settings" ]
+check "the phone's own core - Settings, System UI, the phone - is not touched" $?
+[ ! -e "$WORK/stub/bucket/com.android.providers.calendar" ] && [ ! -e "$WORK/stub/appop/com.android.providers.calendar" ]
+check "nor anything Android is already exempting from battery optimisation" $?
+[ ! -e "$WORK/stub/bucket/com.example.freebie" ] && [ ! -e "$WORK/stub/appop/com.example.freebie" ]
+check "nor a third-party app: restricting those is the other option's job, not this one's" $?
+n=$(find "$WORK/stub/pkg" -name '*.enabled' 2>/dev/null | wc -l)
+[ "${n:-0}" = 0 ]
+check "and nothing anywhere was disabled (${n:-0} disabled)" $?
+# Wake: the values go back, and the record of them goes with them.
+screen_on
+run_engine screen-on >/dev/null 2>&1
+[ "$(cat "$WORK/stub/bucket/com.android.traceur" 2>/dev/null)" = "10" ]
+check "waking puts the standby bucket back" $?
+grep -q "RUN_ANY_IN_BACKGROUND: allow" "$WORK/stub/appop/com.android.traceur"
+check "and gives the app its background running back" $?
+[ ! -e "$WORK/spsm/journal/orig/rom_bg.tsv" ]
+check "and the record of what it was is gone with it" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v75" 2>&1
+grep -q "drift=0" "$WORK/out.v75"
+check "with a clean exit ($(cat "$WORK/out.v75"))" $?
+
+# A value something else moved after us is a newer decision than ours: the exit
+# leaves it, and says so.
+make_tree; make_stubs; seed_stub_state
+printf 'com.android.traceur\n' > "$WORK/stub/procs"
+printf 'com.android.traceur\n' > "$WORK/stub/pkgs_sys"
+printf '10\n' > "$WORK/stub/bucket/com.android.traceur"
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+printf '40\n' > "$WORK/stub/bucket/com.android.traceur"
+screen_on
+run_engine screen-on >/dev/null 2>&1
+[ "$(cat "$WORK/stub/bucket/com.android.traceur" 2>/dev/null)" = "40" ]
+check "a bucket something else changed since is left as they set it" $?
+run_engine deactivate >/dev/null 2>&1
+
+# Switched off by the user, and a phone with no system packages running: nothing
+# is written and the log says which of the two it was.
+make_tree; make_stubs; seed_stub_state
+printf 'com.android.traceur\n' > "$WORK/stub/procs"
+printf 'com.android.traceur\n' > "$WORK/stub/pkgs_sys"
+disable_knobs rom_bg_off
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ ! -e "$WORK/stub/bucket/com.android.traceur" ]
+check "with the option off no system package is restricted" $?
+screen_on
+run_engine deactivate >/dev/null 2>&1
+
+make_tree; make_stubs; seed_stub_state
+printf 'com.android.traceur\n' > "$WORK/stub/procs"
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ ! -e "$WORK/stub/bucket/com.android.traceur" ]
+check "a phone running none of its own packages in the background is left alone" $?
+grep -q "rom background: nothing of the phone's own was running in the background" "$WORK/spsm/spsm.log"
+check "and the log says exactly that, rather than claiming a change" $?
+screen_on
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v75b" 2>&1
+grep -q "drift=0" "$WORK/out.v75b"
+check "with a clean exit ($(cat "$WORK/out.v75b"))" $?
+
+say "76. Clear all: everything the list is showing is closed at once"
+# The owner's instruction: "add a clear all button in recents which force stop all
+# the processes which is running in the background at once."
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+_before=$(run_engine recents 2>/dev/null | grep -c .)
+[ "${_before:-0}" -ge 2 ]
+check "there are tasks in the list to close (${_before:-0})" $?
+out=$(run_engine clear-all 2>/dev/null)
+printf '%s\n' "$out" | grep -q "asked=${_before} gone=${_before} left=0"
+check "every listed task is closed, and the report counts what is left ($out)" $?
+[ "$(run_engine recents 2>/dev/null | grep -c .)" = "0" ]
+check "and the phone's own task list really is empty afterwards" $?
+grep -q "background sweep (clear all)" "$WORK/spsm/spsm.log"
+check "and the frozen background is swept in the same press" $?
+grep -q "clear all: ${_before} task(s) asked to close, ${_before} gone, 0 still listed, free memory" "$WORK/spsm/spsm.log"
+check "with the count and the memory it freed written down" $?
+
+# A task that will not close: an honest count, not an optimistic one. This is the
+# same read-back the owner asked for when closing one app looked like it worked.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+touch "$WORK/stub/task_remove_broken" "$WORK/stub/force_stop_broken"
+screen_on
+run_engine activate >/dev/null 2>&1
+_before=$(run_engine recents 2>/dev/null | grep -c .)
+out=$(run_engine clear-all 2>/dev/null)
+printf '%s\n' "$out" | grep -q "asked=${_before} gone=0 left=${_before}"
+check "a task that will not close is counted as still open ($out)" $?
+[ "$(run_engine recents 2>/dev/null | grep -c .)" = "${_before}" ]
+check "and the list still shows it, because it is still there" $?
+
+# Nothing left behind: the button closes tasks and stops apps, and changes no
+# setting at all.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine clear-all >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v76" 2>&1
+grep -q "drift=0" "$WORK/out.v76"
+check "and clearing everything leaves nothing to undo ($(cat "$WORK/out.v76"))" $?
+
+say "77. the phone's own Recents button is handed to this mode's list"
+# With three-button navigation the Recents button belongs to the phone, and this
+# ROM gives it to the launcher's own recents screen - the launcher being the one
+# thing the mode exists to keep out of the way. The daemon reads the phone's event
+# log and hands that screen over to this mode's list as it opens.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-guard "am_create_activity: [0,123,456,com.android.launcher3/com.android.quickstep.RecentsActivity]" >/dev/null 2>&1
+grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
+check "a line naming the phone's recents screen opens this mode's list" $?
+grep -q "^am force-stop com.android.launcher3$" "$WORK/stub/calls"
+check "and the screen the button did open is taken down again" $?
+grep -q "recents: the phone's own recents screen opened - handed to SPSM's list" "$WORK/spsm/spsm.log"
+check "and the log says it happened" $?
+# Our own list, in the same log, must not start a second copy of itself.
+_n=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")
+run_engine recents-guard "am_create_activity: [0,1,2,dev.axion.spsm/.SpsmRecentsActivity]" >/dev/null 2>&1
+_m=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")
+[ "$_n" = "$_m" ]
+check "our own screen is ignored, so the list cannot open itself twice" $?
+# A line about something else entirely: nothing happens.
+run_engine recents-guard "am_create_activity: [0,1,2,com.android.settings/.Settings]" >/dev/null 2>&1
+[ "$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")" = "$_n" ]
+check "and a line about anything else does nothing at all" $?
+# The mode off: the guard has no business opening anything.
+run_engine deactivate >/dev/null 2>&1
+run_engine recents-guard "am_create_activity: [0,1,2,com.android.launcher3/com.android.quickstep.RecentsActivity]" >/dev/null 2>&1
+[ "$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")" = "$_n" ]
+check "and with the mode off the guard does nothing" $?
+
+# The same decision, made live: the daemon watches the phone's event log and hands
+# the screen over as it opens, with no swipe and nothing for the user to press.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+printf 'am_create_activity: [0,7,8,com.android.launcher3/com.android.quickstep.RecentsActivity]\n' > "$WORK/stub/eventlog"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine start-daemon >/dev/null 2>&1
+_i=0
+while [ "$_i" -lt 40 ]; do
+  grep -q "^am force-stop com.android.launcher3$" "$WORK/stub/calls" && break
+  sleep 0.25 2>/dev/null || sleep 1
+  _i=$((_i + 1))
+done
+grep -q "^am force-stop com.android.launcher3$" "$WORK/stub/calls"
+check "the daemon does it live, from the phone's own event log" $?
+grep -q "recents: watching the phone's event log for its own recents screen" "$WORK/spsm/spsm.log"
+check "and says it is watching, so a quiet log is not a mystery" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v77" 2>&1
+grep -q "drift=0" "$WORK/out.v77"
+check "with a clean exit ($(cat "$WORK/out.v77"))" $?
+
+# With the navigation option off there is no phone Recents button to watch for, so
+# no watcher is started at all.
+make_tree; make_stubs; seed_stub_state
+disable_knobs nav_buttons
+printf 'am_create_activity: [0,7,8,com.android.launcher3/com.android.quickstep.RecentsActivity]\n' > "$WORK/stub/eventlog"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine start-daemon >/dev/null 2>&1
+sleep 0.5 2>/dev/null || sleep 1
+if grep -q "watching the phone's event log" "$WORK/spsm/spsm.log"; then
+  bad "with the option off nothing is watched"
+else
+  ok "with the option off nothing is watched"
+fi
+run_engine stop-daemon >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
 
 
 # ==========================================================================

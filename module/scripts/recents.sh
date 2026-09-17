@@ -204,3 +204,80 @@ do_recents() {
 }
 do_recents_switch() { recents_switch "$1" "$2"; }
 do_recents_remove() { recents_remove "$1" "$2"; }
+
+# ---------------------------------------------------------------- clear all
+# The owner's request: "add a clear all button in recents which force stop all
+# the processes which is running in the background at once."
+#
+# What it does, in the order that makes it true:
+#   1. every task the list is showing is closed through recents_remove, which
+#      reads the phone's own task list back rather than trusting an exit code;
+#   2. the frozen background is stopped and its memory released (sweep_background);
+#   3. the phone's own task list is read once more, and THAT number is what is
+#      reported - a task that would not close is said so, not rounded away.
+do_clear_all() {
+  # Every name here is a counter that no callee uses. A shell has no local
+  # variables, and sweep_background counts the apps it stops in _n: with this
+  # function's own count in _n as well, a two-task list was reported as three
+  # ("asked=3") on the first run of this command - the sweep's number, read as if
+  # it were the task count.
+  _asked=0
+  _before=$(mem_available)
+  _d=$SPSM_DIR/.tmp
+  mkdir -p "$_d" 2>/dev/null
+  _t="$_d/clearall.$$"
+  recents_list > "$_t" 2>/dev/null
+  while IFS="$TAB" read -r _id _pkg _comp _active; do
+    [ -n "$_id" ] || continue
+    _asked=$((_asked + 1))
+    recents_remove "$_id" "$_pkg" >/dev/null 2>&1
+  done < "$_t"
+  rm -f "$_t"
+  sweep_background "clear all"
+  _left=$(recents_list 2>/dev/null | grep -c . 2>/dev/null)
+  case "$_left" in ''|*[!0-9]*) _left=0 ;; esac
+  _after=$(mem_available)
+  _gone=$((_asked - _left))
+  [ "$_gone" -lt 0 ] && _gone=0
+  log "clear all: $_asked task(s) asked to close, $_gone gone, $_left still listed, free memory $(mem_words "$_before") -> $(mem_words "$_after")"
+  printf 'asked=%s gone=%s left=%s\n' "$_asked" "$_gone" "$_left"
+}
+
+# ------------------------------------------------- the phone's own recents
+# With three-button navigation on, the Recents button belongs to the phone. On
+# this ROM it starts the launcher's own recents screen
+# (com.android.launcher3/com.android.quickstep.RecentsActivity) - the launcher
+# being the one thing this mode exists to keep out of the way. The daemon feeds
+# every line of the phone's event log through here; when a line names that
+# screen, it is handed to this mode's own list instead.
+#
+# The action is the same shape as everything else in this file: start the list,
+# then take the phone's own screen away - the launcher's task is what is left
+# behind, and a recents screen that is still there when this list is closed is a
+# recents screen that will be seen a second time.
+recents_guard() { # recents_guard <one line of the phone's event log>
+  _line=$1
+  [ -n "$_line" ] || return 1
+  [ -f "$ACTIVE" ] || return 1
+  # Never our own screen: this list is in the same log.
+  case "$_line" in *dev.axion.spsm*) return 1 ;; esac
+  _host=$(host_recents_component 2>/dev/null)
+  _cls=${_host#*/}
+  case "$_line" in
+    *"$_host"*) ;;
+    *)
+      case "$_cls" in
+        ''|recents) case "$_line" in *RecentsActivity*) ;; *) return 1 ;; esac ;;
+        *) case "$_line" in *"$_cls"*) ;; *) return 1 ;; esac ;;
+      esac ;;
+  esac
+  _pkg=$(home_package 2>/dev/null)
+  case "$_pkg" in ''|dev.axion.spsm) _pkg=com.android.launcher3 ;; esac
+  has am || return 1
+  am start -n dev.axion.spsm/.SpsmRecentsActivity >/dev/null 2>&1
+  log "recents: the phone's own recents screen opened - handed to SPSM's list"
+  # The screen the button actually opened, taken down: without this, closing our
+  # list would show the phone's recents still standing behind it.
+  am force-stop "$_pkg" >/dev/null 2>&1
+  return 0
+}

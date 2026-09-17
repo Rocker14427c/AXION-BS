@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.5.1.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.0.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -23,53 +23,49 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.5.1)
-- The swipe opens the recents list now. It was read only when the finger lifted,
-  and on a gesture-navigation phone the bottom edge never gets that far: Android
-  takes that strip for its own "go home" gesture and cancels the touch after the
-  first centimetre. The swipe is read while the finger is moving now, from the
-  bottom third of the screen, and a full swipe still counts. Nothing else about
-  the gesture changed: no button, no long press.
-- "It opened once and then never again" is fixed at its cause: the flag that
-  keeps a second go-home from bouncing the list was left up by one list that
-  ended without a pause, and every later gesture was treated as "already open".
-- Every open of the list now writes a line in the log saying what opened it
-  (a swipe here, or a go-home from inside an app) and how many tasks it found,
-  and the log records this phone's navigation mode and home the moment the mode
-  takes the home over - so a gesture that misbehaves can be pointed at instead of
-  guessed at.
-- The power-save governor now goes to every cluster this phone has, on the same
-  per-cpu paths your Termux command uses, and every write is read back. This
-  phone's log said "power-save on 1 of 2 cluster(s)" and skipped the ceiling for
-  the whole phone on that basis, which left the big cluster on schedutil with no
-  idle limit. The ceiling is decided per cluster now: power-save clusters need
-  none, and a cluster that keeps schedutil gets one. The idle line says which:
-  held_by=governor or held_by=ceiling.
-- Coming out of the mode, the launcher's app list is refreshed once - force stop
-  and start the home the journal recorded - because the mode changes the state
-  that list was built from, and a launcher that is merely resumed keeps drawing
-  the grey, unloaded icons you saw in its app drawer. It happens only on the way
-  out, never while the mode is running, and not at all after a session that
-  changed nothing.
+NEW IN THIS BUILD (v3.6.0)
+- THE SWIPE IS GONE, and the phone runs on three buttons while the mode is on.
+  On the phone's own three-button bar: Back is Back, Home comes to this mode's
+  home (the six apps), and Recents opens this mode's own list. Your navigation
+  setting is written down before it is changed and put back exactly as it was
+  when you switch the mode off.
+  If the phone refuses the switch, this mode's screens draw their own three
+  buttons at the bottom instead, so there is always a way into recents - and if
+  the phone IS showing its own three, the drawn ones stay hidden (never two sets).
+  From inside an app the phone's Recents button is caught as it opens the
+  launcher's recents screen, and this mode's list is put up in its place.
+- Clear all, in the recents list: every task on the list is closed at once, and
+  the frozen background is stopped with it. The message counts what is left -
+  "Cleared 2 · 0 still open" - because the phone's task list is read back rather
+  than assumed, and the log line has the memory freed with it.
+- New option: "Hand back background memory" (Options -> Memory, on by default).
+  Suspending an app stops it starting; it does not give back the memory it is
+  holding. Every app outside your six is stopped outright and made idle when the
+  mode goes on and every time the screen goes off, so the memory keeps coming
+  back. Nothing is changed here, so there is nothing to undo.
+- New option: "Restrict the ROM's background work" (Options -> Apps, deep, on by
+  default). While the screen is off, the phone's own packages that are actually
+  running are put into the restricted standby bucket with background running
+  denied - the same switch Settings offers per app - and are put back on wake.
+  Nothing is disabled or suspended, the phone's core (System UI, the phone,
+  Settings, the providers, Wi-Fi/Bluetooth/NFC, the launcher, WebView) is never
+  touched, nor is anything already exempt from battery optimisation, nor your six.
+  The ROM's components live inside system_server, which is Android itself and is
+  not touched; what is taken away is the work that keeps it busy.
+- A cluster that refuses the power-save governor now has the governors it does
+  offer written to the log, with a note when MTK Low Power mode may be pinning it.
+- Every open of the recents list is logged with what opened it:
+  recents-button, back-button, or home.
 
+FROM v3.5.1
 FROM v3.5.0
-- Recents is the swipe now, and only the swipe: the Recents icon has been removed
-  from the top bar, and so has the long press anywhere on the screen. Swipe up
-  from the bottom edge - on the power-saving home, or from inside an app, where
-  swiping up sends you home and being sent home now opens the recents list. Back
-  out of an app still lands on the six apps. (The top bar described under v3.4.0
-  below now holds the door on the left and the pencil on the right.)
-  On the power-saving home the swipe is read from the bottom third of the screen:
-  start low, drag up, and the list opens before the gesture ends. From inside a
-  running app the bottom edge belongs to Android, and what this mode does with it
-  is answer it: going home opens the recents list instead of just redrawing the
-  six apps. If either one ever does nothing, the log now says which of the two
-  kinds of gesture arrived, and whether the list was asked for at all.
+- (The top bar holds the door on the left and the pencil on the right. How recents
+  is opened has changed since - see the top of this file.)
 - The recents list has a home icon in the corner to go back to the six apps.
 - The power-saving home is tidier: the battery percentage is gone (the estimate
   stays), so is the date under the clock, and the 3x2 grid of apps sits at the
   bottom of the screen, just above the time remaining. A small line under the
-  apps teaches the gesture: "Swipe up for recent apps".
+  apps says what a press-and-hold there does: "Hold an app to change it".
 - New option: "Power-save governor while idle" (Options -> Processor, on by
   default). While the screen is off it sets the kernel's own power-save governor
   on every cluster and writes no frequency ceiling, which is the same saving held
@@ -159,7 +155,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.5.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.0-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
@@ -183,6 +179,10 @@ WHILE ON
   those options ticked, and come back on exit if they were on before.
 - Anything that saves nothing on this phone says so under the option: press
   Check to have each option tried and measured.
+- Recents is the phone's own Recents button. Press it anywhere, including inside
+  an app: this mode's list comes up, with Clear all in its header.
+- All three buttons of the bottom bar are the phone's: Back and Home were never
+  taken away, and Home now means this mode's home.
 - Logging stays on, so you can record a log while the mode runs.
 
 TURN OFF

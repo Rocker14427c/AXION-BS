@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.5.1**.
+Current module: **v3.6.0**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -52,6 +52,18 @@ default install turns on:
    is written on top of it: the same saving held continuously by the kernel
    instead of once from outside. The ceilings (`cpu_cap`, `gpu_cap`) stay for the
    in-use case and are lowered only while asleep, so wake-up stays instant.
+6. **The memory the frozen apps hold** (`sweep_bg`, **on by default**) — suspending
+   an app stops it starting; it does not give back the memory it already has.
+   Every app outside your six is stopped outright and handed to ActivityManager as
+   idle when the mode goes on and at **every screen-off**, so the memory comes
+   back over the day. Nothing is changed, so there is nothing to undo.
+7. **The ROM's own background work** (`rom_bg_off`, deep, **on by default**) — a
+   system package working in the background is what keeps `system_server` busy.
+   While the screen is off, the ones actually running on this phone go into the
+   restricted standby bucket with `RUN_ANY_IN_BACKGROUND` denied — the same switch
+   Settings offers per app — and are put back on wake. Nothing is disabled or
+   suspended, the phone's own core is on a protected list, and each value is only
+   restored if it is still ours.
 
 Every one of those is a switch in the app's **Options** screen. Nothing is
 all-or-nothing.
@@ -78,7 +90,7 @@ would have taken 8 seconds.
 
 ## Install (ResukiSU)
 
-1. Download `Axion-SPSM-v3.0.5-RMX3430.zip` from
+1. Download the newest `Axion-SPSM-vX.Y-RMX3430.zip` from
    [Releases](https://github.com/Rocker14427c/AXION-BS/releases).
 2. **ResukiSU → Modules → Install from storage** → zip → **Reboot**.
 3. Open **Super Power Saving** → grant root → **Allow**.
@@ -628,6 +640,38 @@ already suspended" — and the exit then left every app suspended. Snapshot
 functions now only read, and what the module suspended is recorded by the apply
 itself, in one place.
 
+## What changed in 3.6.0 — the buttons, Clear all, and the memory that was left running
+
+**The swipe is gone.** v3.5.1 was spent on reading the swipe better, and your log
+settled it: the gesture *did* reach the app on nearly every try (the log lines are
+all there) and the list still did not come up, because on a gesture-navigation
+phone Android takes the bottom edge for its own "go home" mid-swipe and a
+background activity start from a pushed-back app is refused. So the mode now asks
+the phone for **three-button navigation** while it is on:
+
+* **Back** is Back — an app you are in gets the press; on the power-saving home
+  there is nothing behind it.
+* **Home** comes to this mode's home, never the phone's launcher.
+* **Recents** — the phone's own button sends `KEYCODE_APP_SWITCH`, which reaches
+  whatever is on screen first: this mode's screens consume it and open this mode's
+  list, so the launcher's recents screen is never started. From inside an app the
+  daemon watches the phone's event log and hands that screen over the moment it is
+  named.
+* Your navigation setting is journalled and put back on exit. A phone that refuses
+  the write keeps its own navigation, and this mode's screens then draw their own
+  three buttons rather than leaving no way into recents at all.
+
+**Clear all** in the recents list closes every task on it and stops the frozen
+background in the same press, then reads the phone's task list back so the count it
+shows is true.
+
+**The memory** — 649 processes and 47 MB free in your report — is addressed twice:
+apps outside your six are stopped outright and made idle at mode-on and at every
+screen-off (`sweep_bg`), and the phone's own background work is restricted per
+package while asleep, with the bucket and app-op recorded and put back on wake
+(`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
+its clients.
+
 ## Measuring it
 
 Claims about battery life are worth nothing unmeasured, so the daemon measures
@@ -680,6 +724,8 @@ sh /data/adb/spsm/scripts/engine.sh verify       # is anything still changed?
 sh /data/adb/spsm/scripts/engine.sh toggle       # on / off
 sh /data/adb/spsm/scripts/engine.sh set deep_doze 1
 sh /data/adb/spsm/scripts/engine.sh deactivate   # full revert
+sh /data/adb/spsm/scripts/engine.sh clear-all   # close everything, stop the frozen apps
+sh /data/adb/spsm/scripts/engine.sh recents-guard "<one line of logcat -b events>"
 ```
 
 Log: `/data/adb/spsm/spsm.log`. Journal: `/data/adb/spsm/journal/`.

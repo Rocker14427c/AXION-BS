@@ -469,6 +469,41 @@ dprop() {
 }
 has() { command -v "$1" >/dev/null 2>&1; }
 
+# ------------------------------------------------------------------ memory
+# Free memory, in kilobytes, straight from the kernel: the number the background
+# sweep reports before and after it stops the frozen apps. One redirection and a
+# read - no process is spawned to look at one number, which matters because this
+# runs on a power-saving path.
+mem_available() {
+  while read -r _k _v _u; do
+    case "$_k" in MemAvailable:) printf '%s' "$_v"; return ;; esac
+  done < /proc/meminfo
+  printf '0'
+}
+
+# Kilobytes as something a log line can carry.
+mem_words() { # mem_words <kb>
+  _kb=${1:-0}
+  case "$_kb" in ''|*[!0-9]*) printf '?'; return ;; esac
+  if [ "$_kb" -ge 1048576 ]; then
+    awk -v k="$_kb" 'BEGIN { printf "%.1fG", k / 1048576 }'
+  else
+    awk -v k="$_kb" 'BEGIN { printf "%.0fM", k / 1024 }'
+  fi
+}
+
+# The packages with a process running right now, taken from the kernel's own
+# process list. An app's process is named after its package, sometimes with a
+# ":suffix" for a private service.
+#
+# This is the device data the ROM-background option works from: nothing is
+# restricted because it appears on a list written somewhere else - only what is
+# actually running on THIS phone is looked at.
+running_packages() {
+  has ps || return 0
+  ps -A -o NAME 2>/dev/null | sed 's/:.*//' | grep '[a-z]' | sort -u
+}
+
 # ------------------------------------------------------------------ screen
 BL_PATH=/sys/class/leds/lcd-backlight/brightness
 

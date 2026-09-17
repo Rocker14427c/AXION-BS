@@ -20,6 +20,14 @@
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/lib.sh"
+# The daemon is where the phone's own recents screen is watched for (the option
+# list is needed to know whether three-button navigation was asked for, and the
+# recents list to hand that screen over), so it reads the same three files the
+# engine does.
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/knobs.sh"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/recents.sh"
 
 # The pid file is written here rather than by the caller: the daemon may be
 # started through setsid, in which case the caller's $! is not the process that
@@ -86,6 +94,44 @@ drain_report() { # drain_report - say what the sleep cost
 poked=0
 trap 'poked=1' USR1
 log "daemon start (pid $$)"
+
+# The Recents button, while the mode is on.
+#
+# With three-button navigation the Recents button is the phone's, and on this ROM
+# it opens the launcher's own recents screen. That screen is watched for on the
+# phone's own event log - the events buffer only, a trickle rather than the
+# firehose of the main log buffer, because this runs on a phone whose whole point
+# is not spending power - and every line that names it is handed to recents_guard,
+# which opens this mode's list and takes the phone's screen down.
+#
+# The watcher is a child of this process: it is killed on the way out, and it
+# also stops of its own accord the moment the mode is off (it checks the active
+# flag on every line).
+watch_recents() {
+  has logcat || return 0
+  log "recents: watching the phone's event log for its own recents screen"
+  logcat -b events -v brief 2>/dev/null | while read -r _l; do
+    [ -f "$ACTIVE" ] || break
+    case "$_l" in *Recents*) ;; *) continue ;; esac
+    recents_guard "$_l"
+  done
+}
+
+WATCH_PID=""
+if knob_enabled nav_buttons "$(knob_default nav_buttons)"; then
+  watch_recents &
+  WATCH_PID=$!
+fi
+
+daemon_exit() {
+  [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
+  return 0
+}
+# TERM is how this loop is stopped when the mode is switched off, and a shell
+# that traps TERM carries on running unless the handler says otherwise - so this
+# one exits after it has taken the watcher with it.
+trap 'daemon_exit' EXIT
+trap 'daemon_exit; exit 0' TERM INT
 
 # A mode that saves nothing and a mode that is not running look identical from
 # the outside, which is a bad way to find out that a daemon died. Two things

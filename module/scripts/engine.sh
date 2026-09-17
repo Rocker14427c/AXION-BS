@@ -365,6 +365,11 @@ do_screen_off() {
   [ -f "$ACTIVE" ] || { lock_release; return 0; }
   log "screen off -> deep phase"
   phase_deep apply
+  # The deep knobs hold the phone down; this is the part that gives the memory
+  # back, every time the screen goes off.
+  if knob_enabled sweep_bg "$(knob_default sweep_bg)"; then
+    sweep_background "screen off"
+  fi
   # Written down here, while the caps are in place: by the time anyone looks at
   # the phone the screen is on again and everything is deliberately back to
   # normal, so this line is the only honest record of what the idle state was.
@@ -384,7 +389,7 @@ DEEP_FAST="cpu_offline_big gov_powersave cpu_cap gpu_cap ged_boost_off deep_doze
 # state the phone was already in. The lock and the screen-off path guarantee that
 # nothing else is running when this is decided; releasing the deep phase clears
 # the report that this list is judged by, so a real wake always re-applies them.
-DEEP_ONCE="app_restrict deep_doze"
+DEEP_ONCE="app_restrict rom_bg_off deep_doze"
 
 # The deep knobs that are about speed and heat rather than about sleeping: the
 # CPU and GPU ceilings, the offline big cores, the boost switches. These are the
@@ -802,7 +807,16 @@ case "$CMD" in
   probe)      do_probe ;;
   allow)      do_allow ;;
   recents)        do_recents ;;
-  gesture)        log "gesture: the recents list was opened by ${2:-unknown}" ;;
+  clear-all)      do_clear_all ;;
+  # One line of the phone's event log, offered to the recents guard. The daemon
+  # feeds it every line it sees; this form exists so the decision can be tested,
+  # and run by hand, without waiting for the phone to open its own recents.
+  recents-guard)  recents_guard "$2" ;;
+  # Written by the app whenever something opens the recents list: the button on
+  # the home screen, the phone's own Recents key, or a MAIN/HOME intent. The
+  # list itself logs what it found, so a press that opens nothing leaves a line
+  # that says the press arrived and a list that never answered.
+  recents-opened) log "recents: the list was opened by ${2:-unknown}" ;;
   recents-switch) recents_switch "$2" "$3" ;;
   recents-remove) recents_remove "$2" "$3" ;;
   version)    echo "scripts=$(scripts_stamp) module=$(spsm_version) code=$SPSM_CODE_VERSION" ;;
@@ -813,6 +827,6 @@ case "$CMD" in
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|gesture <how>|status|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|recents-guard <line>|status|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac

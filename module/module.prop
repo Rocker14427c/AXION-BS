@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.5.1
-versionCode=51
+version=v3.6.0
+versionCode=52
 author=Axion SPSM
-description=v3.5.1 the swipe opens the recents list (read while the finger moves, because this phone's gesture navigation never lets a bottom-edge swipe finish), the power-save governor and its frequency ceilings now decided per cluster - this phone's big cluster was being left out - and the launcher's app list refreshed once on the way out so its drawer is not left grey. RMX3430.
+description=v3.6.0 the swipe is gone: the phone runs on three buttons while the mode is on, so Back is Back, Home is this home and the Recents button opens this mode's own list - and that list has Clear all, which closes every open task and stops the frozen background in one press. Apps outside your six are stopped outright when the screen goes off so their memory comes back, and the ROM's own background work is restricted per package while asleep and put back on wake. RMX3430.

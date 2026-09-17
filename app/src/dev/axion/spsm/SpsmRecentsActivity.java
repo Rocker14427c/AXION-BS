@@ -13,6 +13,7 @@ import android.widget.BaseAdapter;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -82,6 +83,13 @@ public class SpsmRecentsActivity extends Activity {
         if (close != null) close.setOnClickListener(v -> finish());
         View home = findViewById(R.id.btn_home);
         if (home != null) home.setOnClickListener(v -> finish());
+        View clear = findViewById(R.id.btn_clear_all);
+        if (clear != null) clear.setOnClickListener(v -> clearAll());
+        // Back and Home both leave this list; Recents is where we already are.
+        // Wired here rather than in the layout so that a build of this screen
+        // without the bar (or on a phone showing its own three buttons) is not a
+        // screen with dead controls.
+        NavBar.wire(this, v -> finish(), v -> finish(), v -> load());
         adapter = new Adapter();
         try {
             list.setAdapter(adapter);
@@ -100,6 +108,7 @@ public class SpsmRecentsActivity extends Activity {
         super.onResume();
         visible = true;
         openedAt = SystemClock.uptimeMillis();
+        NavBar.refresh(this);
     }
 
     @Override
@@ -123,6 +132,77 @@ public class SpsmRecentsActivity extends Activity {
     @Override
     public void onBackPressed() {
         finish();
+    }
+
+    /**
+     * The phone's own Recents button, pressed while this list is already up.
+     *
+     * <p>The key is delivered to the focused window first, and that window is
+     * this list - so consuming it is all that is needed for the press to mean
+     * "you are already there" instead of opening the launcher's recents screen
+     * over the top of this one.
+     */
+    @Override
+    public boolean dispatchKeyEvent(android.view.KeyEvent ev) {
+        try {
+            if (ev != null && ev.getKeyCode() == android.view.KeyEvent.KEYCODE_APP_SWITCH) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return super.dispatchKeyEvent(ev);
+    }
+
+    /**
+     * Clear all: everything this list is showing, closed at once.
+     *
+     * <p>The button goes flat while it runs and the module reports what actually
+     * happened - "asked to close 4, 3 gone, 1 still listed" - rather than an
+     * optimistic message. A task that would not close is named by the module in
+     * the log, and the count that comes back is the phone's own task list read
+     * again, not a number this screen made up.
+     */
+    private void clearAll() {
+        final View clear = findViewById(R.id.btn_clear_all);
+        try {
+            if (clear != null) {
+                clear.setEnabled(false);
+                clear.setAlpha(0.4f);
+            }
+            working.setVisibility(View.VISIBLE);
+            empty.setVisibility(View.GONE);
+        } catch (Throwable ignored) {
+        }
+        new Thread(() -> {
+            String out = Root.exec("sh " + Root.DIR + "/scripts/engine.sh clear-all 2>/dev/null");
+            final String gone = fieldOf(out, "gone");
+            final String left = fieldOf(out, "left");
+            runOnUiThread(() -> {
+                try {
+                    if (clear != null) {
+                        clear.setEnabled(true);
+                        clear.setAlpha(1f);
+                    }
+                    Toast.makeText(this, getString(R.string.clear_all_done, gone, left),
+                            Toast.LENGTH_SHORT).show();
+                } catch (Throwable ignored) {
+                }
+                load();
+            });
+        }).start();
+    }
+
+    /** "gone=3" out of the module's one-line report, or "?" if it did not say. */
+    private static String fieldOf(String out, String key) {
+        if (out == null) return "?";
+        for (String part : out.split("\\s+")) {
+            int eq = part.indexOf('=');
+            if (eq > 0 && part.substring(0, eq).equals(key)) {
+                String v = part.substring(eq + 1);
+                return v.isEmpty() ? "?" : v;
+            }
+        }
+        return "?";
     }
 
     /** Reads the task list once, through the module, off the UI thread. */

@@ -811,6 +811,24 @@ apply_gov_powersave() {
   log "governor: power-save on $_took of $_seen cluster(s)"
   [ "$_took" = 0 ] && { log "governor: this phone did not accept the power-save governor"; return 2; }
   [ "$_took" = "$_seen" ] || log "governor: the other $((_seen - _took)) cluster(s) keep the frequency ceiling"
+  # WHY a cluster refused is worth one line, because the answer decides what to
+  # try next and this phone has now refused the same cluster twice. Two things
+  # are asked, both read-only: what governors the kernel says it offers at all,
+  # and whether MediaTek's own Low Power mode (a separate option, and one this
+  # mode turns on by default) is engaged - a vendor power mode is exactly the
+  # kind of thing that pins a cluster's governor.
+  if [ "$_took" != "$_seen" ] && [ "$_seen" != 0 ]; then
+    for _f in $(gov_paths); do
+      [ "$(rd "$_f")" = powersave ] && continue
+      _av=$(rd "${_f%/*}/scaling_available_governors")
+      _node=${_f%/*}; _node=${_node%/*}; _node=${_node##*/}
+      [ -n "$_av" ] && log "governor: $_node offers only: $_av"
+      if [ "$(pwr_mode_now)" = 1 ]; then
+        log "governor: MediaTek's Low Power mode is on and may be what holds $_node; switching that option off lets the governor try instead"
+      fi
+      break
+    done
+  fi
   return 0
 }
 restore_gov_powersave() { restore_kv "$1" "$2"; }
@@ -1643,6 +1661,228 @@ snapshot_sync_off() { snap_kv @global:auto_sync; }
 apply_sync_off() { apply_kv "@global:auto_sync=0"; }
 restore_sync_off() { restore_kv "$1" "$2"; }
 
+# ============================================================ Navigation
+
+# The owner's instruction, verbatim: "better to completely remove the swipe to
+# open recents and it's better if you shift the gesture mode to 3-button
+# navigation mode, such that you have easy to implement back will back, home
+# button will take to the home of spsm and recent button will open recents".
+#
+# The swipe is gone from the app. This knob is the other half: while the mode is
+# on, the phone itself uses three-button navigation, so there are real buttons -
+# Back is Back, Home lands on this mode's home (it is the home while the mode is
+# on), and Recents opens this mode's own list. The phone's own setting is
+# journalled and put back on exit like every other value.
+#
+# Three-button navigation also removes the conflict that made the swipe
+# unreliable in the first place: on a gesture-navigation phone the bottom edge
+# belongs to Android, which takes the touch away from whatever is under it
+# mid-swipe. With buttons, nothing takes anything.
+meta_nav_buttons() {
+  echo "System|Three-button navigation|While the mode is on, the phone uses three-button navigation: Back, Home and Recents are real buttons at the bottom of every screen. Back is Back, Home comes back to this mode's home, and Recents opens this mode's own list. Your own navigation setting comes back when you switch the mode off.|1|session|core"
+}
+snapshot_nav_buttons() { snap_kv @secure:navigation_mode; }
+apply_nav_buttons() {
+  _was=$(sget secure navigation_mode)
+  case "$_was" in
+    '') log "nav: this phone will not say which navigation it uses, so it is left alone"; return 2 ;;
+    0)  log "nav: the phone already uses three-button navigation" ; return 0 ;;
+  esac
+  sput secure navigation_mode 0
+  # Read back, like every other write in this mode: a settings write this phone
+  # accepted and ignored is not a change.
+  _i=0
+  while [ "$_i" -lt 6 ]; do
+    [ "$(sget secure navigation_mode)" = 0 ] && break
+    sleep 0.4 2>/dev/null || sleep 1
+    _i=$((_i + 1))
+  done
+  if [ "$(sget secure navigation_mode)" = 0 ]; then
+    log "nav: three-button navigation is on (was $_was) - Back is Back, Home is this home, Recents is this mode's list"
+    return 0
+  fi
+  # Did not take. Put the phone's own value back explicitly rather than leaving a
+  # change behind that the journal has already written off as undone: a write that
+  # WAS accepted with a read-back that lagged would otherwise leave the phone in
+  # three-button navigation with nothing recorded to undo it.
+  if [ "$_was" = null ]; then sdel secure navigation_mode; else sput secure navigation_mode "$_was"; fi
+  log "nav: this phone did not take three-button navigation (still $_was); this mode's screens draw their own buttons instead"
+  return 2
+}
+restore_nav_buttons() { restore_kv "$1" "$2"; }
+
+# ============================================================ Memory
+
+# The owner's report, with numbers: the mode on, 649 processes, 3.78G of 3.83G
+# used, 47M free - and a chat app alone holding 490M.
+#
+# Suspending an app stops it being *started*; it does not give its memory back.
+# Stopping it does. Three levers, all of them the phone's own:
+#
+#   am force-stop <pkg>     stop the app (and its processes)
+#   am kill-all             stop everything the phone itself calls background
+#   am make-uid-idle <pkg>  tell ActivityManager the app is idle now, so it
+#                           releases what it is holding for it
+#
+# Nothing here changes a setting, so there is nothing to put back on exit: an
+# app that was stopped is simply an app that starts again when it is next
+# opened. Every package it touches is one this session already suspended.
+sweep_background() { # sweep_background <why>
+  _why=${1:-on}
+  _before=$(mem_available)
+  _n=0
+  if [ -n "$SPSM_ROOT" ]; then
+    # A fake phone has no processes to stop; the test reads the calls instead.
+    :
+  fi
+  if [ -f "$BLOCKED_BY_US" ]; then
+    while read -r _p; do
+      [ -n "$_p" ] || continue
+      _n=$((_n + 1))
+      (
+        am force-stop "$_p" >/dev/null 2>&1
+        # A suspended app cannot have been started by the user, so telling the
+        # phone it is idle is a statement of fact.
+        am make-uid-idle "$_p" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_p" >/dev/null 2>&1
+      ) &
+    done < "$BLOCKED_BY_US"
+    wait
+  fi
+  has am && am kill-all >/dev/null 2>&1
+  _after=$(mem_available)
+  log "background sweep ($_why): $_n frozen app(s) stopped, free memory $(mem_words "$_before") -> $(mem_words "$_after")"
+}
+
+meta_sweep_bg() {
+  echo "Memory|Hand back background memory|Apps outside your six slots are stopped outright and their memory released - suspending an app stops it starting, it does not give back the memory it already holds. Runs when the mode is switched on, and again every time the screen goes off.|1|session|battery"
+}
+snapshot_sweep_bg() { :; }
+apply_sweep_bg() { sweep_background "mode on"; }
+restore_sweep_bg() { :; }
+
+# The ROM's own background work.
+#
+# The owner's question: "Axion rom put their components all around even in
+# system server (a very large process). Can we do something for this."
+#
+# system_server itself cannot be trimmed - it is the phone's Android, and every
+# app is a client of it. What CAN be done is to take away its clients: a system
+# package that is working in the background is exactly what keeps Android busy.
+#
+# The lever is the one Settings offers per app - "Restrict background" - applied
+# per package, only while the screen is off, and put back on wake:
+#   * the standby bucket moves to restricted (jobs and network deferred)
+#   * RUN_ANY_IN_BACKGROUND is denied (no background running)
+#   * make-uid-idle puts it to sleep now
+#
+# Nothing is disabled and nothing is suspended: every one of these packages still
+# works the moment it is opened, and no package is touched because it appears on
+# a list written somewhere else - the candidates are read off THIS phone, from
+# the processes that are running at the moment the screen goes off.
+ROM_BG_CORE="com.android.systemui com.android.phone com.android.server.telecom
+com.android.providers.telephony com.android.providers.contacts com.android.providers.media
+com.android.providers.media.module com.android.providers.settings com.android.providers.downloads
+com.android.settings com.android.shell com.android.permissioncontroller com.android.keychain
+com.android.se com.android.bluetooth com.android.nfc com.android.wifi com.android.networkstack
+com.android.networkstack.tethering com.android.tethering com.android.mtp com.android.location.fused
+com.android.deskclock com.android.launcher3 com.android.webview com.android.cellbroadcastreceiver
+com.android.emergency com.android.mms com.android.dialer"
+
+rom_bg_core() { printf '%s\n' $ROM_BG_CORE; }
+
+rom_bg_candidates() {
+  _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') $(rom_bg_core | tr '\n' ' ') "
+  _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
+  _sys=$(pm list packages -s 2>/dev/null | sed 's/^package://' | sort -u)
+  for _p in $(running_packages); do
+    [ -n "$_p" ] || continue
+    case "$_keep" in *" $_p "*) continue ;; esac
+    printf '%s\n' "$_sys" | grep -qxF "$_p" || continue
+    printf '%s\n' "$_exempt" | grep -qxF "$_p" && continue
+    printf '%s\n' "$_p"
+  done
+}
+
+meta_rom_bg_off() {
+  echo "Apps|Restrict the ROM's background work|The phone's own apps and services that are working in the background while you are not using them are restricted while the screen is off - the same switch Settings offers per app, per package. Nothing is disabled or suspended: every one of them still works the moment you open it, and each is put back on wake.|1|deep|battery"
+}
+# Same shape as app_restrict: the snapshot is the set of packages we manage, so a
+# set that still matches means the per-package values in the sub-journal are
+# still ours.
+snapshot_rom_bg_off() {
+  printf '%s\n' "$(rom_bg_candidates | tr '\n' ' ')"
+}
+apply_rom_bg_off() {
+  _bucket=$(cfg bucket_level restricted)
+  case "$_bucket" in restricted|rare|frequent) ;; *) _bucket=restricted ;; esac
+  _list="$ORIG_DIR/rom_bg.tsv"
+  # Re-applied on every screen-off in the same idle period; the record of what a
+  # package looked like BEFORE we touched it must be written once, or the exit
+  # would restore our own value as if it were the user's.
+  [ -f "$_list" ] || : > "$_list"
+  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
+  _d=$SPSM_DIR/.tmp
+  mkdir -p "$_d" 2>/dev/null
+  _r="$_d/rombg.$$"
+  : > "$_r"
+  rom_bg_candidates > "$_d/rombg.pkgs.$$" 2>/dev/null
+  _names=$(tr '\n' ' ' < "$_d/rombg.pkgs.$$" 2>/dev/null)
+  _n=0
+  while read -r _pkg; do
+    [ -n "$_pkg" ] || continue
+    _n=$((_n + 1))
+    (
+      _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+      [ -n "$_ob" ] || _ob=-
+      _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
+            | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
+      [ -n "$_oo" ] || _oo=-
+      [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
+      printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
+      [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+      [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
+      am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
+    ) &
+  done < "$_d/rombg.pkgs.$$"
+  wait
+  rm -f "$_d/rombg.pkgs.$$"
+  sort -u "$_r" 2>/dev/null | while IFS="$TAB" read -r _pkg _ob _oo _b; do
+    [ -n "$_pkg" ] || continue
+    case "$_known" in
+      *" $_pkg "*) ;;
+      *) printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_b" "$_oo" "deny" >> "$_list" ;;
+    esac
+  done
+  rm -f "$_r"
+  if [ "$_n" = 0 ]; then
+    log "rom background: nothing of the phone's own was running in the background"
+  else
+    log "rom background: $_n of the phone's own package(s) restricted for this idle period: $_names"
+  fi
+}
+restore_rom_bg_off() {
+  _list="$ORIG_DIR/rom_bg.tsv"
+  [ -f "$_list" ] || return 0
+  while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
+    [ -n "$_pkg" ] || continue
+    (
+      if [ "$_ob" != "-" ]; then
+        _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+        # Only undo our own change: a value something else has moved since is a
+        # newer decision than ours.
+        [ "$_now" = "$_nb" ] && am set-standby-bucket "$_pkg" "$_ob" >/dev/null 2>&1
+      fi
+      if [ "$_oo" != "-" ]; then
+        _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
+               | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
+        [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
+      fi
+    ) &
+  done < "$_list"
+  wait
+  rm -f "$_list"
+}
+
 # ============================================================ registry
 # Order matters: cheapest and most visible first, and the deep system-wide
 # switches last, so that a failure part-way through never leaves the phone
@@ -1650,6 +1890,7 @@ restore_sync_off() { restore_kv "$1" "$2"; }
 
 KNOBS="
 home_swap
+nav_buttons
 dt2w_off
 aod_off
 brightness_cap
@@ -1659,6 +1900,7 @@ haptic_off
 rotate_lock
 cap_always
 block_other_apps
+sweep_bg
 wifi_off
 bt_off
 data_off
@@ -1671,6 +1913,7 @@ gov_powersave
 cpu_cap
 cpu_offline_big
 app_restrict
+rom_bg_off
 freeze_google
 deep_doze
 sync_off
