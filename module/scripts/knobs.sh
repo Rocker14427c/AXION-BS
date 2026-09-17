@@ -688,16 +688,77 @@ set_power_mode() { # set_power_mode <0|1>
 }
 release_power_mode() { set_power_mode 0; }
 
-snapshot_cpu_cap() {
+# ==================================================== the power-save governor
+#
+# The owner's own words: "if you change the governor to powersave then no need to
+# change frequency of cpu cores which may reduce time, because its managed by the
+# powersave governor."
+#
+# He is right, and he proved it on the phone himself, in both directions:
+#   echo powersave > /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+#   echo schedutil > /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+# `powersave` holds every core at the lowest frequency there is, continuously and
+# inside the kernel; a ceiling written by hand says the same thing once, from
+# outside, and costs a blocking write per cluster while the screen is off. So
+# while the screen is off the governor is the lever, and the ceiling is left to
+# it (see apply_cpu_cap).
+meta_gov_powersave() {
+  echo "Processor|Power-save governor while idle|While the screen is off, the kernel's own power-save governor runs the processor at its lowest frequency, instead of this module writing a frequency ceiling by hand. The same saving, held continuously by the kernel, and several fewer writes while the screen is off. Confirmed on this phone: both the switch to power-save and the switch back take effect on every cluster.|1|deep|battery"
+}
+snapshot_gov_powersave() {
   snap_kv /sys/devices/system/cpu/cpufreq/policy0/scaling_governor \
-          /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq \
-          /sys/devices/system/cpu/cpufreq/policy6/scaling_governor \
+          /sys/devices/system/cpu/cpufreq/policy4/scaling_governor \
+          /sys/devices/system/cpu/cpufreq/policy6/scaling_governor
+}
+apply_gov_powersave() {
+  _took=0
+  _seen=0
+  for _p in 0 4 6; do
+    _f=/sys/devices/system/cpu/cpufreq/policy$_p/scaling_governor
+    [ -e "$(rp "$_f")" ] || continue
+    _seen=$((_seen + 1))
+    _cur=$(rd "$_f")
+    case "$_cur" in
+      powersave) _took=$((_took + 1)) ;;
+      '') ;;                     # unreadable: not ours to change
+      *) w powersave "$_f" && _took=$((_took + 1)) ;;
+    esac
+  done
+  log "governor: power-save on $_took of $_seen cluster(s)"
+  [ "$_took" = 0 ] && { log "governor: this phone did not accept the power-save governor"; return 2; }
+  return 0
+}
+restore_gov_powersave() { restore_kv "$1" "$2"; }
+note_gov_powersave() {
+  _g=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)
+  case "$_g" in
+    powersave) printf 'the governor was already power-save\n' ;;
+    '')        printf 'the governor is not readable on this phone\n' ;;
+    *)         printf 'this phone refused the power-save governor, it is still %s\n' "$_g" ;;
+  esac
+}
+
+# Only the frequency ceilings. The governor is its own option (gov_powersave):
+# two knobs recording the same file is how a revert ends up writing the wrong
+# value back, because the second snapshot records the first knob's change as if
+# it were the user's.
+snapshot_cpu_cap() {
+  snap_kv /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq \
           /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
 }
 apply_cpu_cap() {
-  # Cache the top of each cluster and cap below it; never touch scaling_min_freq,
-  # because a high floor plus a powersave governor was exactly what pinned the
-  # little cluster at 500 MHz for the whole session in v2.
+  # When the power-save governor is in charge the ceiling is already a fact: that
+  # governor holds every core at the lowest frequency there is. Writing a ceiling
+  # on top of it is a second, slower way of saying the same thing - and on this
+  # phone every extra write is another thing that can take seconds. So the ceiling
+  # is left to the governor while it is in charge, and only written when something
+  # else runs the frequency (schedutil, which is what the phone uses whenever it
+  # is actually being used).
+  _g=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)
+  if [ "$_g" = powersave ]; then
+    log "cpu_cap: the power-save governor holds the frequency - no ceiling written"
+    return 0
+  fi
   for _p in 0 6; do
     _d=/sys/devices/system/cpu/cpufreq/policy$_p
     [ -d "$(rp "$_d")" ] || continue
@@ -713,6 +774,7 @@ apply_cpu_cap() {
     fi
     w "$_target" "$_d/scaling_max_freq"
   done
+
   # MediaTek's Low Power mode is deliberately NOT set here any more.
   #
   # v3.1.0 recorded the value in the form the node is written with, which fixed
@@ -917,7 +979,12 @@ component_set() { # component_set <pkg/component> <default|enabled|disabled>
 }
 
 meta_host_recents_off() {
-  echo "Display|Switch the launcher's recents off|The phone's own recents belong to the launcher: swiping up starts it and draws its screen over whatever you were doing. This switches that screen off for as long as the mode is on, and puts its setting back on exit. SPSM's own Recents button is where you switch apps instead.|1|session|core"
+  # Off by default, and this phone's own log is the reason: it does not accept the
+  # switch ("this phone did not accept switching
+  # com.android.launcher3/com.android.quickstep.RecentsActivity off"), so every
+  # activation spent seconds asking for something it then had to undo. The option
+  # stays - other ROMs do accept it - but nothing asks for it by default.
+  echo "Display|Switch the launcher's recents off|The phone's own recents belong to the launcher: swiping up starts it and draws its screen over whatever you were doing. This switches that screen off for as long as the mode is on, and puts its setting back on exit. This phone does not accept the switch (see the log), so it is off by default.|0|session|core"
 }
 snapshot_host_recents_off() {
   _c=$(host_recents_component)
@@ -982,8 +1049,20 @@ snapshot_cpu_offline_big() {
   snap_kv /sys/devices/system/cpu/cpu6/online /sys/devices/system/cpu/cpu7/online
 }
 apply_cpu_offline_big() {
-  w 0 /sys/devices/system/cpu/cpu7/online
-  w 0 /sys/devices/system/cpu/cpu6/online
+  # Only write to a core that is on. Offlining is a blocking request the kernel
+  # finishes when it can, and the v3.4.1 log shows it taking 23s and then 52s on a
+  # phone that was busy at the time - while a core that is already off needs no
+  # request at all. The deep phase runs again on every screen-off, so re-asking
+  # for something that is already true was most of that wait.
+  _did=0
+  for _c in 7 6; do
+    _f=/sys/devices/system/cpu/cpu$_c/online
+    [ -e "$(rp "$_f")" ] || continue
+    [ "$(rd "$_f")" = 0 ] && continue
+    w 0 "$_f" && _did=$((_did + 1))
+  done
+  [ "$_did" = 0 ] && log "cpu_offline_big: the big cores are already off"
+  return 0
 }
 restore_cpu_offline_big() {
   # Faithful restore: whatever the cores were doing before SPSM is what they
@@ -1055,23 +1134,42 @@ apply_app_restrict() {
   # record is written once per idle period; releasing the phase clears it.
   [ -f "$_list" ] || : > "$_list"
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
-  managed_packages | while read -r _pkg; do
+  # Each app costs four commands (two reads, two writes) and there are a dozen of
+  # them: one after another that was measured at 86-89 seconds in the v3.4.1 log,
+  # in every single screen-off period. They run together now, and the records are
+  # collected afterwards so the file is built the same way and in the same order
+  # as before.
+  _d=$SPSM_DIR/.tmp
+  mkdir -p "$_d" 2>/dev/null
+  _r="$_d/restrict.$$"
+  : > "$_r"
+  managed_packages > "$_d/restrict.pkgs.$$" 2>/dev/null
+  while read -r _pkg; do
     [ -n "$_pkg" ] || continue
-    _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
-    [ -n "$_ob" ] || _ob=-
-    _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
-          | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
-    [ -n "$_oo" ] || _oo=-
-    [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && continue
-    # Only the first sighting of a package in this idle period is a record of
-    # what it looked like before we touched it.
+    (
+      _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+      [ -n "$_ob" ] || _ob=-
+      _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
+            | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
+      [ -n "$_oo" ] || _oo=-
+      [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
+      printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
+      [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+      [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
+    ) &
+  done < "$_d/restrict.pkgs.$$"
+  wait
+  rm -f "$_d/restrict.pkgs.$$"
+  # One writer, in a stable order. Only the first sighting of a package in this
+  # idle period is a record of what it looked like before we touched it.
+  sort -u "$_r" 2>/dev/null | while IFS="$(printf '\t')" read -r _pkg _ob _oo _b; do
+    [ -n "$_pkg" ] || continue
     case "$_known" in
       *" $_pkg "*) ;;
-      *) printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" "deny" >> "$_list" ;;
+      *) printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_b" "$_oo" "deny" >> "$_list" ;;
     esac
-    [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
-    [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
   done
+  rm -f "$_r"
 }
 restore_app_restrict() {
   _list="$ORIG_DIR/app_restrict.tsv"
@@ -1181,7 +1279,31 @@ snapshot_deep_doze() {
   printf 'deviceidle-force\t%s\n' "${_f:-unknown}"
 }
 apply_deep_doze() {
-  dumpsys deviceidle force-idle deep >/dev/null 2>&1 && touch "$STATE/doze_forced"
+  # `dumpsys deviceidle force-idle deep` does not ask and return: it waits for the
+  # phone to actually reach idle. The v3.4.1 log has it blocking for 245s on one
+  # screen-off and 619s on another, with the rest of the idle sequence queued
+  # behind it - the phone was deep asleep long before the command that asked for
+  # it had finished. So it is issued in the background with a ceiling of its own,
+  # and what the phone did with it is read back rather than assumed.
+  touch "$STATE/doze_forced" 2>/dev/null
+  ( has dumpsys && timeout 30 dumpsys deviceidle force-idle deep >/dev/null 2>&1 ) &
+  _i=0
+  while [ "$_i" -lt 6 ]; do
+    _f=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+    [ "$_f" = true ] && { log "deep sleep: the phone has been told to go idle now"; return 0; }
+    _i=$((_i + 1))
+    sleep 0.5 2>/dev/null || sleep 1
+  done
+  log "deep sleep: asked the phone to go idle now; it enters when it can"
+  return 0
+}
+note_deep_doze() {
+  _f=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+  case "$_f" in
+    true) printf 'the phone is going idle now\n' ;;
+    false) printf 'the phone was asked to go idle; it has not gone yet (it goes when it can)\n' ;;
+    *) printf 'this phone does not report its idle state\n' ;;
+  esac
 }
 restore_deep_doze() {
   # unforce is harmless even if nothing was forced, so it always runs: leaving
@@ -1296,9 +1418,73 @@ deep_report() {
   _g=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)
   _d=no
   [ -f "$STATE/doze_forced" ] && _d=forced
-  printf 'little_max=%s big_max=%s governor=%s doze=%s\n' \
-    "${_c0:--}" "${_c6:--}" "${_g:--}" "$_d" > "$STATE/deep_report" 2>/dev/null
+  # Who is holding the frequency down: the kernel's governor (gov_powersave) or a
+  # ceiling we wrote. Both are the idle limit being in force, and naming which one
+  # it is stops this line reading like a missing cap.
+  _by=ceiling
+  [ "$_g" = powersave ] && _by=governor
+  printf 'little_max=%s big_max=%s governor=%s doze=%s held_by=%s\n' \
+    "${_c0:--}" "${_c6:--}" "${_g:--}" "$_d" "$_by" > "$STATE/deep_report" 2>/dev/null
   log "deep applied: $(cat "$STATE/deep_report" 2>/dev/null)"
+}
+
+# ================================================== honest notes for a knob
+#
+# A knob whose snapshot reads the same before and after is not necessarily a knob
+# that did nothing. Bluetooth and location were already off; the rotation was
+# already locked; policy_control does not exist on this ROM at all. The v3.4.1 log
+# said "no visible change (optional node missing?)" for every one of those, which
+# reads like a fault when it is in fact the phone already being in the wanted
+# state. These functions answer the question the note is really asking: what did
+# this knob find?
+
+note_bt_off() {
+  case "$(sget global bluetooth_on)" in
+    0) printf 'Bluetooth was already off\n' ;;
+    1) printf 'Bluetooth was asked to switch off and still reports on\n' ;;
+    *) printf 'this phone does not report its Bluetooth state\n' ;;
+  esac
+}
+
+note_location_off() {
+  case "$(location_enabled_now)" in
+    false) printf 'location was already off\n' ;;
+    true)  printf 'location can be switched off but this phone still reports it on\n' ;;
+    *)     printf 'location was switched off through the settings that could be read\n' ;;
+  esac
+}
+
+note_rotate_lock() {
+  case "$(sget system accelerometer_rotation)" in
+    0) printf 'screen rotation was already locked\n' ;;
+    1) printf 'screen rotation is locked again through the settings\n' ;;
+    *) printf 'this phone does not report the rotation setting\n' ;;
+  esac
+}
+
+note_statusbar_on() {
+  _v=$(sget global policy_control 2>/dev/null)
+  case "$_v" in
+    ''|null) printf 'this ROM sets no policy_control, so the status bar was never hidden by one\n' ;;
+    *) printf 'policy_control is now %s\n' "$_v" ;;
+  esac
+}
+
+note_app_restrict() {
+  _n=0
+  _see=0
+  for _p in $(managed_packages 2>/dev/null); do
+    _see=$((_see + 1))
+    [ "$_see" -gt 3 ] && break
+    case "$(am get-standby-bucket "$_p" 2>/dev/null | tr -d '\r')" in
+      restricted|rare|frequent) _n=$((_n + 1)) ;;
+    esac
+  done
+  if [ "$_n" -gt 0 ]; then
+    printf 'the background of the apps outside your six is restricted (checked %s of them)\n' "$_n"
+  else
+    printf 'this phone did not report the restrictions back; they were written but cannot be confirmed\n'
+  fi
 }
 
 meta_data_off() {
@@ -1376,6 +1562,7 @@ scan_always_off
 location_off
 ged_boost_off
 gpu_cap
+gov_powersave
 cpu_cap
 cpu_offline_big
 app_restrict

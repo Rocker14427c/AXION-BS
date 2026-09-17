@@ -431,10 +431,13 @@ knob_enabled() { # knob_enabled id default
 # and a knob marked "failed" is a knob the revert does NOT undo. That is how a
 # half-applied power tweak survives turning the mode off.
 w() {
+  # Returns what the write did. A caller that counts successes - the power-save
+  # governor counts clusters that took it - must not be told a read-only file was
+  # written. A path that does not exist is still "nothing to do", not a failure:
+  # an optional node that this phone simply does not have is not an error.
   _p=$(rp "$2")
   [ -n "$2" ] && [ -e "$_p" ] || return 0
   printf '%s\n' "$1" > "$_p" 2>/dev/null
-  return 0
 }
 
 rd() { # rd path -> value or empty

@@ -9,9 +9,11 @@
     pill (state is obvious from the screen you are looking at), and any colour
     other than white and grey.
 
-    The three controls are icon buttons rather than words: Exit on the left,
-    Recents and Edit on the right. Every one of them is bound in
-    SpsmHomeActivity - nothing in this file is decoration without a job.
+    Two controls, both icon buttons rather than words: Exit on the left, Edit on
+    the right. Every one of them is bound in SpsmHomeActivity - nothing in this
+    file is decoration without a job. Recents is not a button any more: a swipe up
+    from the bottom of the screen is the way in, which is also the gesture that
+    brings this screen up from inside an app.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/home_root"
@@ -52,24 +54,6 @@
             android:src="@drawable/ic_edit"
             android:tint="@color/text_secondary" />
 
-        <!--
-            A visible way into SPSM's own recents. The gesture alone is not
-            enough: swiping up from the bottom edge belongs to Android's own
-            navigation, which opens the launcher's recents before this activity
-            is ever asked.
-        -->
-        <ImageButton
-            android:id="@+id/btn_recents"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_gravity="end|center_vertical"
-            android:layout_marginEnd="48dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/recents_button"
-            android:padding="13dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_recents"
-            android:tint="@color/text_secondary" />
     </FrameLayout>
 
     <TextView
@@ -99,17 +83,9 @@
         android:textColor="@color/white"
         android:textSize="76sp" />
 
-    <TextClock
-        android:id="@+id/date"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:format12Hour="EEE, d MMM"
-        android:format24Hour="EEE, d MMM"
-        android:gravity="center"
-        android:textColor="@color/text_secondary"
-        android:textSize="13sp" />
-
+    <!-- Everything under the clock is pushed to the bottom of the screen: the
+         six apps sit just above the time they have left, exactly as the owner
+         asked, and the clock keeps the quiet black space above it. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -148,33 +124,17 @@
         </LinearLayout>
     </LinearLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="0.55"
-        android:orientation="vertical" />
-
-    <!-- The battery reading and its estimate, near the bottom, over a lot of
-         empty black. The value and the wording are unchanged. -->
-    <TextView
-        android:id="@+id/battery"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:fontFamily="sans-serif-light"
-        android:gravity="center"
-        android:includeFontPadding="false"
-        android:text="100%"
-        android:textColor="@color/white"
-        android:textSize="40sp" />
-
+    <!-- The time left, directly under the apps. The percentage that used to sit
+         above it in 40sp is gone: "27% -> 2 h 10 m" says the same thing twice,
+         and the estimate is the half of it that is worth reading. -->
     <TextView
         android:id="@+id/remaining"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginTop="18dp"
         android:gravity="center"
         android:textColor="@color/text_secondary"
-        android:textSize="13sp" />
+        android:textSize="17sp" />
 
     <TextView
         android:id="@+id/home_hint"
@@ -185,7 +145,7 @@
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:paddingBottom="16dp"
-        android:text="@string/swipe_for_recents"
+        android:text="@string/swipe_up_recents"
         android:textColor="@color/text_hint"
         android:textSize="10sp" />
 </LinearLayout>

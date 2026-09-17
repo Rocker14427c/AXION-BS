@@ -21,7 +21,6 @@ import android.widget.Toast;
 
 public class SpsmHomeActivity extends Activity {
     private final Handler handler = new Handler();
-    private TextView battery;
     private TextView remaining;
     private View editButton;
     /** While this is true a tap on a filled slot takes that app out of it. */
@@ -54,7 +53,6 @@ public class SpsmHomeActivity extends Activity {
             setContentView(fallbackHome());
         }
         styleSystemBars();
-        battery = findViewById(R.id.battery);
         remaining = findViewById(R.id.remaining);
         View exit = findViewById(R.id.btn_exit);
         if (exit != null) exit.setOnClickListener(v -> confirmExit());
@@ -63,8 +61,6 @@ public class SpsmHomeActivity extends Activity {
         // is the SYSTEM's gesture on this phone - Android takes it for its own
         // navigation and opens the launcher's recents before this activity is
         // ever asked, which is the launcher being started all over again.
-        View recentsBtn = findViewById(R.id.btn_recents);
-        if (recentsBtn != null) recentsBtn.setOnClickListener(v -> openRecents());
         // Editing the six apps from the home screen itself: the pencil turns the
         // slots into something you can take an app out of, and turns into a tick
         // while it is on. Taking an app out empties the slot, so the "+" is there
@@ -72,13 +68,6 @@ public class SpsmHomeActivity extends Activity {
         // it (the tick, or leaving the screen, ends it).
         editButton = findViewById(R.id.btn_edit);
         if (editButton != null) editButton.setOnClickListener(v -> setEditing(!editing));
-        View root = findViewById(R.id.home_root);
-        if (root != null) {
-            // Only the space the buttons do not use: the six slots take their own
-            // long presses first (Apps.bindSlot returns true), so holding an app
-            // still means "change this app".
-            root.setOnLongClickListener(v -> { openRecents(); return true; });
-        }
         Apps.fillDefaults(this);
         try {
             bindSlots();
@@ -193,18 +182,18 @@ public class SpsmHomeActivity extends Activity {
     private float touchStartX;
 
     /**
-     * A swipe that reaches this activity opens SPSM's own recents.
+     * A swipe up from the bottom of SPSM's own screen opens its recents.
      *
-     * <p>The system's recents belong to the launcher, and using them starts the
-     * whole launcher process - which is exactly what this mode can least afford.
-     * The gesture is read here and never consumed, so taps and long presses on
-     * the six slots keep working normally.
+     * <p>This is the owner's instruction: "shift the recents option to only
+     * dragging bottom to up open spsm recents, like how Axion recents opens".
+     * The swipe is read here and never consumed, so taps and long presses on the
+     * six slots keep working exactly as before.
      *
-     * <p>An upward swipe from the bottom of the screen does not reach this
-     * activity at all on this phone: that edge belongs to Android's gesture
-     * navigation, and the system opens the launcher's recents with it. This is
-     * why the Recents button and the long press exist - they are the ways in
-     * that the system cannot take away.
+     * <p>The same gesture from *inside another app* never reaches us - that edge
+     * belongs to the system's gesture navigation - but with this mode's home in
+     * place the system answers it with "go home", and an app being sent home is
+     * delivered here as a MAIN/HOME intent. {@link #onNewIntent} turns that into
+     * the recents screen, so the gesture means the same thing in both places.
      */
     @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
@@ -218,11 +207,12 @@ public class SpsmHomeActivity extends Activity {
                     float dy = touchStartY - ev.getY();
                     float dx = ev.getX() - touchStartX;
                     float need = 60 * getResources().getDisplayMetrics().density;
-                    // Up, left or right - whichever of them the system leaves to
-                    // us. A swipe up from the bottom edge is normally taken by
-                    // gesture navigation, which opens the launcher's recents.
-                    if (dy > need && Math.abs(dx) < dy) openRecents();
-                    else if (Math.abs(dx) > need && Math.abs(dx) > Math.abs(dy)) openRecents();
+                    // An upward swipe, started in the bottom fifth of the screen:
+                    // the same gesture, and the same edge, as the system's own.
+                    float h = getResources().getDisplayMetrics().heightPixels;
+                    if (dy > need && Math.abs(dx) < dy && touchStartY > h * 0.8f) {
+                        openRecents();
+                    }
                     break;
                 default:
                     break;
@@ -232,9 +222,32 @@ public class SpsmHomeActivity extends Activity {
         return super.dispatchTouchEvent(ev);
     }
 
+    /**
+     * "Go home" while this activity exists, which on this phone is what a swipe
+     * up from inside an app becomes.
+     *
+     * <p>Arriving here from somewhere else is the moment the user wants to be
+     * somewhere else - that is what the gesture means on every other Android -
+     * so it opens the recents list, and the six apps are one tap away from it
+     * (the recents screen's own home button). Arriving by pressing Back out of an
+     * app leaves the screen as it was: the apps, which is what Back has always
+     * done here.
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // Only when the list is not already up: it sets the flag while it is
+        // visible, so "go home" from inside the list cannot bounce.
+        if (SpsmRecentsActivity.visible) return;
+        openRecents();
+    }
+
     private void openRecents() {
         try {
-            startActivity(new Intent(this, SpsmRecentsActivity.class));
+            Intent i = new Intent(this, SpsmRecentsActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            startActivity(i);
         } catch (Throwable ignored) {
         }
     }
@@ -410,9 +423,9 @@ public class SpsmHomeActivity extends Activity {
         } else {
             extra = getString(R.string.remaining, estimate(pct));
         }
-        // The way the phone's own power saving screen reads: one big number,
-        // one line under it. No build numbers, no badges.
-        if (battery != null) battery.setText(pct + "%");
+        // One line, and it is the estimate rather than the percentage: how long
+        // the phone has left is the number worth showing, and the two said the
+        // same thing twice.
         if (remaining != null) remaining.setText(extra);
     }
 

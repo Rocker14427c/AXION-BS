@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.4.1
-versionCode=49
+version=v3.5.0
+versionCode=50
 author=Axion SPSM
-description=v3.4.1 journaled apply/revert - every change recorded and restored. Fixes the crash on opening the app (v3.4.0), a faster exit, and the Realme-style home with the launcher's recents switched off while the mode is on. RMX3430.
+description=v3.5.0 journaled apply/revert - every change recorded and restored. Recents by the swipe-up gesture only (no button, no long press), the apps and the time-left at the bottom of the home screen, the kernel's power-save governor for the idle CPU instead of hand-written frequency ceilings, and a screen-off sequence that no longer waits minutes for deep sleep. RMX3430.

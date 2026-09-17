@@ -237,6 +237,30 @@ show_diff() { # show_diff fileA fileB
 # Screen state on the fake device: the backlight node is what screen_state()
 # reads once no marker exists, exactly like the real thing.
 screen_off() { echo 0   > "$ROOT/sys/class/leds/lcd-backlight/brightness"; echo off > "$WORK/stub/screen"; }
+
+# Is the deep phase in force?
+#
+# Two things can hold the processor down while the screen is off, and which one
+# is in charge depends on an option: with gov_powersave on (the shipped default)
+# the kernel's own power-save governor does it and no ceiling is written; with it
+# off, the ceiling is written as it always was. Both are "the idle limits are in
+# place"; the tests below ask this instead of one of the two spellings, so a case
+# cannot pass merely because one mechanism went missing. The mechanism itself is
+# tested directly, twice, in case 70.
+deep_limits_on() {
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor" 2>/dev/null)" = "powersave" ] && return 0
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq" 2>/dev/null)" = "1100000" ] && return 0
+  return 1
+}
+deep_limits_off() {
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor" 2>/dev/null)" != "powersave" ] || return 1
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq" 2>/dev/null)" = "1800000" ] || return 1
+  return 0
+}
+# Did the kernel's governor take over the frequency? (The gov_powersave option.)
+governor_is_powersave() {
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor" 2>/dev/null)" = "powersave" ]
+}
 screen_on()  { echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"; echo on  > "$WORK/stub/screen"; }
 
 enable_knobs() { # enable_knobs id...
@@ -297,6 +321,7 @@ say "4. deep knobs (CPU cap, app buckets) only apply while asleep"
 make_tree; make_stubs; seed_stub_state
 disable_knobs cap_always
 enable_knobs cpu_cap app_restrict
+disable_knobs gov_powersave    # this case is about the ceiling itself
 run_engine activate >/dev/null 2>&1
 MAX0=$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")
 [ "$MAX0" = "1800000" ]; check "screen on: CPU ceiling untouched" $?
@@ -489,6 +514,7 @@ fi
 # in it is marked restored. Booting must not force anything on account of it.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 screen_off
 run_engine activate >/dev/null 2>&1
 run_engine screen-off >/dev/null 2>&1
@@ -513,6 +539,7 @@ fi
 say "14. a boot after a crash does put the phone back"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_offline_big cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 echo 6 > "$ROOT/sys/devices/system/cpu/cpu6/online"; echo 0 > "$ROOT/sys/devices/system/cpu/cpu6/online"
 run_engine activate >/dev/null 2>&1
 # Simulate the power being cut: the journal survives, the revert never ran.
@@ -544,6 +571,10 @@ echo "knob.deep_doze=1" >> "$WORK/spsm/config"
 # timing of the reaction, so the in-use option is off and the cap really is
 # lifted on wake. With it on - the shipped default - the cap stays, by design.
 echo "knob.cap_always=0" >> "$WORK/spsm/config"
+# And the governor option off, for the same reason: with it on (the shipped
+# default) the ceiling is deliberately never written, so there is nothing here
+# to lift on wake and nothing that could go wrong while lifting it.
+echo "knob.gov_powersave=0" >> "$WORK/spsm/config"
 screen_on
 echo 1 > "$WORK/spsm/state/active"
 # Start the daemon exactly the way the engine does.
@@ -563,8 +594,8 @@ while [ $i -lt 16 ] && ! grep -q "screen on -> off" "$WORK/spsm/spsm.log"; do sl
 grep -q "screen on -> off" "$WORK/spsm/spsm.log"
 check "the poke started the screen-off work (${i}x250ms, a poll takes 8s)" $?
 i=0
-while [ $i -lt 80 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1100000" ]; do sleep 0.25; i=$((i + 1)); done
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+while [ $i -lt 80 ] && ! deep_limits_on; do sleep 0.25; i=$((i + 1)); done
+deep_limits_on
 check "and the cap landed" $?
 [ -f "$WORK/spsm/journal/order" ]; check "the knobs were journalled as they applied" $?
 # ...and waking up reverses it just as promptly.
@@ -577,7 +608,7 @@ while [ $i -lt 16 ] && ! grep -qc "screen off -> on" "$WORK/spsm/spsm.log"; do s
 check "the poke started the wake-up work in ${i}x250ms" $?
 i=0
 while [ $i -lt 80 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1800000" ]; do sleep 0.25; i=$((i + 1)); done
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "the cap came off (after ${i} more polls)" $?
 rm -f "$WORK/spsm/state/active"
 kill "$DPID" 2>/dev/null
@@ -627,6 +658,7 @@ say "18. the mode measures its own idle drain"
 make_tree; make_stubs; seed_stub_state
 mkdir -p "$WORK/spsm/state"
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 echo 100 > "$WORK/stub/battery_level"
 screen_on
 echo 1 > "$WORK/spsm/state/active"
@@ -674,10 +706,11 @@ wait "$DPID" 2>/dev/null
 say "19. an exit cannot be undone by a screen-off already in flight"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap app_restrict deep_doze
+disable_knobs gov_powersave    # this case is about the ceiling itself
 run_engine activate >/dev/null 2>&1
 screen_off
 run_engine screen-off >/dev/null 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "the cap is on while asleep" $?
 run_engine deactivate >"$WORK/out.dea19" 2>&1
 check "exit exits 0" $?
@@ -846,17 +879,18 @@ fi
 say "27. re-entering after an unfinished exit still restores the true original"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 screen_off
 run_engine activate >/dev/null 2>&1
 run_engine screen-off >/dev/null 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "the cap is applied" $?
 # The exit was interrupted after it had already marked the mode off: the
 # journal is the only record of what the phone looked like before.
 rm -f "$WORK/spsm/state/active"
 run_engine activate >"$WORK/out.act27" 2>&1
 run_engine deactivate >"$WORK/out.dea27" 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "the original ceiling came back, not the capped one (got $(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq"))" $?
 run_engine verify >"$WORK/out.ver27" 2>&1
 grep -q 'drift=0' "$WORK/out.ver27"; check "no drift" $?
@@ -1000,6 +1034,9 @@ make_tree; make_stubs; seed_stub_state
 mkdir -p "$WORK/spsm/state"
 echo "knob.cpu_cap=1" >> "$WORK/spsm/config"
 echo "knob.cap_always=0" >> "$WORK/spsm/config"
+# Both directions of this case are read from the ceiling itself, so the governor
+# option - which deliberately leaves the ceiling alone - is off here.
+echo "knob.gov_powersave=0" >> "$WORK/spsm/config"
 screen_on
 echo 1 > "$WORK/spsm/state/active"
 SPSM_ROOT="$ROOT" SPSM_DIR="$WORK/spsm" SPSM_STUB="$WORK/stub" PATH="$BIN:$PATH" \
@@ -1010,10 +1047,10 @@ sleep 2
 # the phone where the app's receiver never fires, so the poll has to be enough.
 echo 0 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
 i=0
-while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1100000" ]; do
+while [ $i -lt 24 ] && ! deep_limits_on; do
   sleep 0.25; i=$((i + 1))
 done
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "the cap landed with no app involved (${i}x250ms)" $?
 # And the wake must be just as prompt, in the other direction.
 echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
@@ -1021,7 +1058,7 @@ i=0
 while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1800000" ]; do
   sleep 0.25; i=$((i + 1))
 done
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "waking released the cap just as promptly (${i}x250ms)" $?
 rm -f "$WORK/spsm/state/active"
 kill "$DPID" 2>/dev/null
@@ -1254,6 +1291,7 @@ run_engine deactivate >/dev/null 2>&1
 say "40. the idle state is written down where it can be read afterwards"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap deep_doze
+disable_knobs gov_powersave    # this case is about the ceiling itself
 screen_on
 run_engine activate >/dev/null 2>&1
 screen_off
@@ -1278,6 +1316,7 @@ make_tree; make_stubs; seed_stub_state
 mkdir -p "$WORK/spsm/state"
 echo "knob.cpu_cap=1" >> "$WORK/spsm/config"
 echo "knob.cap_always=0" >> "$WORK/spsm/config"   # the wake must release the caps
+echo "knob.gov_powersave=0" >> "$WORK/spsm/config" # ...and the caps themselves are what is watched here
 # Heartbeats every two ticks, so the suite does not have to wait three minutes
 # for one.
 echo "heartbeat_ticks=2" >> "$WORK/spsm/config"
@@ -1293,27 +1332,35 @@ DPID=$!
 sleep 2
 echo 0 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
 i=0
-while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1100000" ]; do
+while [ $i -lt 24 ] && ! deep_limits_on; do
   sleep 0.25; i=$((i + 1))
 done
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "the deep phase engages despite the stale \"on\" marker (${i}x250ms)" $?
 grep -q "screen on -> off (panel=0 via panel)" "$WORK/spsm/spsm.log"
 check "and the log names the panel as what decided it" $?
 # The heartbeat proves the daemon is alive and watching while nothing else is
 # happening - the difference between "doing nothing" and "not running".
+# Wait for the heartbeat that says the whole sentence - the screen off, the deep
+# phase applied, the ceiling in it and a tick count - rather than for the first
+# line that happens to carry "panel=0": the heartbeat at the top of a tick prints
+# the state the tick found, so the line that names the dark screen only comes
+# round a tick or two later, and a tick here is seconds long.
 i=0
-while [ $i -lt 16 ] && ! grep -q "daemon alive: panel=0 state=off" "$WORK/spsm/spsm.log"; do
+heartbeat=""
+while [ $i -lt 60 ]; do
+  heartbeat=$(grep -m1 -E "daemon alive: panel=0 state=off deep=applied caps_little=[0-9]+ ticks=[0-9]+" "$WORK/spsm/spsm.log")
+  [ -n "$heartbeat" ] && break
   sleep 0.5; i=$((i + 1))
 done
-grep -q "daemon alive: panel=0 state=off deep=applied" "$WORK/spsm/spsm.log"
-check "the heartbeat says the state, the caps and that it is alive ($(grep -m1 'daemon alive' "$WORK/spsm/spsm.log" | sed 's/^[0-9-]* [0-9:]* //'))" $?
+[ -n "$heartbeat" ]
+check "the heartbeat says the state, the caps and that it is alive (after $((i * 5))00ms: $(printf '%s' "$heartbeat" | sed 's/^[0-9-]* [0-9:]* //'))" $?
 echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"
 i=0
 while [ $i -lt 24 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" != "1800000" ]; do
   sleep 0.25; i=$((i + 1))
 done
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "and the wake still releases everything (${i}x250ms)" $?
 rm -f "$WORK/spsm/state/active"
 kill "$DPID" 2>/dev/null
@@ -1624,34 +1671,36 @@ check "a preempted exit still leaves nothing behind ($(cat "$WORK/out.v51"))" $?
 say "52. the speed limits can be held with the screen on, if that is what is wanted"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap gpu_cap cpu_offline_big deep_doze
+disable_knobs gov_powersave    # this case is about the ceiling itself
 disable_knobs cap_always
 screen_on
 run_engine activate >/dev/null 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "with the in-use option off, nothing is capped while the screen is on" $?
 run_engine deactivate >/dev/null 2>&1
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap gpu_cap cpu_offline_big deep_doze
+disable_knobs gov_powersave    # this case is about the ceiling itself
 enable_knobs cap_always
 screen_on
 run_engine activate > "$WORK/out.a52" 2>&1
 grep -q "cap_always: performance limits applied now" "$WORK/spsm/spsm.log"
 check "with cap_always the limits are applied as soon as the mode is on" $?
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "and the little cluster is capped with the screen on" $?
 [ "$(cat "$ROOT/sys/devices/system/cpu/cpu7/online")" = "0" ]
 check "the big cores are offline with the screen on" $?
 # A screen-off/screen-on cycle must not release them...
 run_engine screen-off >/dev/null 2>&1
 run_engine screen-on >/dev/null 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "an ordinary screen change does not release them" $?
 # ...but doze must never be held while the phone is being used.
 [ ! -f "$WORK/stub/doze_forced" ]
 check "deep doze is still released when the screen comes back on" $?
 # And the exit puts everything back, cap_always or not.
 run_engine deactivate > "$WORK/out.d52" 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "the exit restores the ceiling" $?
 [ "$(cat "$ROOT/sys/devices/system/cpu/cpu7/online")" = "1" ]
 check "and brings the cores back" $?
@@ -1905,6 +1954,7 @@ check "and the log names the value and both sides ($(grep '^named:' "$WORK/out.v
 # left alone, which case 5 covers.)
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 disable_knobs cap_always        # the cap must be lifted on wake for this test
 screen_on
 run_engine activate >/dev/null 2>&1
@@ -1930,6 +1980,7 @@ say "59. the cap and the phone's power mode are separate things"
 # still caps, and that a power mode somebody else set is not the cap's business.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 disable_knobs mtk_low_power
 F="$ROOT/proc/cpufreq/cpufreq_power_mode"
 printf 'Default(Normal) mode\n' > "$F"
@@ -1941,7 +1992,7 @@ run_engine screen-off >/dev/null 2>&1
 check "the cap does not put the phone into Low Power mode" $?
 grep -q "cpufreq_power_mode" "$WORK/spsm/journal/cpu_cap.orig"
 if [ $? = 0 ]; then bad "and does not journal it either"; else ok "and does not journal it either"; fi
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "while the frequency ceiling still applies" $?
 screen_on
 run_engine deactivate > "$WORK/out.d59" 2>&1
@@ -1956,6 +2007,7 @@ check "so the exit is clean and quick" $?
 # it in - is left exactly as it is: we never set it, so it is not ours to clear.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 disable_knobs mtk_low_power
 F="$ROOT/proc/cpufreq/cpufreq_power_mode"
 printf 'Low Power mode\n' > "$F"
@@ -1975,6 +2027,7 @@ check "and is still there after the mode is off" $?
 # value the module never wrote.
 make_tree; make_stubs; seed_stub_state
 enable_knobs cpu_cap
+disable_knobs gov_powersave    # this case is about the ceiling itself
 disable_knobs mtk_low_power
 F="$ROOT/proc/cpufreq/cpufreq_power_mode"
 chmod 000 "$F"
@@ -1985,7 +2038,7 @@ run_engine screen-off >/dev/null 2>&1
 chmod 644 "$F"
 grep -q "cpufreq_power_mode" "$WORK/spsm/journal/cpu_cap.orig"
 if [ $? = 0 ]; then bad "an unreadable power mode is not journaled by the cap"; else ok "an unreadable power mode is not journaled by the cap"; fi
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "and the cap applies anyway" $?
 screen_on
 run_engine deactivate >/dev/null 2>&1
@@ -2288,7 +2341,7 @@ make_tree; make_stubs; seed_stub_state
 for k in cpu_cap gpu_cap deep_doze mtk_low_power blur_off; do enable_knobs "$k"; done
 screen_on
 run_engine activate >/dev/null 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+deep_limits_on
 check "the shipped defaults cap the processor while the screen is on" $?
 [ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "1" ]
 check "and the processor is in Low Power mode while the screen is on" $?
@@ -2297,7 +2350,7 @@ check "and window blur is off" $?
 [ ! -f "$WORK/stub/doze_forced" ]
 check "while deep sleep is still only for the screen being off" $?
 run_engine deactivate > "$WORK/out.d66" 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "and the exit lifts all of it" $?
 [ "$(cat "$ROOT/proc/cpufreq/cpufreq_power_mode")" = "0" ]
 check "including the processor's power mode" $?
@@ -2312,7 +2365,7 @@ for k in cpu_cap gpu_cap deep_doze; do enable_knobs "$k"; done
 disable_knobs cap_always
 screen_on
 run_engine activate >/dev/null 2>&1
-[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+deep_limits_off
 check "switching the in-use limits off leaves the phone at full speed in use" $?
 run_engine deactivate >/dev/null 2>&1
 make_tree; make_stubs; seed_stub_state
@@ -2346,14 +2399,24 @@ else
 fi
 grep -q "Type.statusBars" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "and the home screen asks for the bars to be shown" $?
-grep -q '@+id/btn_recents' "$REPO/app/res/layout/activity_home.xml"
-check "the home screen has a visible way into recents" $?
-grep -q "R.id.btn_recents" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
-check "and it is wired up" $?
-grep -q "R.id.home_root" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
-check "with a long press on the empty space as well" $?
-grep -q 'name="swipe_for_recents">Hold an app to change it<' "$REPO/app/res/values/strings.xml"
-check "and the hint under the slots names what still works, not a gesture the system eats" $?
+# The way into recents: a swipe up from the bottom, on SPSM's own screen and -
+# because this mode's home is the phone's home - from inside another app too.
+grep -q "dispatchTouchEvent" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "touchStartY > h \* 0.8f" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "a swipe up from the bottom of SPSM's own screen opens its recents" $?
+grep -q "protected void onNewIntent" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "SpsmRecentsActivity.visible" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "and being sent home from inside an app opens the same list, without bouncing" $?
+if grep -q "setOnLongClickListener" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"; then
+  bad "the long press on the empty space is gone"
+else
+  ok "the long press on the empty space is gone"
+fi
+grep -q 'name="swipe_up_recents">Swipe up for recent apps<' "$REPO/app/res/values/strings.xml"
+check "and the hint on the screen teaches the gesture" $?
+grep -q '@+id/btn_home' "$REPO/app/res/layout/activity_recents.xml" && \
+  grep -q "R.id.btn_home" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java"
+check "with a way back to the six apps from the list itself" $?
 
 # A ROM that really has an immersive rule: it is cleared while the mode is on,
 # and put back exactly as it was on the way out.
@@ -2378,7 +2441,7 @@ screen_on
 run_engine activate >/dev/null 2>&1
 [ ! -e "$WORK/stub/settings/global.policy_control" ]
 check "a phone with no immersive rule is not given one" $?
-grep -q "note statusbar_on: no visible change" "$WORK/spsm/spsm.log"
+grep -q "note statusbar_on: this ROM sets no policy_control" "$WORK/spsm/spsm.log"
 check "and the log says plainly that there was nothing to clear" $?
 run_engine deactivate > "$WORK/out.d65" 2>&1
 grep -q "revert clean" "$WORK/spsm/spsm.log"
@@ -2485,14 +2548,13 @@ grep -q "chip_mode" "$HOME"
 if [ $? = 0 ]; then bad "the yellow state pill is gone"; else ok "the yellow state pill is gone"; fi
 grep -q "@color/accent" "$HOME"
 if [ $? = 0 ]; then bad "and nothing on it is coloured yellow (white and greys only)"; else ok "and nothing on it is coloured yellow (white and greys only)"; fi
-# The clock: the largest text on the screen, and the date under it.
+# The clock: the largest text on the screen, kept exactly as it was. The date
+# that used to sit under it is gone - the owner asked for the percentage and the
+# date to go, and for the apps to come down to where they are now.
 _clock=$(sed -n '/@+id\/clock/,/\/>/p' "$HOME" | sed -n 's/.*textSize="\([0-9]*\)sp".*/\1/p')
 [ -n "$_clock" ] && [ "$_clock" -ge 60 ]
 check "the large centred clock is still the largest thing on the screen (${_clock}sp)" $?
-_c=$(grep -n '@+id/clock' "$HOME" | head -1 | cut -d: -f1)
-_d=$(grep -n '@+id/date' "$HOME" | head -1 | cut -d: -f1)
-[ -n "$_c" ] && [ -n "$_d" ] && [ "$_c" -lt "$_d" ]
-check "with the date under it (lines $_c and $_d)" $?
+if grep -q '@+id/date' "$HOME"; then bad "the date line under the clock is gone"; else ok "and nothing was added under it"; fi
 # The grid: six slots, three to a row, in large rounded containers.
 [ "$(grep -c 'layout="@layout/item_app_slot"' "$HOME")" = "6" ]
 check "the six apps are a grid of six slots" $?
@@ -2508,17 +2570,27 @@ grep -q 'android:text="@string/empty_slot"' "$SLOT"
 check "with the word Add under it" $?
 grep -q '@+id/badge' "$SLOT"
 check "and a slot with an app in it can show an edit badge" $?
-# The battery reading sits below the grid.
-_b=$(grep -n '@+id/battery' "$HOME" | head -1 | cut -d: -f1)
+# No percentage anywhere on the screen, and the apps sit just above the time
+# they have left - the owner's two layout instructions, checked as layout order.
+if grep -q '@+id/battery' "$HOME"; then bad "the battery percentage is gone from the screen"; else ok "the battery percentage is gone from the screen"; fi
+if grep -q 'R.id.battery' "$ACT"; then bad "and no code asks for it any more"; else ok "and no code asks for it any more"; fi
+_r=$(grep -n '@+id/remaining' "$HOME" | head -1 | cut -d: -f1)
 _g=$(grep -n '@layout/item_app_slot' "$HOME" | tail -1 | cut -d: -f1)
-[ -n "$_b" ] && [ -n "$_g" ] && [ "$_b" -gt "$_g" ]
-check "the battery reading and its estimate are below the grid, near the bottom" $?
-# The controls, and that they are wired to something.
-for id in btn_exit btn_recents btn_edit home_root; do
+_s=$(grep -n 'layout_weight="1"' "$HOME" | head -1 | cut -d: -f1)
+[ -n "$_r" ] && [ -n "$_g" ] && [ -n "$_s" ] && [ "$_s" -lt "$_g" ] && [ "$_g" -lt "$_r" ]
+check "the six apps sit just above the time left, at the bottom (spacer line $_s, grid $_g, time $_r)" $?
+grep -q "R.string.remaining, estimate(pct)" "$ACT"
+check "and the estimate is still the thing that is shown" $?
+# Two controls, and that they are wired to something. The Recents button is gone
+# on the owner's instruction: the way in is the upward swipe, and the list itself
+# has the way back to the apps.
+for id in btn_exit btn_edit; do
   grep -q "@+id/$id" "$HOME" || bad "the home still has $id"
   grep -q "R.id.$id" "$ACT" || bad "$id is bound in the home screen's code"
 done
-ok "Exit, Recents and Edit are on the screen and bound in code"
+ok "Exit and Edit are on the screen and bound in code"
+if grep -q '@+id/btn_recents' "$HOME"; then bad "the recents button is gone"; else ok "the recents button is gone"; fi
+if grep -q 'R.id.btn_recents' "$ACT"; then bad "and nothing binds it"; else ok "and nothing binds it"; fi
 grep -q "R.drawable.ic_edit" "$ACT" && grep -q "R.drawable.ic_check" "$ACT"
 check "the pencil turns into a tick while the slots are being edited" $?
 grep -q 'Prefs.setSlot(SpsmHomeActivity.this, idx, "")' "$ACT"
@@ -2611,6 +2683,108 @@ grep -q "private void bindSlot(final int i) {" "$REPO/app/src/dev/axion/spsm/Sps
 check "and each of its six slots is bound on its own, so one cannot take the home down" $?
 grep -q "static void bindSlot(final Context c, View slot" "$REPO/app/src/dev/axion/spsm/Apps.java"
 check "and nothing anywhere holds a slot as a specific widget" $?
+
+say "70. the power-save governor: the idle frequency is the kernel's job again"
+# The owner's instruction: "if you change the governor to powersave then no need
+# to change frequency of cpu cores which may reduce time, because its managed by
+# the powersave governor". With the option on - the shipped default - the governor
+# is set and the ceiling is deliberately NOT written; with it off the ceiling is
+# written exactly as every older case in this file assumes.
+make_tree; make_stubs; seed_stub_state
+disable_knobs cap_always        # so any ceiling can only have come from the deep phase
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+GOV="$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_governor"
+[ "$(cat "$GOV")" = "powersave" ]
+check "the kernel's power-save governor is put in charge while the screen is off" $?
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1800000" ]
+check "and no frequency ceiling is written on top of it" $?
+grep -q "governor: power-save on 2 of 2 cluster(s)" "$WORK/spsm/spsm.log"
+check "with the log saying how many clusters took it" $?
+grep -q "cpu_cap: the power-save governor holds the frequency - no ceiling written" "$WORK/spsm/spsm.log"
+check "and the ceiling step saying why it did nothing" $?
+run_engine status > "$WORK/out.g70" 2>&1
+grep -q "held_by=governor" "$WORK/out.g70"
+check "and the idle report naming the governor as what holds the frequency" $?
+screen_on
+run_engine screen-on >/dev/null 2>&1
+[ "$(cat "$GOV")" = "schedutil" ]
+check "waking puts the governor back" $?
+run_engine verify > "$WORK/out.g70b" 2>&1
+grep -q "drift=0" "$WORK/out.g70b"
+check "with nothing left behind ($(cat "$WORK/out.g70b"))" $?
+run_engine deactivate >/dev/null 2>&1
+
+# The same tree with the option off: the ceiling is written by hand and the
+# governor is left as the phone had it. This is the mechanism the rest of the
+# suite tests, so it has to stay working.
+make_tree; make_stubs; seed_stub_state
+disable_knobs gov_powersave
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(cat "$GOV")" = "schedutil" ]
+check "with the option off the governor is left alone" $?
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")" = "1100000" ]
+check "and the ceiling is written by hand as before" $?
+run_engine status > "$WORK/out.g70d" 2>&1
+grep -q "held_by=ceiling" "$WORK/out.g70d"
+check "and the idle report says the ceiling is what holds the frequency" $?
+run_engine screen-on >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+
+# A phone that refuses the write. The change must be recorded as one that was
+# not made, so the exit does not go looking for a governor this phone never took.
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+# Every cluster, not just the first: while one governor write succeeds the module
+# is right to call the change made, and this case is about the phone that refuses
+# all of them.
+chmod 400 "$GOV" "$ROOT/sys/devices/system/cpu/cpufreq/policy6/scaling_governor"
+screen_off
+run_engine screen-off >/dev/null 2>&1
+chmod 644 "$GOV" "$ROOT/sys/devices/system/cpu/cpufreq/policy6/scaling_governor"
+grep -q "governor: this phone did not accept the power-save governor" "$WORK/spsm/spsm.log"
+check "a phone that refuses the governor says so in the log" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.g70c" 2>&1
+grep -q "drift=0" "$WORK/out.g70c"
+check "and nothing of ours is left to chase at the exit ($(cat "$WORK/out.g70c"))" $?
+
+say "71. a second screen-off in the same idle period does not redo the long work"
+# From the v3.4.1 log, verbatim: "slow: apply app_restrict took 86s" in one
+# screen-off and "slow: apply deep_doze took 619s" in another - in every period,
+# for a state the phone was already in. Those two are applied once per idle
+# period now: neither can undo itself while the phone sleeps, and the report that
+# this is judged by is cleared on wake, so a real wake re-applies both.
+make_tree; make_stubs; seed_stub_state
+enable_knobs app_restrict deep_doze
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(grep -c 'snap app_restrict' "$WORK/spsm/spsm.log")" = "1" ]
+check "the app restrictions are applied once when the screen goes off" $?
+run_engine screen-off >/dev/null 2>&1
+grep -q "idle: app_restrict is already in place from this idle period - not redoing it" "$WORK/spsm/spsm.log"
+check "and a second screen-off in the same idle period skips them" $?
+grep -q "idle: deep_doze is already in place from this idle period - not redoing it" "$WORK/spsm/spsm.log"
+check "the deep-sleep request is skipped the same way" $?
+[ "$(grep -c 'snap app_restrict' "$WORK/spsm/spsm.log")" = "1" ]
+check "so nothing re-recorded the apps' original states" $?
+# A real wake ends the idle period, and the next one must do the work again.
+screen_on
+run_engine screen-on >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(grep -c 'snap app_restrict' "$WORK/spsm/spsm.log")" = "2" ]
+check "and after a wake the next screen-off applies them again" $?
+run_engine screen-on >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
 
 
 # ==========================================================================

@@ -15,12 +15,27 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_alignParentStart="true"
             android:layout_centerVertical="true"
+            android:layout_toEndOf="@id/btn_home"
             android:text="@string/recents_title"
             android:textColor="@color/white"
             android:textSize="19sp"
             android:textStyle="bold" />
+
+        <!-- Back to the six apps. This is the one control the recents screen
+             needs of its own: the way in was a gesture, so the way back cannot be
+             a gesture too. -->
+        <ImageButton
+            android:id="@+id/btn_home"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_alignParentStart="true"
+            android:layout_centerVertical="true"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/home"
+            android:padding="13dp"
+            android:src="@drawable/ic_home"
+            android:tint="@color/text_secondary" />
 
         <ImageButton
             android:id="@+id/btn_close"

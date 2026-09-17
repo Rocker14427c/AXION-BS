@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.4.1.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.5.0.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -12,6 +12,10 @@ HOW IT WORKS
   default (Options -> "Keep the processor in Low Power mode" to switch it off).
   The CPU/GPU ceilings can be held while you use it too, with the switch
   "Keep power limits while using the phone" - that one is off unless you ask.
+- While the screen is off the frequency is the kernel's business: the power-save
+  governor is set and no frequency ceiling is written on top of it (Options ->
+  "Power-save governor while idle", on by default). The ceilings still do all the
+  work while you are using the phone.
 - A crash or reboot cannot leave the phone capped or dark.
 
 INSTALLING OVER AN OLDER VERSION
@@ -19,7 +23,41 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.4.1)
+NEW IN THIS BUILD (v3.5.0)
+- Recents is the swipe now, and only the swipe: the Recents icon has been removed
+  from the top bar, and so has the long press anywhere on the screen. Swipe up
+  from the bottom edge - on the power-saving home, or from inside an app, where
+  swiping up sends you home and being sent home now opens the recents list. Back
+  out of an app still lands on the six apps. (The top bar described under v3.4.0
+  below now holds the door on the left and the pencil on the right.)
+- The recents list has a home icon in the corner to go back to the six apps.
+- The power-saving home is tidier: the battery percentage is gone (the estimate
+  stays), so is the date under the clock, and the 3x2 grid of apps sits at the
+  bottom of the screen, just above the time remaining. A small line under the
+  apps teaches the gesture: "Swipe up for recent apps".
+- New option: "Power-save governor while idle" (Options -> Processor, on by
+  default). While the screen is off it sets the kernel's own power-save governor
+  on every cluster and writes no frequency ceiling, which is the same saving held
+  continuously by the kernel and several fewer writes per screen-off. The
+  ceilings still apply while you are using the phone, and the idle report says
+  which of the two is holding the frequency: held_by=governor or held_by=ceiling.
+- The idle sequence no longer spends minutes on work the phone had already done.
+  The deep-sleep request was issued in a way that waited for the phone to fall
+  asleep (245s and 619s in one real log) - it is issued in the background now and
+  read back. The per-app background limits run together instead of one by one.
+  Cores that are already offline are left alone. And the background limits and
+  the deep-sleep request are applied once per idle period instead of on every
+  screen-off; a real wake clears that record, so the next one applies them again.
+- The lines that looked like faults say what they mean now: "no visible change"
+  is used when the setting was already the way you wanted it, and the status bar
+  option says this ROM has no policy_control at all (so there was nothing to
+  clear) rather than sounding like it failed.
+- "Switch the launcher's recents off" is off by default now. This ROM refuses
+  that switch - the module said so and put it back every time the mode was turned
+  on - so it no longer spends seconds on it. It is still in Options for a ROM
+  that accepts it.
+
+FROM v3.4.1
 - Fixed: v3.4.0 closed itself the moment it was opened. The row of app containers
   on the setup and home screens had changed from one kind of container to another
   (it had to, for the small badge that edit mode uses), and two screens were still
@@ -86,7 +124,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.4.0-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.5.0-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.0.5**.
+Current module: **v3.5.0**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -46,8 +46,12 @@ default install turns on:
 4. **Panel and touch** (`dt2w_off`, `aod_off`, `brightness_cap` — a cap that
    only ever *lowers* the screen, so a display you keep dim stays dim) — stops the touch controller and the
    ambient panel waking the SoC.
-5. **CPU / GPU caps while asleep** (`cpu_cap`, `gpu_cap`, `ged_boost_off`) — the
-   ceiling is lowered only while the screen is off, so wake-up stays instant.
+5. **The idle processor** (`gov_powersave` **on by default**, `cpu_cap`, `gpu_cap`,
+   `ged_boost_off`) — while the screen is off, the kernel's own power-save
+   governor runs every cluster at its lowest frequency, and no frequency ceiling
+   is written on top of it: the same saving held continuously by the kernel
+   instead of once from outside. The ceilings (`cpu_cap`, `gpu_cap`) stay for the
+   in-use case and are lowered only while asleep, so wake-up stays instant.
 
 Every one of those is a switch in the app's **Options** screen. Nothing is
 all-or-nothing.

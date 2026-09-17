@@ -82,7 +82,15 @@ knob_apply() { # knob_apply id
     *control*) ;;
     *)
       if [ "$(norm "$(j_orig "$_id")")" = "$(norm "$_now")" ]; then
-        log "note $_id: no visible change (optional node missing?)"
+        # A knob may explain what it found: "Bluetooth was already off" and "this
+        # ROM has no policy_control" are different facts, and the old sentence
+        # covered both by suggesting something was missing.
+        _nf="note_$_id"
+        if [ "$(type "$_nf" 2>/dev/null)" ]; then
+          log "note $_id: $("$_nf")"
+        else
+          log "note $_id: no visible change (optional node missing?)"
+        fi
       fi
       ;;
   esac
@@ -175,6 +183,13 @@ phase_deep() { # apply|revert
     _t0=$(date +%s)
     if [ "$_mode" = apply ]; then
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
+      if [ -f "$STATE/deep_report" ]; then
+        case " $DEEP_ONCE " in
+          *" $_k "*)
+            log "idle: $_k is already in place from this idle period - not redoing it"
+            continue ;;
+        esac
+      fi
       progress "Idle: $(knob_meta "$_k" | cut -d'|' -f2)"
       knob_apply "$_k"
     else
@@ -339,7 +354,16 @@ do_screen_off() {
 # Fast knobs first on wake: CPU/GPU state is what you feel in the first
 # second. The slow ones (per-package appops) can finish after the phone is
 # already responsive.
-DEEP_FAST="cpu_offline_big cpu_cap gpu_cap ged_boost_off deep_doze"
+DEEP_FAST="cpu_offline_big gov_powersave cpu_cap gpu_cap ged_boost_off deep_doze"
+
+# The deep knobs that are expensive, cannot revert by themselves, and are already
+# in place from an earlier screen-off in the same idle period: the per-app
+# background restrictions and the request for deep sleep. Re-applying them cost
+# 86-89s and then up to 619s in the v3.4.1 log, in every single screen-off, for a
+# state the phone was already in. The lock and the screen-off path guarantee that
+# nothing else is running when this is decided; releasing the deep phase clears
+# the report that this list is judged by, so a real wake always re-applies them.
+DEEP_ONCE="app_restrict deep_doze"
 
 # The deep knobs that are about speed and heat rather than about sleeping: the
 # CPU and GPU ceilings, the offline big cores, the boost switches. These are the

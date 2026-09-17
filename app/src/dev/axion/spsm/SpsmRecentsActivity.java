@@ -32,6 +32,15 @@ import java.util.List;
  * by the module.
  */
 public class SpsmRecentsActivity extends Activity {
+    /**
+     * Whether the list is on screen right now.
+     *
+     * <p>The home screen asks this before acting on a MAIN/HOME intent: without
+     * it, pressing Home while the list is open would open the list again, and a
+     * gesture meant to leave could look like it did nothing.
+     */
+    static boolean visible;
+
     private ListView list;
     private View empty;
     private View working;
@@ -57,6 +66,8 @@ public class SpsmRecentsActivity extends Activity {
         working = findViewById(R.id.recent_working);
         View close = findViewById(R.id.btn_close);
         if (close != null) close.setOnClickListener(v -> finish());
+        View home = findViewById(R.id.btn_home);
+        if (home != null) home.setOnClickListener(v -> finish());
         adapter = new Adapter();
         try {
             list.setAdapter(adapter);
@@ -68,6 +79,18 @@ public class SpsmRecentsActivity extends Activity {
         } catch (Throwable ignored) {
         }
         load();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        visible = true;
+    }
+
+    @Override
+    protected void onPause() {
+        visible = false;
+        super.onPause();
     }
 
     @Override
