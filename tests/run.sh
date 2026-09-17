@@ -50,6 +50,27 @@ make_tree() {
       echo 2000000 > "$d/cpuinfo_max_freq"
     fi
   done
+  # The per-cpu governor nodes the phone really has: the owner's own command
+  # writes /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor, and the module
+  # uses that path now. cpu0-3 and cpu6-7 point at their cluster's node, so a
+  # write through either path is the same value; the middle group (cpu4-5) has no
+  # governor node at all, which is this phone's shape - one cluster that simply
+  # cannot be told, and the reason the v3.5.0 log read "1 of 2 cluster(s)".
+  mkdir -p "$ROOT/sys/devices/system/cpu/cpufreq/policy4"
+  for n in 0 1 2 3 4 5 6 7; do
+    d="$ROOT/sys/devices/system/cpu/cpu$n/cpufreq"
+    mkdir -p "$d"
+    case "$n" in
+      0|1|2|3)
+        echo 0-3 > "$d/related_cpus"
+        ln -sf ../../cpufreq/policy0/scaling_governor "$d/scaling_governor" ;;
+      4|5)
+        echo 4-5 > "$d/related_cpus" ;;
+      6|7)
+        echo 6-7 > "$d/related_cpus"
+        ln -sf ../../cpufreq/policy6/scaling_governor "$d/scaling_governor" ;;
+    esac
+  done
   # A plain file cannot translate a write the way this kernel node does (the real
   # one answers "Low Power mode" after being written 1), so the shared tree holds
   # the number. Case 59 sets the sentence form explicitly, which is the shape the
@@ -2401,9 +2422,24 @@ grep -q "Type.statusBars" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "and the home screen asks for the bars to be shown" $?
 # The way into recents: a swipe up from the bottom, on SPSM's own screen and -
 # because this mode's home is the phone's home - from inside another app too.
+# Read on the MOVE, not on the lift: this phone's gesture navigation cancels the
+# touch as soon as it takes the bottom edge for its own "go home", so a reader
+# that waits for ACTION_UP never sees a bottom-edge swipe finish - which is
+# exactly what v3.5.0 did, and why two hundred swipes opened nothing.
 grep -q "dispatchTouchEvent" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q "touchStartY > h \* 0.8f" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+  grep -q "case android.view.MotionEvent.ACTION_MOVE" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "dy > 16 \* density" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q "touchStartY > h \* 0.66f" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "a swipe up from the bottom of SPSM's own screen opens its recents" $?
+grep -q 'openRecents("go-home")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "and being sent home from inside another app opens the same list" $?
+grep -q 'engine.sh gesture' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
+  grep -q 'gesture)' "$REPO/module/scripts/engine.sh"
+check "and every open of the list is noted in the log, with what opened it" $?
+for _cb in onPause onStop onDestroy; do
+  awk "/protected void $_cb\\(\\)/,/^    }/" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java" | grep -q "visible = false"
+  check "the flag that guards the list is cleared in $_cb" $?
+done
 grep -q "protected void onNewIntent" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q "SpsmRecentsActivity.visible" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "and being sent home from inside an app opens the same list, without bouncing" $?
@@ -2785,6 +2821,47 @@ run_engine screen-off >/dev/null 2>&1
 check "and after a wake the next screen-off applies them again" $?
 run_engine screen-on >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
+
+say "72. the launcher is refreshed once on the way out, and never while the mode runs"
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off; run_engine screen-off >/dev/null 2>&1
+screen_on;  run_engine screen-on  >/dev/null 2>&1
+n=$(grep -c "^am force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 0 ]
+check "the launcher is left alone while the mode is running (got ${n:-0} restart(s))" $?
+run_engine deactivate >/dev/null 2>&1
+n=$(grep -c "^am force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 1 ]
+check "coming out of the mode restarts it exactly once (got ${n:-0})" $?
+# No ^ here: every line this mode writes is stamped with the time first.
+n=$(grep -c "launcher refreshed: com.android.launcher3 restarted" "$WORK/spsm/spsm.log" 2>/dev/null || true)
+[ "${n:-0}" = 1 ]
+check "and the log says which app was restarted and why (got ${n:-0} line(s))" $?
+# Started again in the same breath: a force-stopped home must not leave the phone
+# with nothing on screen.
+grep -q "^am start -a android.intent.action.MAIN -c android.intent.category.HOME$" "$WORK/stub/calls"
+check "and it is put back on screen straight away" $?
+
+# An exit with every option switched off changed nothing, so there is nothing for
+# the launcher to rebuild and no reason to restart somebody's home screen.
+make_tree; make_stubs; seed_stub_state
+run_engine dump-knobs >/dev/null 2>&1
+while IFS='|' read -r _id _rest; do echo "knob.$_id=0" >> "$WORK/spsm/config"; done < "$WORK/spsm/knobs.list"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+n=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 0 ]
+check "a session that changed nothing restarts nothing (got ${n:-0})" $?
+
+# And an exit on a phone that was never in the mode does even less.
+make_tree; make_stubs; seed_stub_state
+run_engine deactivate >/dev/null 2>&1
+n=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 0 ]
+check "an exit with no session behind it force-stops nothing (got ${n:-0})" $?
 
 
 # ==========================================================================

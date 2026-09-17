@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.5.0
-versionCode=50
+version=v3.5.1
+versionCode=51
 author=Axion SPSM
-description=v3.5.0 journaled apply/revert - every change recorded and restored. Recents by the swipe-up gesture only (no button, no long press), the apps and the time-left at the bottom of the home screen, the kernel's power-save governor for the idle CPU instead of hand-written frequency ceilings, and a screen-off sequence that no longer waits minutes for deep sleep. RMX3430.
+description=v3.5.1 the swipe opens the recents list (read while the finger moves, because this phone's gesture navigation never lets a bottom-edge swipe finish), the power-save governor and its frequency ceilings now decided per cluster - this phone's big cluster was being left out - and the launcher's app list refreshed once on the way out so its drawer is not left grey. RMX3430.

@@ -188,6 +188,19 @@ recents_remove() { # recents_remove <task-id> [package]
   return 1
 }
 
-do_recents() { recents_list; }
+do_recents() {
+  # Traced, not just printed. The recents list is opened by a gesture that leaves
+  # no other trace: "did the swipe reach us at all?" is unanswerable from a log
+  # that only shows the list's contents going past.
+  #
+  # The trace is written straight to the log file and never through log(): that
+  # also writes the kernel ring buffer, and a kernel write this sandbox refuses
+  # prints on stderr - which would land in the middle of the task list this
+  # command exists to print. The app parses this output line by line.
+  _out=$(recents_list)
+  _n=$(printf '%s\n' "$_out" | grep -c . 2>/dev/null)
+  printf '%s recents: listed %s task(s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${_n:-0}" >> "$LOG" 2>/dev/null
+  [ -n "$_out" ] && printf '%s\n' "$_out"
+}
 do_recents_switch() { recents_switch "$1" "$2"; }
 do_recents_remove() { recents_remove "$1" "$2"; }

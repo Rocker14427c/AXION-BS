@@ -275,7 +275,15 @@ apply_home_swap() {
   _seen=unknown
   while [ "$_i" -lt 24 ]; do
     _seen=$(home_resumed)
-    [ "$_seen" = ours ] && return 0
+    if [ "$_seen" = ours ]; then
+      # Two facts worth having in the log the moment the gesture has to be
+      # diagnosed: which navigation this phone is using, and what Android says
+      # the home is. A bottom-edge swipe means "go home" on a gesture-navigation
+      # phone and never reaches an app at all, so whether it can open the recents
+      # list depends on these two lines.
+      log "home_swap: our home is up - navigation_mode=$(sget secure navigation_mode) (0=3-button 1=2-button 2=gestures) home=$(home_activity_now)"
+      return 0
+    fi
     _i=$((_i + 1))
     sleep 0.25 2>/dev/null || sleep 1
   done
@@ -300,6 +308,45 @@ apply_home_swap() {
   esac
   return 0
 }
+# The launcher before us. The journal recorded it when the swap was applied, and
+# that record is the honest answer; a phone whose journal has nothing (the swap
+# was switched off, or it is the first run) is asked directly.
+home_package() {
+  _h=$(snap_file_val "$JOURNAL/home_swap.orig" home)
+  if [ -z "$_h" ] && has cmd; then
+    _r=$(cmd package resolve-activity --brief -a android.intent.action.MAIN \
+            -c android.intent.category.HOME 2>/dev/null | tail -n 1)
+    case "$_r" in
+      */*) _h=${_r%%/*} ;;
+    esac
+  fi
+  [ -n "$_h" ] || _h=com.android.launcher3
+  printf '%s\n' "$_h"
+}
+
+# The owner's report: coming out of the mode, the launcher's app drawer was full
+# of grey, unloaded icons - apps that opened perfectly well, drawn as if they had
+# been suspended - and a force stop and fresh start was what put them right.
+#
+# The launcher builds its app list once and keeps it. While the mode was on, the
+# state that list was built from changed underneath it: the per-app standby
+# buckets, the background restrictions, apps stopped. A launcher that is merely
+# resumed does not rebuild it; a launcher that is started does. And the launcher
+# is what the phone goes back to, so this is repaired once, on the way out.
+refresh_launcher() { # refresh_launcher <package>
+  _pkg=$1
+  case "$_pkg" in
+    ''|dev.axion.spsm) return 0 ;;
+    *[!A-Za-z0-9._]*) return 0 ;;
+  esac
+  has am || return 0
+  am force-stop "$_pkg" >/dev/null 2>&1
+  log "launcher refreshed: $_pkg restarted, so its app list is rebuilt from the phone as it is now"
+  # Straight back up: a force-stopped home would otherwise leave the phone with
+  # nothing on screen until the next press of Home.
+  am start -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null 2>&1
+}
+
 restore_home_swap() {
   _orig=$(snap_file_val "$1" home)
   _act=$(snap_file_val "$1" activity)
@@ -705,36 +752,79 @@ release_power_mode() { set_power_mode 0; }
 meta_gov_powersave() {
   echo "Processor|Power-save governor while idle|While the screen is off, the kernel's own power-save governor runs the processor at its lowest frequency, instead of this module writing a frequency ceiling by hand. The same saving, held continuously by the kernel, and several fewer writes while the screen is off. Confirmed on this phone: both the switch to power-save and the switch back take effect on every cluster.|1|deep|battery"
 }
+# One governor path per cluster, by the path the owner's own command used:
+#   for cpu in /sys/devices/system/cpu/cpu[0-9]*; do echo powersave > "$cpu/cpufreq/scaling_governor"; done
+#
+# The policy paths are not the same set on every kernel. On this phone one policy
+# has no scaling_governor node at all, and the v3.5.0 log is what that looked
+# like: "power-save on 1 of 2 cluster(s)", with the big cluster left on schedutil
+# and the ceiling skipped for the whole phone. `related_cpus` names the cores a
+# node drives, so each cluster is named once - on the path that is known to work
+# on the phone in question, with the policy nodes as the fallback for kernels
+# that only expose those.
+gov_glob() { # gov_glob <rooted governor paths...>
+  _seen=''
+  for _p in "$@"; do
+    [ -e "$_p" ] || continue
+    _dir=${_p%/scaling_governor}
+    _rel=$(cat "$_dir/related_cpus" 2>/dev/null | tr -d '\r')
+    [ -n "$_rel" ] || _rel=$(cat "$_dir/affected_cpus" 2>/dev/null | tr -d '\r')
+    if [ -n "$_rel" ]; then
+      case " $_seen " in
+        *" $_rel "*) continue ;;
+      esac
+      _seen="$_seen $_rel"
+    fi
+    printf '%s\n' "${_p#"$SPSM_ROOT"}"
+  done
+}
+gov_paths() {
+  _out=$(gov_glob "$SPSM_ROOT"/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)
+  [ -n "$_out" ] || _out=$(gov_glob "$SPSM_ROOT"/sys/devices/system/cpu/cpufreq/policy*/scaling_governor)
+  [ -n "$_out" ] && printf '%s\n' "$_out"
+}
+
 snapshot_gov_powersave() {
-  snap_kv /sys/devices/system/cpu/cpufreq/policy0/scaling_governor \
-          /sys/devices/system/cpu/cpufreq/policy4/scaling_governor \
-          /sys/devices/system/cpu/cpufreq/policy6/scaling_governor
+  # shellcheck disable=SC2046
+  [ -n "$(gov_paths)" ] && snap_kv $(gov_paths)
 }
 apply_gov_powersave() {
   _took=0
   _seen=0
-  for _p in 0 4 6; do
-    _f=/sys/devices/system/cpu/cpufreq/policy$_p/scaling_governor
-    [ -e "$(rp "$_f")" ] || continue
+  for _f in $(gov_paths); do
     _seen=$((_seen + 1))
     _cur=$(rd "$_f")
     case "$_cur" in
-      powersave) _took=$((_took + 1)) ;;
       '') ;;                     # unreadable: not ours to change
-      *) w powersave "$_f" && _took=$((_took + 1)) ;;
+      powersave) _took=$((_took + 1)) ;;
+      *)
+        w powersave "$_f"
+        # Read back: a write the kernel accepted and ignored is not a change.
+        [ "$(rd "$_f")" = powersave ] && _took=$((_took + 1))
+        ;;
     esac
   done
+  if [ "$_seen" = 0 ]; then
+    log "governor: this phone exposes no power-save governor node"
+    return 2
+  fi
   log "governor: power-save on $_took of $_seen cluster(s)"
   [ "$_took" = 0 ] && { log "governor: this phone did not accept the power-save governor"; return 2; }
+  [ "$_took" = "$_seen" ] || log "governor: the other $((_seen - _took)) cluster(s) keep the frequency ceiling"
   return 0
 }
 restore_gov_powersave() { restore_kv "$1" "$2"; }
 note_gov_powersave() {
-  _g=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)
-  case "$_g" in
-    powersave) printf 'the governor was already power-save\n' ;;
-    '')        printf 'the governor is not readable on this phone\n' ;;
-    *)         printf 'this phone refused the power-save governor, it is still %s\n' "$_g" ;;
+  _any=0
+  _ps=0
+  for _f in $(gov_paths); do
+    _any=1
+    [ "$(rd "$_f")" = powersave ] && _ps=$((_ps + 1))
+  done
+  case "$_any$_ps" in
+    00) printf 'this phone exposes no governor node to set\n' ;;
+    *0) printf 'this phone refused the power-save governor, the frequency keeps its ceiling\n' ;;
+    *)  printf 'the governor was already power-save\n' ;;
   esac
 }
 
@@ -747,21 +837,22 @@ snapshot_cpu_cap() {
           /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
 }
 apply_cpu_cap() {
-  # When the power-save governor is in charge the ceiling is already a fact: that
-  # governor holds every core at the lowest frequency there is. Writing a ceiling
-  # on top of it is a second, slower way of saying the same thing - and on this
-  # phone every extra write is another thing that can take seconds. So the ceiling
-  # is left to the governor while it is in charge, and only written when something
-  # else runs the frequency (schedutil, which is what the phone uses whenever it
-  # is actually being used).
-  _g=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)
-  if [ "$_g" = powersave ]; then
-    log "cpu_cap: the power-save governor holds the frequency - no ceiling written"
-    return 0
-  fi
+  # Per cluster, not per phone. A cluster whose governor is power-save is already
+  # held at the lowest frequency there is by the kernel, so no ceiling is written
+  # for it - but a cluster that did NOT take the governor is exactly the cluster
+  # the ceiling is for. v3.5.0 asked only the little cluster: on this phone that
+  # read "powersave" (the phone's own Low Power mode had already set it), so the
+  # ceiling was skipped for the whole phone and the big cluster, which had kept
+  # schedutil, was left with no idle limit at all.
+  _skipped=0
+  _wrote=0
   for _p in 0 6; do
     _d=/sys/devices/system/cpu/cpufreq/policy$_p
     [ -d "$(rp "$_d")" ] || continue
+    if [ "$(rd "$_d/scaling_governor")" = powersave ]; then
+      _skipped=$((_skipped + 1))
+      continue
+    fi
     _max=$(rd "$_d/cpuinfo_max_freq")
     [ -n "$_max" ] || _max=$(rd "$_d/scaling_max_freq")
     case "$_p" in
@@ -773,7 +864,13 @@ apply_cpu_cap() {
       _target=$_max
     fi
     w "$_target" "$_d/scaling_max_freq"
+    _wrote=$((_wrote + 1))
   done
+  if [ "$_skipped" != 0 ] && [ "$_wrote" = 0 ]; then
+    log "cpu_cap: the power-save governor holds the frequency - no ceiling written"
+  elif [ "$_skipped" != 0 ]; then
+    log "cpu_cap: ceiling written for the $_wrote cluster(s) the governor did not take"
+  fi
 
   # MediaTek's Low Power mode is deliberately NOT set here any more.
   #
@@ -1420,9 +1517,17 @@ deep_report() {
   [ -f "$STATE/doze_forced" ] && _d=forced
   # Who is holding the frequency down: the kernel's governor (gov_powersave) or a
   # ceiling we wrote. Both are the idle limit being in force, and naming which one
-  # it is stops this line reading like a missing cap.
+  # it is stops this line reading like a missing cap. It says governor only when
+  # every cluster this phone has is running power-save; a cluster that kept
+  # schedutil is held by the ceiling written for it.
   _by=ceiling
-  [ "$_g" = powersave ] && _by=governor
+  _n=0
+  _ps=0
+  for _f in $(gov_paths); do
+    _n=$((_n + 1))
+    [ "$(rd "$_f")" = powersave ] && _ps=$((_ps + 1))
+  done
+  [ "$_n" != 0 ] && [ "$_ps" = "$_n" ] && _by=governor
   printf 'little_max=%s big_max=%s governor=%s doze=%s held_by=%s\n' \
     "${_c0:--}" "${_c6:--}" "${_g:--}" "$_d" "$_by" > "$STATE/deep_report" 2>/dev/null
   log "deep applied: $(cat "$STATE/deep_report" 2>/dev/null)"

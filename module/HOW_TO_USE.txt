@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.5.0.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.5.1.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -23,13 +23,48 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.5.0)
+NEW IN THIS BUILD (v3.5.1)
+- The swipe opens the recents list now. It was read only when the finger lifted,
+  and on a gesture-navigation phone the bottom edge never gets that far: Android
+  takes that strip for its own "go home" gesture and cancels the touch after the
+  first centimetre. The swipe is read while the finger is moving now, from the
+  bottom third of the screen, and a full swipe still counts. Nothing else about
+  the gesture changed: no button, no long press.
+- "It opened once and then never again" is fixed at its cause: the flag that
+  keeps a second go-home from bouncing the list was left up by one list that
+  ended without a pause, and every later gesture was treated as "already open".
+- Every open of the list now writes a line in the log saying what opened it
+  (a swipe here, or a go-home from inside an app) and how many tasks it found,
+  and the log records this phone's navigation mode and home the moment the mode
+  takes the home over - so a gesture that misbehaves can be pointed at instead of
+  guessed at.
+- The power-save governor now goes to every cluster this phone has, on the same
+  per-cpu paths your Termux command uses, and every write is read back. This
+  phone's log said "power-save on 1 of 2 cluster(s)" and skipped the ceiling for
+  the whole phone on that basis, which left the big cluster on schedutil with no
+  idle limit. The ceiling is decided per cluster now: power-save clusters need
+  none, and a cluster that keeps schedutil gets one. The idle line says which:
+  held_by=governor or held_by=ceiling.
+- Coming out of the mode, the launcher's app list is refreshed once - force stop
+  and start the home the journal recorded - because the mode changes the state
+  that list was built from, and a launcher that is merely resumed keeps drawing
+  the grey, unloaded icons you saw in its app drawer. It happens only on the way
+  out, never while the mode is running, and not at all after a session that
+  changed nothing.
+
+FROM v3.5.0
 - Recents is the swipe now, and only the swipe: the Recents icon has been removed
   from the top bar, and so has the long press anywhere on the screen. Swipe up
   from the bottom edge - on the power-saving home, or from inside an app, where
   swiping up sends you home and being sent home now opens the recents list. Back
   out of an app still lands on the six apps. (The top bar described under v3.4.0
   below now holds the door on the left and the pencil on the right.)
+  On the power-saving home the swipe is read from the bottom third of the screen:
+  start low, drag up, and the list opens before the gesture ends. From inside a
+  running app the bottom edge belongs to Android, and what this mode does with it
+  is answer it: going home opens the recents list instead of just redrawing the
+  six apps. If either one ever does nothing, the log now says which of the two
+  kinds of gesture arrived, and whether the list was asked for at all.
 - The recents list has a home icon in the corner to go back to the six apps.
 - The power-saving home is tidier: the battery percentage is gone (the estimate
   stays), so is the date under the clock, and the 3x2 grid of apps sits at the
@@ -124,7 +159,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.5.0-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.5.1-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

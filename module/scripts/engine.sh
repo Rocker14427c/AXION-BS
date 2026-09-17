@@ -8,6 +8,7 @@
 #   engine.sh set <knob> <0|1>   flip one knob live
 #   engine.sh verify        re-read everything and report drift
 #   engine.sh recents       the task list, read without starting the launcher
+#   engine.sh gesture <how>  note in the log that the recents list was opened
 #   engine.sh status        machine-readable state for the APK
 #   engine.sh dump-knobs    write knobs.list for the APK options screen
 #
@@ -279,6 +280,18 @@ do_deactivate() {
   log "===== SPSM v3 OFF (scripts $(scripts_stamp), module $(spsm_version)) ====="
   progress "Restoring"
 
+  # Two facts about the session that is ending, taken before anything is put
+  # back: was the mode actually on, and did it actually change anything. The
+  # launcher refresh at the end of the exit is worth doing for a session that
+  # changed something, and is an unnecessary restart of somebody's home screen
+  # for one that changed nothing.
+  _was_on=0
+  _did_work=0
+  if [ -f "$ACTIVE" ]; then
+    _was_on=1
+    _did_work=$(pending_knobs)
+  fi
+
   # The mode is off from this point, before anything is put back. A screen-off
   # that was already in flight (or one the daemon starts in the next few
   # milliseconds) must not re-apply deep knobs behind the revert - that is the
@@ -329,6 +342,14 @@ do_deactivate() {
   else
     log "revert finished in ${_took}s with $DRIFT drifted knob(s) - see journal"
     progress "Off ($DRIFT kept)"
+  fi
+
+  # The owner's third report, and the last thing the exit does: the launcher's
+  # app drawer was left full of grey icons by a session that changed the state
+  # behind it, and a restart of the launcher is what rebuilds it. Once, here, in
+  # the exit path - never while the mode is running.
+  if [ "$_was_on" = 1 ] && [ "${_did_work:-0}" != "0" ]; then
+    refresh_launcher "$(home_package)"
   fi
 
   stop_daemon
@@ -781,6 +802,7 @@ case "$CMD" in
   probe)      do_probe ;;
   allow)      do_allow ;;
   recents)        do_recents ;;
+  gesture)        log "gesture: the recents list was opened by ${2:-unknown}" ;;
   recents-switch) recents_switch "$2" "$3" ;;
   recents-remove) recents_remove "$2" "$3" ;;
   version)    echo "scripts=$(scripts_stamp) module=$(spsm_version) code=$SPSM_CODE_VERSION" ;;
@@ -791,6 +813,6 @@ case "$CMD" in
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|status|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|gesture <how>|status|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac

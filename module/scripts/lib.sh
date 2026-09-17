@@ -694,6 +694,18 @@ launch_home() { am start -a android.intent.action.MAIN -c android.intent.categor
 #
 # Only SpsmHomeActivity counts as ours. SetupActivity being on screen is "the
 # app the user just pressed Turn on in", not a working home.
+# What Android currently answers for the home activity, as one line the log can
+# carry. Read-only, and never a reason to fail: a phone that will not answer says
+# so in the line.
+home_activity_now() {
+  if has cmd; then
+    _r=$(cmd package resolve-activity --brief -a android.intent.action.MAIN \
+            -c android.intent.category.HOME 2>/dev/null | tail -n 1)
+    [ -n "$_r" ] && { printf '%s\n' "$_r"; return; }
+  fi
+  printf 'unknown\n'
+}
+
 home_resumed() {
   has dumpsys || { echo unknown; return; }
   _line=$(dumpsys activity activities 2>/dev/null \

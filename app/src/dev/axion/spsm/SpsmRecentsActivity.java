@@ -38,8 +38,22 @@ public class SpsmRecentsActivity extends Activity {
      * <p>The home screen asks this before acting on a MAIN/HOME intent: without
      * it, pressing Home while the list is open would open the list again, and a
      * gesture meant to leave could look like it did nothing.
+     *
+     * <p>It is cleared on the way out from all three of pause, stop and destroy.
+     * A flag that can only ever be set is how a gesture stops working after the
+     * first time it is used: the list was opened once, the flag stayed up, and
+     * every later go-home was treated as "already open".
      */
     static boolean visible;
+
+    /**
+     * When the list last came up, on the same clock the home screen uses.
+     *
+     * <p>The home stamps this before it starts the list and the list stamps it
+     * when it appears, so a single gesture - which can arrive as a swipe and as a
+     * go-home within a few hundred milliseconds - opens exactly one list.
+     */
+    static long openedAt;
 
     private ListView list;
     private View empty;
@@ -85,12 +99,25 @@ public class SpsmRecentsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         visible = true;
+        openedAt = SystemClock.uptimeMillis();
     }
 
     @Override
     protected void onPause() {
         visible = false;
         super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        visible = false;
+        super.onStop();
+    }
+
+    @Override
+    protected void onDestroy() {
+        visible = false;
+        super.onDestroy();
     }
 
     @Override
