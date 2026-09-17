@@ -175,14 +175,23 @@ restore_kv() {
   kv_read_many "$_ds" $_list
 
   # Second pass: decide per value whether it is still ours to undo, and write.
+  #
+  # The writes go together rather than one after another. They are different
+  # values - the order between them means nothing - and each one is an exec that
+  # costs a phone a fifth of a second: a knob with six values spent three seconds
+  # of the exit writing six independent settings, and there are a dozen such
+  # knobs. The applied snapshot is also read once here instead of once per
+  # target, which was a `cat` per value.
+  _applied=''
+  [ -f "$2" ] && _applied=$(cat "$2" 2>/dev/null)
   _idx=0
   while IFS=$TAB read -r _t _v || [ -n "$_t" ]; do
     [ -n "$_t" ] || continue
     [ "$_v" = "(MISSING)" ] && continue
-    if [ -f "$2" ]; then
+    if [ -n "$_applied" ]; then
       # Both sides are in the encoded form, so this comparison does not care
       # what the value contains.
-      _was=$(snap_get "$(cat "$2" 2>/dev/null)" "$_t")
+      _was=$(snap_get "$_applied" "$_t")
       _cur=$(enc_val "$(kv_result "$_ds" "$_idx")")
       # Still ours to undo? If not, a newer value wins.
       if [ -n "$_was" ] && [ "$_cur" != "$_was" ]; then
@@ -191,10 +200,11 @@ restore_kv() {
         continue
       fi
     fi
-    kv_write "$_t" "$(unesc "$_v")"
+    ( kv_write "$_t" "$(unesc "$_v")" ) &
     rm -f "$_ds/$$.$_idx" "$_ds/$$.$_idx.part"
     _idx=$((_idx + 1))
   done < "$1"
+  wait
 
   # Nothing of ours may be left in the scratch dir, whatever happened above.
   rm -f "$_ds/$$".* 2>/dev/null
@@ -1289,20 +1299,28 @@ apply_app_restrict() {
 restore_app_restrict() {
   _list="$ORIG_DIR/app_restrict.tsv"
   [ -f "$_list" ] || return 0
+  # Every app here costs two reads and up to two writes, and on the way out they
+  # ran one app after another - eight seconds of the exit in the v3.6.0 log for a
+  # dozen apps, and it is the same work the apply already does together. The
+  # reads and the writes for one app stay in order; the apps themselves do not
+  # wait for each other.
   while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
-    if [ "$_ob" != "-" ]; then
-      _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
-      # Only undo our own change: if the system or the user moved it since,
-      # that newer decision wins.
-      [ "$_now" = "$_nb" ] && am set-standby-bucket "$_pkg" "$_ob" >/dev/null 2>&1
-    fi
-    if [ "$_oo" != "-" ]; then
-      _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
-             | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
-      [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
-    fi
+    (
+      if [ "$_ob" != "-" ]; then
+        _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+        # Only undo our own change: if the system or the user moved it since,
+        # that newer decision wins.
+        [ "$_now" = "$_nb" ] && am set-standby-bucket "$_pkg" "$_ob" >/dev/null 2>&1
+      fi
+      if [ "$_oo" != "-" ]; then
+        _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
+               | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
+        [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
+      fi
+    ) &
   done < "$_list"
+  wait
   # The idle period is over: the next one starts from whatever the phone looks
   # like then, not from this record.
   rm -f "$_list"
@@ -1666,50 +1684,138 @@ restore_sync_off() { restore_kv "$1" "$2"; }
 # The owner's instruction, verbatim: "better to completely remove the swipe to
 # open recents and it's better if you shift the gesture mode to 3-button
 # navigation mode, such that you have easy to implement back will back, home
-# button will take to the home of spsm and recent button will open recents".
+# button will take to the home of spsm and recent button will open recents" -
+# and then, after the first build: "i didn't told you to implement a custom three
+# button navigation bar, i mean i want system own 3-button navigation bar. Also
+# you custom three button navigation bar is too buggy, so remove it completely
+# and then just add system one and as always while leaving return back to normal
+# state."
 #
-# The swipe is gone from the app. This knob is the other half: while the mode is
-# on, the phone itself uses three-button navigation, so there are real buttons -
-# Back is Back, Home lands on this mode's home (it is the home while the mode is
-# on), and Recents opens this mode's own list. The phone's own setting is
-# journalled and put back on exit like every other value.
+# The commands below are the owner's own, verified by him on the phone:
 #
-# Three-button navigation also removes the conflict that made the swipe
-# unreliable in the first place: on a gesture-navigation phone the bottom edge
-# belongs to Android, which takes the touch away from whatever is under it
-# mid-swipe. With buttons, nothing takes anything.
+#   su -c 'cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.threebutton'
+#   su -c 'cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.gestural'
+#
+# So the bar is the system's own, switched by the system's own mechanism (the
+# exclusive RRO that draws it), and this app draws nothing at all. Two things
+# identify which navigation the phone is using - the enabled overlay in that
+# category, and the secure setting the ROM keeps in step with it (0 three-button,
+# 1 two-button, 2 gesture) - and both are recorded before the switch and put back
+# on exit.
+NAV_CATEGORY=com.android.internal.systemui.navbar
+NAV_OVERLAY_ORIG="$ORIG_DIR/nav_overlay.orig"
+
+# The overlay this phone has enabled in the navigation-bar category, or empty if
+# the phone will not say. `cmd overlay list` prints one overlay per line with a
+# [x] in front of the ones that are on; the shape was taken from this ROM. When
+# the list cannot be read the setting the ROM keeps in step is used instead.
+nav_overlay_current() {
+  if has cmd; then
+    _n=$(cmd overlay list --user 0 2>/dev/null | tr -d '\r' \
+         | grep -F "$NAV_CATEGORY." | grep -F '[x]' | head -1 \
+         | sed -n "s/.*\($NAV_CATEGORY\.[A-Za-z0-9._]*\).*/\1/p")
+    [ -n "$_n" ] && { printf '%s' "$_n"; return 0; }
+  fi
+  nav_overlay_for_mode "$(sget secure navigation_mode)"
+}
+
+# The overlay that matches a navigation_mode value.
+nav_overlay_for_mode() {
+  case "$1" in
+    0) printf '%s.threebutton' "$NAV_CATEGORY" ;;
+    1) printf '%s.twobutton' "$NAV_CATEGORY" ;;
+    2) printf '%s.gestural' "$NAV_CATEGORY" ;;
+  esac
+}
+
+# Which navigation the phone is drawing now: three | two | gesture | ?
+# The setting first (it is what the system changes when the button row changes),
+# the overlay as the answer for a phone that does not keep one.
+nav_now() {
+  case "$(sget secure navigation_mode)" in
+    0) printf 'three'; return ;;
+    1) printf 'two'; return ;;
+    2) printf 'gesture'; return ;;
+  esac
+  case "$(nav_overlay_current)" in
+    "$NAV_CATEGORY.threebutton") printf 'three' ;;
+    "$NAV_CATEGORY.twobutton")   printf 'two' ;;
+    "$NAV_CATEGORY.gestural")    printf 'gesture' ;;
+    *) printf '?' ;;
+  esac
+}
+
+nav_is_three() { [ "$(nav_now)" = three ]; }
+
 meta_nav_buttons() {
-  echo "System|Three-button navigation|While the mode is on, the phone uses three-button navigation: Back, Home and Recents are real buttons at the bottom of every screen. Back is Back, Home comes back to this mode's home, and Recents opens this mode's own list. Your own navigation setting comes back when you switch the mode off.|1|session|core"
+  echo "System|Three-button navigation|While the mode is on the phone itself uses three-button navigation - the system's own bar, on every screen including inside apps. Back is Back, Home comes back to this mode's home, and Recents opens this mode's own list. Your own navigation comes back when you switch the mode off.|1|session|core"
 }
 snapshot_nav_buttons() { snap_kv @secure:navigation_mode; }
+
 apply_nav_buttons() {
   _was=$(sget secure navigation_mode)
-  case "$_was" in
-    '') log "nav: this phone will not say which navigation it uses, so it is left alone"; return 2 ;;
-    0)  log "nav: the phone already uses three-button navigation" ; return 0 ;;
-  esac
-  sput secure navigation_mode 0
-  # Read back, like every other write in this mode: a settings write this phone
-  # accepted and ignored is not a change.
+  # `settings get` answers "null" for a setting the phone does not have, and the
+  # journal keeps it that way so that the exit deletes it again. For the decision
+  # here it is simply "the phone did not say".
+  case "$_was" in null) _was='' ;; esac
+  _was_overlay=$(nav_overlay_current)
+  if nav_is_three; then
+    log "nav: the phone already uses three-button navigation"
+    return 0
+  fi
+  if [ -z "$_was_overlay" ] && [ -z "$_was" ]; then
+    log "nav: this phone will not say which navigation it uses, so it is left alone"
+    return 2
+  fi
+  # The original, written once per session: the first sighting is the phone's own
+  # navigation, and a later screen-off must not record ours as if it were his.
+  [ -f "$NAV_OVERLAY_ORIG" ] || printf '%s\n' "$_was_overlay" > "$NAV_OVERLAY_ORIG" 2>/dev/null
+
+  # The owner's own command, and then the setting the ROM keeps in step with it.
+  # Either one alone switches the bar on this phone; together they cannot
+  # disagree about what the phone should be doing.
+  if has cmd; then
+    cmd overlay enable-exclusive --user 0 --category "$NAV_CATEGORY.threebutton" >/dev/null 2>&1
+  fi
+  case "$_was" in 0) ;; *) sput secure navigation_mode 0 ;; esac
+
+  # Read back: the phone is asked what it is drawing now, not what it was told.
   _i=0
   while [ "$_i" -lt 6 ]; do
-    [ "$(sget secure navigation_mode)" = 0 ] && break
+    nav_is_three && break
     sleep 0.4 2>/dev/null || sleep 1
     _i=$((_i + 1))
   done
-  if [ "$(sget secure navigation_mode)" = 0 ]; then
-    log "nav: three-button navigation is on (was $_was) - Back is Back, Home is this home, Recents is this mode's list"
+  if nav_is_three; then
+    log "nav: the phone is on three-button navigation (was ${_was:-unknown}${_was_overlay:+, overlay $_was_overlay}) - Back is Back, Home is this home, the Recents button is this mode's list"
     return 0
   fi
-  # Did not take. Put the phone's own value back explicitly rather than leaving a
-  # change behind that the journal has already written off as undone: a write that
-  # WAS accepted with a read-back that lagged would otherwise leave the phone in
-  # three-button navigation with nothing recorded to undo it.
-  if [ "$_was" = null ]; then sdel secure navigation_mode; else sput secure navigation_mode "$_was"; fi
-  log "nav: this phone did not take three-button navigation (still $_was); this mode's screens draw their own buttons instead"
+  # Not taken: the phone's own navigation is put back explicitly, so a write that
+  # did land cannot be left behind as a change the journal has written off.
+  if [ -n "$_was_overlay" ] && has cmd; then
+    cmd overlay enable-exclusive --user 0 --category "$_was_overlay" >/dev/null 2>&1
+  fi
+  if [ -z "$_was" ] || [ "$_was" = null ]; then sdel secure navigation_mode; else sput secure navigation_mode "$_was"; fi
+  rm -f "$NAV_OVERLAY_ORIG"
+  log "nav: this phone did not take three-button navigation (still ${_was:-unknown}); the system bar is left exactly as it was"
   return 2
 }
-restore_nav_buttons() { restore_kv "$1" "$2"; }
+
+restore_nav_buttons() {
+  restore_kv "$1" "$2"
+  # The overlay as well. On a phone where the setting and the bar are kept in
+  # step, writing the setting is enough; on one where they are not, the overlay
+  # is the thing that actually draws the bar - so both go back.
+  if [ -f "$NAV_OVERLAY_ORIG" ]; then
+    _o=$(cat "$NAV_OVERLAY_ORIG" 2>/dev/null)
+    if [ -n "$_o" ] && has cmd; then
+      cmd overlay enable-exclusive --user 0 --category "$_o" >/dev/null 2>&1
+      log "nav: the phone's own navigation is back (overlay $_o)"
+    fi
+    rm -f "$NAV_OVERLAY_ORIG"
+  fi
+  return 0
+}
 
 # ============================================================ Memory
 
@@ -1790,15 +1896,24 @@ com.android.emergency com.android.mms com.android.dialer"
 
 rom_bg_core() { printf '%s\n' $ROM_BG_CORE; }
 
+# The candidates, built without forking per package.
+#
+# The first version tested each running process with `printf | grep -q` twice, so
+# every package on the phone cost three execs before anything was even decided,
+# and the whole step was measured at 264 seconds off the end of an activation in
+# the v3.6.0 log. The sets are turned into strings once and each candidate is
+# tested against them with a shell case - no forks at all until the writes below.
 rom_bg_candidates() {
   _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') $(rom_bg_core | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
   _sys=$(pm list packages -s 2>/dev/null | sed 's/^package://' | sort -u)
+  _sys_s=" $(printf '%s\n' $_sys | tr '\n' ' ') "
+  _ex_s=" $(printf '%s\n' $_exempt | tr '\n' ' ') "
   for _p in $(running_packages); do
     [ -n "$_p" ] || continue
     case "$_keep" in *" $_p "*) continue ;; esac
-    printf '%s\n' "$_sys" | grep -qxF "$_p" || continue
-    printf '%s\n' "$_exempt" | grep -qxF "$_p" && continue
+    case "$_sys_s" in *" $_p "*) ;; *) continue ;; esac
+    case "$_ex_s" in *" $_p "*) continue ;; esac
     printf '%s\n' "$_p"
   done
 }
@@ -1820,38 +1935,48 @@ apply_rom_bg_off() {
   # package looked like BEFORE we touched it must be written once, or the exit
   # would restore our own value as if it were the user's.
   [ -f "$_list" ] || : > "$_list"
-  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   _d=$SPSM_DIR/.tmp
   mkdir -p "$_d" 2>/dev/null
+  _pkgfile="$_d/rombg.pkgs.$$"
   _r="$_d/rombg.$$"
   : > "$_r"
-  rom_bg_candidates > "$_d/rombg.pkgs.$$" 2>/dev/null
-  _names=$(tr '\n' ' ' < "$_d/rombg.pkgs.$$" 2>/dev/null)
+  rom_bg_candidates > "$_pkgfile" 2>/dev/null
+  _names=$(tr '\n' ' ' < "$_pkgfile" 2>/dev/null)
+  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   _n=0
   while read -r _pkg; do
     [ -n "$_pkg" ] || continue
     _n=$((_n + 1))
-    (
-      _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
-      [ -n "$_ob" ] || _ob=-
-      _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
-            | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
-      [ -n "$_oo" ] || _oo=-
-      [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
-      printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
-      [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
-      [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
-      am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
-    ) &
-  done < "$_d/rombg.pkgs.$$"
-  wait
-  rm -f "$_d/rombg.pkgs.$$"
-  sort -u "$_r" 2>/dev/null | while IFS="$TAB" read -r _pkg _ob _oo _b; do
-    [ -n "$_pkg" ] || continue
     case "$_known" in
-      *" $_pkg "*) ;;
-      *) printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_b" "$_oo" "deny" >> "$_list" ;;
+      *" $_pkg "*)
+        # Already recorded in this idle period: these are our values, so there is
+        # nothing to read and nothing to write down - just hold them in place.
+        (
+          am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
+          am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
+        ) & ;;
+      *)
+        (
+          _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+          [ -n "$_ob" ] || _ob=-
+          _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
+                | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
+          [ -n "$_oo" ] || _oo=-
+          [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
+          printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" deny >> "$_r"
+          [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
+          am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
+        ) & ;;
     esac
+  done < "$_pkgfile"
+  wait
+  rm -f "$_pkgfile"
+  # One writer for the journal, in a stable order.
+  sort -u "$_r" 2>/dev/null | while IFS=$TAB read -r _pkg _ob _nb _oo _no; do
+    [ -n "$_pkg" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_nb" "$_oo" "$_no" >> "$_list"
   done
   rm -f "$_r"
   if [ "$_n" = 0 ]; then

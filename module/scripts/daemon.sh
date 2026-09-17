@@ -110,15 +110,28 @@ log "daemon start (pid $$)"
 watch_recents() {
   has logcat || return 0
   log "recents: watching the phone's event log for its own recents screen"
+  # Which screen the phone's Recents button opens, read once: it cannot change
+  # while the mode is on, and asking per line would be a dumpsys per line. The
+  # guard reads it from here and falls back to asking itself.
+  RECENTS_HOST=$(host_recents_component 2>/dev/null)
+  export RECENTS_HOST
   logcat -b events -v brief 2>/dev/null | while read -r _l; do
     [ -f "$ACTIVE" ] || break
-    case "$_l" in *Recents*) ;; *) continue ;; esac
+    # Everything that mentions recents, in either spelling: the guard decides
+    # what it is and writes down the ones it refuses, so a button that opens the
+    # phone's recents screen can never fail silently here.
+    case "$_l" in *ecents*|*ECENTS*) ;; *) continue ;; esac
     recents_guard "$_l"
   done
 }
 
 WATCH_PID=""
-if knob_enabled nav_buttons "$(knob_default nav_buttons)"; then
+# Gated on what the phone is actually drawing, not on our own option: our
+# option is what usually puts the phone on three buttons, but the user may
+# equally have chosen it himself, and the button has to work either way. A phone
+# on gesture navigation has no Recents button at all, so there is nothing to
+# watch and nothing to hand over.
+if [ "$(nav_now)" = three ]; then
   watch_recents &
   WATCH_PID=$!
 fi

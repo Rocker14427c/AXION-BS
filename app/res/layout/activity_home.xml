@@ -13,10 +13,10 @@
     the right. Every one of them is bound in SpsmHomeActivity - nothing in this
     file is decoration without a job.
 
-    The swipe up for recents is gone, by the owner's instruction: the phone is
-    put into three-button navigation while the mode is on, so Recents is a
-    button. nav_bar is what is shown if the phone refuses that switch, so this
-    screen never ends up with no way to reach the recents list.
+    The swipe up for recents is gone, by the owner's instruction: the phone itself
+    is switched to three-button navigation while the mode is on (the system's own
+    bar - this app draws no buttons of its own), so Recents is a button on every
+    screen, including inside other apps.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/home_root"
@@ -147,12 +147,9 @@
         android:gravity="center"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
-        android:paddingBottom="14dp"
+        android:paddingBottom="16dp"
         android:text="@string/home_hint_hold"
         android:textColor="@color/text_hint"
         android:textSize="10sp" />
 
-    <!-- Drawn only when the phone has no three buttons of its own. -->
-    <include layout="@layout/nav_bar" android:id="@+id/nav_bar"
-        android:layout_width="match_parent" android:layout_height="56dp" />
 </LinearLayout>

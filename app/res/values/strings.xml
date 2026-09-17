@@ -80,9 +80,6 @@
     <string name="slot_removed">Taken out. Tap + to add another app.</string>
     <string name="home_hint_hold">Hold an app to change it</string>
     <string name="home">Back to the power-saving home screen</string>
-    <string name="nav_back">Back</string>
-    <string name="nav_home">Home</string>
-    <string name="nav_recents">Recents</string>
     <string name="clear_all">Clear all</string>
     <string name="clear_all_done">Cleared %1$s · %2$s still open</string>
 </resources>

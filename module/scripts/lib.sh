@@ -100,6 +100,14 @@ log() {
   _line="$(date '+%Y-%m-%d %H:%M:%S') $*"
   echo "$_line" >> "$LOG" 2>/dev/null
   echo "SPSM: $*" > /dev/kmsg 2>/dev/null
+  # The size check is a fork (`wc`), and it ran on every single line: an
+  # activation writes dozens of lines, so dozens of forks went into answering a
+  # question whose answer moves by a few hundred bytes. It is asked every
+  # twentieth line now - the log is trimmed at 400 kB and twenty lines is far
+  # less than that.
+  LOG_N=$(( ${LOG_N:-0} + 1 ))
+  [ "$LOG_N" -lt 20 ] && return 0
+  LOG_N=0
   if [ -f "$LOG" ]; then
     _sz=$(wc -c < "$LOG" 2>/dev/null || echo 0)
     if [ "$_sz" -gt "$LOG_MAX" ] 2>/dev/null; then

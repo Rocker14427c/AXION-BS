@@ -115,7 +115,4 @@
             android:textSize="14sp" />
     </FrameLayout>
 
-    <!-- Drawn only when the phone has no three buttons of its own. -->
-    <include layout="@layout/nav_bar" android:id="@+id/nav_bar"
-        android:layout_width="match_parent" android:layout_height="56dp" />
 </LinearLayout>

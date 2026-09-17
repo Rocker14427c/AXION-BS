@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.6.0
-versionCode=52
+version=v3.6.1
+versionCode=53
 author=Axion SPSM
-description=v3.6.0 the swipe is gone: the phone runs on three buttons while the mode is on, so Back is Back, Home is this home and the Recents button opens this mode's own list - and that list has Clear all, which closes every open task and stops the frozen background in one press. Apps outside your six are stopped outright when the screen goes off so their memory comes back, and the ROM's own background work is restricted per package while asleep and put back on wake. RMX3430.
+description=v3.6.1 the phone's own three-button navigation, switched by the phone's own overlay command (this app draws no bar of its own), with its Recents button handed to this mode's list - and put back to the owner's gesture navigation on exit. The ROM-background step no longer takes four minutes: the work is batched, the exit writes independent values together and stops the daemon before the revert instead of after it. RMX3430.

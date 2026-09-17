@@ -298,6 +298,13 @@ do_deactivate() {
   # one race that could leave a change behind on exit.
   rm -f "$ACTIVE"
 
+  # The daemon stops here, at the top of the exit, rather than at the end.
+  # Its whole job is the screen, and the screen is none of its business any more
+  # - but while it was still running it held the transition lock against the
+  # exit: the v3.6.0 log has the exit spending a second on "WARN lock timeout
+  # (held by pid ...)" waiting for a loop that was about to be stopped anyway.
+  stop_daemon
+
   # The CPU power mode goes back first, ahead of everything else.
   #
   # While it is engaged the kernel owns the governor: the deep revert writes
@@ -352,7 +359,6 @@ do_deactivate() {
     refresh_launcher "$(home_package)"
   fi
 
-  stop_daemon
   touch "$STATE/last_exit_ok"
   lock_release
   return 0

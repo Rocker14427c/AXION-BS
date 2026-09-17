@@ -251,6 +251,20 @@ case "$CMD" in
       kill-all)
         printf '%s\n' "$(date +%s)" >> "$S/kill_all" ;;
       start)
+        # am start -n dev.axion.spsm/.SpsmRecentsActivity: this mode's own
+        # recents list. Starting it is what puts it on screen, and what the
+        # `dumpsys activity activities` read-back below then sees. A test can
+        # make the phone refuse the start, which is how a background-activity
+        # launch restriction looks from here.
+        case "$*" in
+          *dev.axion.spsm/.SpsmRecentsActivity*)
+            if [ -f "$S/start_recents_broken" ]; then
+              echo "Error: Activity not started, unable to resolve Intent"
+              exit 1
+            fi
+            printf 'dev.axion.spsm/.SpsmRecentsActivity\n' > "$S/resumed"
+            ;;
+        esac
         # am start --task <id> -n <comp> is the last-resort way of bringing a
         # task to the front, and on this ROM it works.
         case "$*" in
@@ -288,6 +302,46 @@ case "$CMD" in
   cmd)
     log_call "$@"
     case "$1 $2" in
+      # The navigation bar is drawn by an exclusive RRO, and the ROM keeps the
+      # secure setting in step with it. Both are modelled by one value here, the
+      # way the phone behaves: 0 three-button, 1 two-button, 2 gesture.
+      "overlay enable-exclusive")
+        # cmd overlay enable-exclusive --user N --category <name>
+        _cat=''
+        shift
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --category) _cat=$2; shift 2 ;;
+            --user) shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        # A ROM that takes the command and ignores it.
+        [ -f "$S/refuse_overlay" ] && exit 0
+        case "$_cat" in
+          com.android.internal.systemui.navbar.threebutton) printf '%s' 0 > "$S/settings/secure.navigation_mode" ;;
+          com.android.internal.systemui.navbar.twobutton)   printf '%s' 1 > "$S/settings/secure.navigation_mode" ;;
+          com.android.internal.systemui.navbar.gestural)    printf '%s' 2 > "$S/settings/secure.navigation_mode" ;;
+        esac
+        ;;
+      "overlay list")
+        # The shape this ROM prints: the category's overlays, [x] for the one
+        # that is on. A test can make the phone refuse to answer at all.
+        [ -f "$S/no_overlay_list" ] && exit 0
+        _m=$(cat "$S/settings/secure.navigation_mode" 2>/dev/null)
+        echo "com.android.internal"
+        case "$_m" in
+          0) echo "[x] com.android.internal.systemui.navbar.threebutton"
+             echo "[ ] com.android.internal.systemui.navbar.gestural" ;;
+          1) echo "[ ] com.android.internal.systemui.navbar.threebutton"
+             echo "[x] com.android.internal.systemui.navbar.twobutton"
+             echo "[ ] com.android.internal.systemui.navbar.gestural" ;;
+          2) echo "[ ] com.android.internal.systemui.navbar.threebutton"
+             echo "[x] com.android.internal.systemui.navbar.gestural" ;;
+          *) echo "[ ] com.android.internal.systemui.navbar.threebutton"
+             echo "[ ] com.android.internal.systemui.navbar.gestural" ;;
+        esac
+        ;;
       "appops get") cat "$S/appop/$3" 2>/dev/null || echo "RUN_ANY_IN_BACKGROUND: allow" ;;
       "appops set") printf '%s: %s\n' "$4" "$5" > "$S/appop/$3" ;;
       "role get-role-holders") cat "$S/home_role" 2>/dev/null ;;

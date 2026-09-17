@@ -166,6 +166,11 @@ EOF
   printf '%s' 1 > "$S/settings/global.network_recommendations_enabled"
   printf '%s' 1 > "$S/settings/global:auto_sync" 2>/dev/null || printf '%s' 1 > "$S/settings/global.auto_sync"
   printf '%s' 1 > "$S/settings/global.low_power"
+  # Navigation: the value the owner's phone reported before the mode touched
+  # anything ("navigation_mode=2 (0=3-button 1=2-button 2=gestures)"). The
+  # navigation-bar overlay and this setting are the same thing in the stub, the
+  # way they are on the phone.
+  printf '%s' 2 > "$S/settings/secure.navigation_mode"
   printf '%s' 1 > "$S/settings/secure.location_mode"
   echo com.android.launcher3 > "$S/home_role"
   echo com.android.launcher3/.Launcher > "$S/home_activity"
@@ -2438,22 +2443,25 @@ if grep -rq 'name="swipe_up_recents"\|name="swipe_for_recents"\|R.string.swipe' 
 else
   ok "and the hint that taught it is gone too"
 fi
-grep -q '@layout/nav_bar' "$REPO/app/res/layout/activity_home.xml" && \
-  grep -q '@layout/nav_bar' "$REPO/app/res/layout/activity_recents.xml"
-check "both of this mode's screens can draw the three buttons" $?
-grep -q 'name="nav_back">Back<' "$REPO/app/res/values/strings.xml" && \
-  grep -q 'name="nav_home">Home<' "$REPO/app/res/values/strings.xml" && \
-  grep -q 'name="nav_recents">Recents<' "$REPO/app/res/values/strings.xml"
-check "and the buttons are Back, Home and Recents" $?
-grep -q "NavBar.wire" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q "NavBar.wire" "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java"
-check "and both screens bind them rather than leaving dead controls" $?
+# The owner's correction: "i didn't told you to implement a custom three button
+# navigation bar, i mean i want system own 3-button navigation bar. Also you
+# custom three button navigation bar is too buggy, so remove it completely and
+# then just add system one". So there must be no bar drawn by this app at all -
+# no layout, no class, no icons, not even the strings - and what replaces it is
+# the phone's own bar, switched by the phone's own mechanism.
+if grep -rq "nav_bar\|NavBar\|nav_back\|nav_home\|nav_recents" "$REPO/app/res" "$REPO/app/src"; then
+  bad "this app draws no navigation bar of its own"
+else
+  ok "this app draws no navigation bar of its own"
+fi
+if [ -e "$REPO/app/res/layout/nav_bar.xml" ] || [ -e "$REPO/app/src/dev/axion/spsm/NavBar.java" ]; then
+  bad "and the buggy bar's own files are gone"
+else
+  ok "and the buggy bar's own files are gone"
+fi
 grep -q "KEYCODE_APP_SWITCH" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'openRecents("recents-button")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "the phone's own Recents button opens this mode's list" $?
-grep -q "NavBar.refresh" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
-  grep -q "navigation_mode" "$REPO/app/src/dev/axion/spsm/NavBar.java"
-check "and the drawn buttons stay hidden while the phone has its own" $?
 grep -q 'engine.sh recents-opened' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'recents-opened)' "$REPO/module/scripts/engine.sh"
 check "and every open of the list is noted in the log, with what opened it" $?
@@ -2892,42 +2900,48 @@ check "an exit with no session behind it force-stops nothing (got ${n:-0})" $?
 
 
 # ==========================================================================
-say "73. three-button navigation: Back is Back, Home is this home, Recents is this list"
-# The owner's instruction: "better to completely remove the swipe to open recents
-# and it's better if you shift the gesture mode to 3-button navigation mode, such
-# that you have easy to implement back will back, home button will take to the
-# home of spsm and recent button will open recents".
+say "73. the phone's own three-button navigation, switched by its own command"
+# The owner's correction and his own verified commands:
+#   "i didn't told you to implement a custom three button navigation bar, i mean
+#    i want system own 3-button navigation bar. Also you custom three button
+#    navigation bar is too buggy, so remove it completely and then just add
+#    system one ... su -c 'cmd overlay enable-exclusive --user 0 --category
+#    com.android.internal.systemui.navbar.threebutton' ... su -c 'cmd overlay
+#    enable-exclusive --user 0 --category com.android.internal.systemui.navbar.gestural'"
 #
-# The app half is case 66. This is the phone half: while the mode is on the phone
-# itself uses three buttons, so there are real buttons at the bottom of every
-# screen - including inside another app, which is where a home-screen control
-# could never reach. And it is the phone's own setting, journalled like the rest.
+# The app half - no bar drawn by this app at all - is in case 66. This is the
+# phone half: the system's own bar, switched by the system's own mechanism, and
+# put back the same way on the way out.
 make_tree; make_stubs; seed_stub_state
-printf '2\n' > "$WORK/stub/settings/secure.navigation_mode"
 screen_on
 run_engine activate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
-check "the phone is put into three-button navigation while the mode is on" $?
-grep -q "nav: three-button navigation is on (was 2)" "$WORK/spsm/spsm.log"
-check "and the log says what it was before" $?
+check "the phone is put on three-button navigation while the mode is on" $?
+grep -q "^cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.threebutton$" "$WORK/stub/calls"
+check "with the phone's own command, the one the owner verified" $?
+grep -q "nav: the phone is on three-button navigation (was 2, overlay com.android.internal.systemui.navbar.gestural)" "$WORK/spsm/spsm.log"
+check "and the log says what it was before - both the setting and the overlay" $?
 run_engine deactivate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
 check "gesture navigation is put back exactly as it was on exit" $?
+grep -q "^cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.gestural$" "$WORK/stub/calls"
+check "and the overlay that draws his bar is the one put back" $?
+grep -q "nav: the phone's own navigation is back (overlay com.android.internal.systemui.navbar.gestural)" "$WORK/spsm/spsm.log"
+check "with the log saying so, rather than leaving it to be guessed" $?
 run_engine verify > "$WORK/out.v73" 2>&1
 grep -q "drift=0" "$WORK/out.v73"
 check "with nothing left behind ($(cat "$WORK/out.v73"))" $?
 
-# A phone that takes the command and does nothing with it: the change is put back
-# and the journal is told, so the exit does not chase a value that is already right
-# - and the screens fall back to drawing their own buttons.
+# A ROM that takes either command and does nothing with it: the phone's own
+# navigation is put back explicitly, and the journal is told, so the exit does
+# not chase a value that is already right.
 make_tree; make_stubs; seed_stub_state
-printf '2\n' > "$WORK/stub/settings/secure.navigation_mode"
-touch "$WORK/stub/refuse_put.secure.navigation_mode"
+touch "$WORK/stub/refuse_overlay" "$WORK/stub/refuse_put.secure.navigation_mode"
 screen_on
 run_engine activate > "$WORK/out.a73" 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
 check "a phone that refuses the switch keeps its own navigation" $?
-grep -q "nav: this phone did not take three-button navigation (still 2)" "$WORK/spsm/spsm.log"
+grep -q "nav: this phone did not take three-button navigation (still 2); the system bar is left exactly as it was" "$WORK/spsm/spsm.log"
 check "and the log says so, in words" $?
 grep -q "note nav_buttons: applied, did not take, and was put back by the module" "$WORK/spsm/spsm.log"
 check "and it is recorded as a change that was undone, not one to undo later" $?
@@ -2936,31 +2950,49 @@ run_engine verify > "$WORK/out.v73b" 2>&1
 grep -q "drift=0" "$WORK/out.v73b"
 check "with a clean exit ($(cat "$WORK/out.v73b"))" $?
 
+# A phone already on three buttons: nothing is asked of it, and the exit has
+# nothing to put back.
+make_tree; make_stubs; seed_stub_state
+printf '%s' 0 > "$WORK/stub/settings/secure.navigation_mode"
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q "nav: the phone already uses three-button navigation" "$WORK/spsm/spsm.log"
+check "a phone already on three buttons is recognised as such" $?
+if grep -q "^cmd overlay enable-exclusive" "$WORK/stub/calls"; then
+  bad "and nothing is asked of it"
+else
+  ok "and nothing is asked of it"
+fi
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
+check "and its own setting survives the round trip" $?
+
 # Switched off by the user: the phone's navigation is not touched at all.
 make_tree; make_stubs; seed_stub_state
-printf '2\n' > "$WORK/stub/settings/secure.navigation_mode"
 disable_knobs nav_buttons
 screen_on
 run_engine activate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
 check "with the option off the phone's navigation is left alone" $?
-if grep -q "^settings put secure navigation_mode" "$WORK/stub/calls"; then
-  bad "and nothing was even asked of it"
+if grep -q "^cmd overlay enable-exclusive" "$WORK/stub/calls"; then
+  bad "and nothing is even asked of it"
 else
-  ok "and nothing was even asked of it"
+  ok "and nothing is even asked of it"
 fi
 run_engine deactivate >/dev/null 2>&1
 
-# A phone that has never had the setting at all: the mode writes it, and the exit
-# deletes it again rather than leaving a value the phone never had.
+# A phone that will not say which navigation it uses: left alone, and told so.
+# Writing a guess here is how a phone ends up on a bar its owner did not ask for.
 make_tree; make_stubs; seed_stub_state
+rm -f "$WORK/stub/settings/secure.navigation_mode"
+touch "$WORK/stub/no_overlay_list"
 screen_on
 run_engine activate >/dev/null 2>&1
-[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
-check "a phone with no navigation setting at all gets three buttons" $?
-run_engine deactivate >/dev/null 2>&1
+grep -q "nav: this phone will not say which navigation it uses, so it is left alone" "$WORK/spsm/spsm.log"
+check "a phone that will not say which navigation it uses is left alone" $?
 [ ! -e "$WORK/stub/settings/secure.navigation_mode" ]
-check "and the setting it never had is deleted again on exit" $?
+check "and nothing is written for it" $?
+run_engine deactivate >/dev/null 2>&1
 run_engine verify > "$WORK/out.v73c" 2>&1
 grep -q "drift=0" "$WORK/out.v73c"
 check "with nothing left behind ($(cat "$WORK/out.v73c"))" $?
@@ -3191,6 +3223,56 @@ run_engine recents-guard "am_create_activity: [0,1,2,com.android.launcher3/com.a
 [ "$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")" = "$_n" ]
 check "and with the mode off the guard does nothing" $?
 
+# A press the phone refuses to act on is not claimed as a success: the log says
+# what `am start` answered, because a button that opens nothing and a button that
+# was never pressed look identical otherwise.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+touch "$WORK/stub/start_recents_broken"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-guard "am_create_activity: [0,1,2,com.android.launcher3/com.android.quickstep.RecentsActivity]" >/dev/null 2>&1
+grep -q "recents: could not put SPSM's list up for the phone's Recents button" "$WORK/spsm/spsm.log"
+check "a start the phone refuses is reported, not claimed" $?
+grep -q "am start said: Error: Activity not started" "$WORK/spsm/spsm.log"
+check "and what the phone answered is in the log with it" $?
+run_engine deactivate >/dev/null 2>&1
+
+# A line about recents that is not the screen the button opens: written down
+# once, so that "the button did nothing" can be told apart from "we refused the
+# line" - the difference between a fix here and a fix in the ROM.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-guard "am_create_activity: [0,1,2,com.android.settings/.RecentsSettingsActivity]" >/dev/null 2>&1
+grep -q "recents-guard: a line about recents it did not act on: .*RecentsSettingsActivity" "$WORK/spsm/spsm.log"
+check "a recents-shaped line that is not the screen is written down" $?
+n=$(grep -c "recents-guard: a line about recents" "$WORK/spsm/spsm.log" 2>/dev/null || true)
+run_engine recents-guard "am_create_activity: [0,1,2,com.android.settings/.RecentsSettingsActivity]" >/dev/null 2>&1
+m=$(grep -c "recents-guard: a line about recents" "$WORK/spsm/spsm.log" 2>/dev/null || true)
+[ "${n:-0}" = "${m:-0}" ]
+check "and said once per burst rather than on every line (${n:-0} line(s))" $?
+if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
+  bad "and nothing is opened for a line that is not the screen"
+else
+  ok "and nothing is opened for a line that is not the screen"
+fi
+run_engine deactivate >/dev/null 2>&1
+
+# One press is one handover: the event log carries the activity being created and
+# then resumed, which are two lines about the same press of the button.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-guard "am_create_activity: [0,1,2,com.android.launcher3/com.android.quickstep.RecentsActivity]" >/dev/null 2>&1
+run_engine recents-guard "am_resume_activity: [0,1,2,com.android.launcher3/com.android.quickstep.RecentsActivity]" >/dev/null 2>&1
+n=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = "1" ]
+check "the create and the resume of one press hand over once, not twice (${n:-0} start(s))" $?
+run_engine deactivate >/dev/null 2>&1
+
 # The same decision, made live: the daemon watches the phone's event log and hands
 # the screen over as it opens, with no swipe and nothing for the user to press.
 make_tree; make_stubs; seed_stub_state
@@ -3214,8 +3296,9 @@ run_engine verify > "$WORK/out.v77" 2>&1
 grep -q "drift=0" "$WORK/out.v77"
 check "with a clean exit ($(cat "$WORK/out.v77"))" $?
 
-# With the navigation option off there is no phone Recents button to watch for, so
-# no watcher is started at all.
+# A phone on gesture navigation has no Recents button, so there is nothing to
+# watch for and no watcher is started - the decision follows the phone's own
+# state, not this mode's option.
 make_tree; make_stubs; seed_stub_state
 disable_knobs nav_buttons
 printf 'am_create_activity: [0,7,8,com.android.launcher3/com.android.quickstep.RecentsActivity]\n' > "$WORK/stub/eventlog"
@@ -3224,12 +3307,37 @@ run_engine activate >/dev/null 2>&1
 run_engine start-daemon >/dev/null 2>&1
 sleep 0.5 2>/dev/null || sleep 1
 if grep -q "watching the phone's event log" "$WORK/spsm/spsm.log"; then
-  bad "with the option off nothing is watched"
+  bad "a phone with no Recents button is not watched"
 else
-  ok "with the option off nothing is watched"
+  ok "a phone with no Recents button is not watched"
 fi
 run_engine stop-daemon >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
+
+# And the other way round, which is the owner's case: the phone is on three
+# buttons - his own choice, with this mode's option switched off - and the
+# button still has to open this mode's list. "Make sure that recent button of
+# system 3-button navigation bar is sync with spsm recents such that i can
+# easily switch to spsm's recent whenever I want like if I am using an app."
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+printf '%s' 0 > "$WORK/stub/settings/secure.navigation_mode"
+disable_knobs nav_buttons
+printf 'am_create_activity: [0,7,8,com.android.launcher3/com.android.quickstep.RecentsActivity]\n' > "$WORK/stub/eventlog"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine start-daemon >/dev/null 2>&1
+_i=0
+while [ "$_i" -lt 40 ]; do
+  grep -q "^am force-stop com.android.launcher3$" "$WORK/stub/calls" && break
+  sleep 0.25 2>/dev/null || sleep 1
+  _i=$((_i + 1))
+done
+grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
+check "a phone the owner put on three buttons himself is watched too" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
+check "and his own navigation is not changed by an option he switched off" $?
 
 
 # ==========================================================================

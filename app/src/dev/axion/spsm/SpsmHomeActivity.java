@@ -63,9 +63,9 @@ public class SpsmHomeActivity extends Activity {
         // all there) but the list did not open, because on a gesture-navigation
         // phone Android takes the bottom edge for itself mid-swipe and a
         // background activity start from a paused app is refused. So: no swipe
-        // at all. The mode asks the phone for three-button navigation
-        // (nav_buttons), and the three buttons below are drawn only if the phone
-        // refuses that switch.
+        // at all. The mode switches the phone itself to three-button navigation
+        // (nav_buttons), so the bar with Back, Home and Recents is the system's
+        // own, on every screen - this app draws no buttons of its own.
         // Editing the six apps from the home screen itself: the pencil turns the
         // slots into something you can take an app out of, and turns into a tick
         // while it is on. Taking an app out empties the slot, so the "+" is there
@@ -73,9 +73,6 @@ public class SpsmHomeActivity extends Activity {
         // it (the tick, or leaving the screen, ends it).
         editButton = findViewById(R.id.btn_edit);
         if (editButton != null) editButton.setOnClickListener(v -> setEditing(!editing));
-        // Back, Home and Recents, drawn by this screen only when the phone is not
-        // showing its own three.
-        NavBar.wire(this, v -> navBack(), v -> navHome(), v -> openRecents("recents-button"));
         Apps.fillDefaults(this);
         try {
             bindSlots();
@@ -119,7 +116,6 @@ public class SpsmHomeActivity extends Activity {
     protected void onResume() {
         super.onResume();
         styleSystemBars();
-        NavBar.refresh(this);
         try {
             bindSlots();
         } catch (Throwable ignored) {
@@ -232,18 +228,6 @@ public class SpsmHomeActivity extends Activity {
         return super.dispatchKeyEvent(ev);
     }
 
-    /** Back, on the home screen: there is nothing behind the home to go back to. */
-    private void navBack() {
-        noteOpen("back-button");
-    }
-
-    /** Home, on the home screen: it is already the home. Refreshing is all there is. */
-    private void navHome() {
-        try {
-            bindSlots();
-        } catch (Throwable ignored) {
-        }
-    }
 
     /** Opens the recents list, once per press, and says in the log what opened it. */
     private void openRecents(String how) {

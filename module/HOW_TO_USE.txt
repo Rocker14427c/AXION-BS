@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.0.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.1.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -23,17 +23,25 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.6.0)
-- THE SWIPE IS GONE, and the phone runs on three buttons while the mode is on.
-  On the phone's own three-button bar: Back is Back, Home comes to this mode's
-  home (the six apps), and Recents opens this mode's own list. Your navigation
-  setting is written down before it is changed and put back exactly as it was
-  when you switch the mode off.
-  If the phone refuses the switch, this mode's screens draw their own three
-  buttons at the bottom instead, so there is always a way into recents - and if
-  the phone IS showing its own three, the drawn ones stay hidden (never two sets).
-  From inside an app the phone's Recents button is caught as it opens the
-  launcher's recents screen, and this mode's list is put up in its place.
+NEW IN THIS BUILD (v3.6.1)
+- THE BAR IS THE PHONE'S OWN. The three buttons this app drew for itself in v3.6.0
+  are gone - no layout, no code, no icons. What puts the phone on three-button
+  navigation is the system's own command, the same one you ran by hand:
+    cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.threebutton
+  and the setting the ROM keeps in step with it. Back is Back, Home comes to this
+  mode's home, and Recents opens this mode's own list.
+  On the way out BOTH are put back: the setting, and the overlay that draws your
+  own bar (gestural, on this phone - read before anything is touched). A phone
+  that takes the command and ignores it is put back explicitly and the log says
+  so; a phone that will not say which navigation it uses is left alone.
+- The Recents button is synced to this mode's list, on a phone in three-button
+  navigation whether this mode put it there or you did. From inside an app the
+  launcher's recents screen is caught as it opens, this mode's list is put up,
+  the screen is read back, and if the launcher's screen came up instead it is
+  stopped and the list is asked for again (up to three tries). A press that does
+  not work writes what `am start` answered into the log, so it can be fixed from
+  the log instead of guessed at.
+FROM v3.6.0
 - Clear all, in the recents list: every task on the list is closed at once, and
   the frozen background is stopped with it. The message counts what is left -
   "Cleared 2 · 0 still open" - because the phone's task list is read back rather
@@ -155,7 +163,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.0-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.1-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
@@ -183,6 +191,10 @@ WHILE ON
   an app: this mode's list comes up, with Clear all in its header.
 - All three buttons of the bottom bar are the phone's: Back and Home were never
   taken away, and Home now means this mode's home.
+- The ROM-background step that used to take four minutes (measured on the phone)
+  now takes a couple of seconds, and the exit stops the daemon before the revert
+  instead of after it, releases the app list in one go, and writes independent
+  values together. Both are in this build.
 - Logging stays on, so you can record a log while the mode runs.
 
 TURN OFF

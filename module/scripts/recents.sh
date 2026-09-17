@@ -244,40 +244,122 @@ do_clear_all() {
 }
 
 # ------------------------------------------------- the phone's own recents
-# With three-button navigation on, the Recents button belongs to the phone. On
-# this ROM it starts the launcher's own recents screen
+# With three-button navigation the Recents button belongs to the phone, and on
+# this ROM it opens the launcher's own recents screen
 # (com.android.launcher3/com.android.quickstep.RecentsActivity) - the launcher
-# being the one thing this mode exists to keep out of the way. The daemon feeds
-# every line of the phone's event log through here; when a line names that
-# screen, it is handed to this mode's own list instead.
+# being the one thing this mode exists to keep out of the way. The owner's
+# instruction: "Make sure that recents button of system 3-button navigation bar
+# is sync with spsm recents such that i can easily switch to spsm's recent
+# whenever I want like if I am using an app and I want to see recent."
 #
-# The action is the same shape as everything else in this file: start the list,
-# then take the phone's own screen away - the launcher's task is what is left
-# behind, and a recents screen that is still there when this list is closed is a
-# recents screen that will be seen a second time.
+# The daemon feeds every line of the phone's event log through here; when a line
+# names that screen, it is handed to this mode's own list instead.
+#
+# Comparing a log line against a component name sounds like a string test and is
+# not one: the event log prints the component the long way
+# (`com.android.launcher3/com.android.quickstep.RecentsActivity`) on one line and
+# the short way (`com.android.launcher3/.quickstep.RecentsActivity`) on the next,
+# so the test accepts the component, its class, or the class's own name - and
+# every line it decides NOT to act on is written to the log, because "the button
+# did nothing" and "we looked at the line and refused it" are different failures
+# and only one of them needs fixing here.
+
+# Is this mode's own list the activity on screen? Read back from the phone, the
+# same way everything else in this module decides what happened.
+recents_is_front() {
+  has dumpsys || return 1
+  dumpsys activity activities 2>/dev/null \
+    | grep -m1 -E 'topResumedActivity|ResumedActivity|mResumedActivity' \
+    | grep -q 'dev.axion.spsm/.SpsmRecentsActivity'
+}
+
 recents_guard() { # recents_guard <one line of the phone's event log>
   _line=$1
   [ -n "$_line" ] || return 1
   [ -f "$ACTIVE" ] || return 1
   # Never our own screen: this list is in the same log.
   case "$_line" in *dev.axion.spsm*) return 1 ;; esac
-  _host=$(host_recents_component 2>/dev/null)
+  # Which screen the phone's own Recents button opens. The name is read from the
+  # phone (`dumpsys activity recents` names mRecentsComponent); it is never
+  # guessed.
+  # The daemon reads this once and hands it over: the value cannot change while
+  # the mode is on, and reading it per log line would mean a dumpsys per line.
+  _host=${RECENTS_HOST:-}
+  [ -n "$_host" ] || _host=$(host_recents_component 2>/dev/null)
   _cls=${_host#*/}
-  case "$_line" in
-    *"$_host"*) ;;
-    *)
-      case "$_cls" in
-        ''|recents) case "$_line" in *RecentsActivity*) ;; *) return 1 ;; esac ;;
-        *) case "$_line" in *"$_cls"*) ;; *) return 1 ;; esac ;;
-      esac ;;
+  _match=0
+  case "$_host" in
+    */*)
+      case "$_line" in *"$_host"*) _match=1 ;; esac
+      if [ "$_match" = 0 ]; then
+        case "$_cls" in
+          ''|recents) ;;
+          *) case "$_line" in *"$_cls"*) _match=1 ;; esac ;;
+        esac
+      fi
+      # The short form, and the one this ROM's log actually carries.
+      [ "$_match" = 0 ] && case "$_line" in *RecentsActivity*) _match=1 ;; esac ;;
+    *) case "$_line" in *RecentsActivity*) _match=1 ;; esac ;;
   esac
+  if [ "$_match" = 0 ]; then
+    # A line about this phone's recents that was not the screen itself. Written
+    # down once per burst: if the button ever opens the phone's recents screen
+    # and this mode's list does not follow, the log says whether the line even
+    # arrived and what it said.
+    case "$_line" in
+      *ecents*|*ECENTS*)
+        _stamp="$STATE/recents_seen.stamp"
+        _now=$(date +%s)
+        [ -f "$_stamp" ] && [ "$((_now - $(cat "$_stamp" 2>/dev/null || echo 0)))" -lt 5 ] && return 1
+        printf '%s' "$_now" > "$_stamp" 2>/dev/null
+        log "recents-guard: a line about recents it did not act on: $(printf '%s' "$_line" | tr '\t' ' ' | cut -c1-150)" ;;
+    esac
+    return 1
+  fi
+  # One press, one action: the log carries the activity being created and then
+  # resumed, which are two lines about the same press.
+  _stamp="$STATE/recents_guard.stamp"
+  _now=$(date +%s)
+  if [ -f "$_stamp" ] && [ "$((_now - $(cat "$_stamp" 2>/dev/null || echo 0)))" -lt 2 ]; then
+    return 0
+  fi
+  printf '%s' "$_now" > "$_stamp" 2>/dev/null
+  has am || return 1
   _pkg=$(home_package 2>/dev/null)
   case "$_pkg" in ''|dev.axion.spsm) _pkg=com.android.launcher3 ;; esac
-  has am || return 1
-  am start -n dev.axion.spsm/.SpsmRecentsActivity >/dev/null 2>&1
-  log "recents: the phone's own recents screen opened - handed to SPSM's list"
-  # The screen the button actually opened, taken down: without this, closing our
-  # list would show the phone's recents still standing behind it.
-  am force-stop "$_pkg" >/dev/null 2>&1
-  return 0
+
+  # Already up: nothing to do.
+  recents_is_front && return 0
+
+  # Put this mode's list up, then look at what is actually on screen.
+  #
+  # Starting an activity is a request, not a guarantee: the phone can start the
+  # launcher's recents screen over ours, and an `am start` that was accepted and
+  # then covered up leaves the button looking broken. So the screen is read back,
+  # the screen the button did open is taken down, and the list is asked for again
+  # - up to three times, which is a couple of seconds at worst.
+  _i=0
+  _tries=3
+  _out=''
+  while [ "$_i" -lt "$_tries" ]; do
+    _i=$((_i + 1))
+    _out=$(am start -n dev.axion.spsm/.SpsmRecentsActivity 2>&1)
+    _w=0
+    while [ "$_w" -lt 6 ]; do
+      recents_is_front && break
+      sleep 0.2 2>/dev/null || sleep 1
+      _w=$((_w + 1))
+    done
+    recents_is_front && break
+    am force-stop "$_pkg" >/dev/null 2>&1
+  done
+  if recents_is_front; then
+    log "recents: the phone's own recents screen opened - handed to SPSM's list (${_i} attempt(s))"
+    # The screen the button actually opened, taken down: without this, closing
+    # our list would show the phone's recents still standing behind it.
+    am force-stop "$_pkg" >/dev/null 2>&1
+    return 0
+  fi
+  log "recents: could not put SPSM's list up for the phone's Recents button${_out:+ - am start said: $(printf '%s' "$_out" | tr '\n' ' ' | cut -c1-150)}"
+  return 1
 }

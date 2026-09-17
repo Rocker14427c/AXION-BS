@@ -1,7 +1,7 @@
 # Release artifacts
 
 The file to flash is the one matching the newest release:
-**`Axion-SPSM-v3.6.0-RMX3430.zip`**
+**`Axion-SPSM-v3.6.1-RMX3430.zip`**
 
 `tools/makezip.sh` writes it here, taking the version from `module/module.prop`,
 so the file name, the zip's `module.prop` and the app's version stamp cannot
@@ -9,7 +9,8 @@ disagree.
 
 | file | release |
 |---|---|
-| `Axion-SPSM-v3.6.0-RMX3430.zip` | [v3.6.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.0) — current |
+| `Axion-SPSM-v3.6.1-RMX3430.zip` | [v3.6.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.1) — current |
+| `Axion-SPSM-v3.6.0-RMX3430.zip` | [v3.6.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.0) — drew its own navigation bar; superseded |
 | `Axion-SPSM-v3.5.1-RMX3430.zip` | [v3.5.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.5.1) — the swipe; superseded |
 | `Axion-SPSM-v3.5.0-RMX3430.zip` | [v3.5.0](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.5.0) |
 | `Axion-SPSM-v3.4.1-RMX3430.zip` | [v3.4.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.4.1) |

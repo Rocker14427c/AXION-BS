@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.6.0**.
+Current module: **v3.6.1**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -647,7 +647,10 @@ settled it: the gesture *did* reach the app on nearly every try (the log lines a
 all there) and the list still did not come up, because on a gesture-navigation
 phone Android takes the bottom edge for its own "go home" mid-swipe and a
 background activity start from a pushed-back app is refused. So the mode now asks
-the phone for **three-button navigation** while it is on:
+the phone for **three-button navigation** while it is on — the phone's own bar,
+switched by the phone's own overlay command (`cmd overlay enable-exclusive
+--user 0 --category com.android.internal.systemui.navbar.threebutton`), with
+nothing drawn by this app:
 
 * **Back** is Back — an app you are in gets the press; on the power-saving home
   there is nothing behind it.
@@ -656,10 +659,12 @@ the phone for **three-button navigation** while it is on:
   whatever is on screen first: this mode's screens consume it and open this mode's
   list, so the launcher's recents screen is never started. From inside an app the
   daemon watches the phone's event log and hands that screen over the moment it is
-  named.
-* Your navigation setting is journalled and put back on exit. A phone that refuses
-  the write keeps its own navigation, and this mode's screens then draw their own
-  three buttons rather than leaving no way into recents at all.
+  named, then reads the screen back and retries (up to three times) if the phone
+  put the launcher's screen up instead. This runs on a phone in three-button
+  navigation whether this mode put it there or the owner did.
+* Your navigation setting **and** the overlay that draws your bar are journalled,
+  and both are put back on exit. A phone that refuses the write keeps its own
+  navigation; a phone that will not say which navigation it uses is left alone.
 
 **Clear all** in the recents list closes every task on it and stops the frozen
 background in the same press, then reads the phone's task list back so the count it
@@ -671,6 +676,35 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.6.1 — the phone's own bar, and an exit that is not four minutes
+
+**The bar is the phone's own.** v3.6.0 drew three buttons of its own as a fallback;
+that is gone — no layout, no class, no icons, no strings, and the suite fails if any
+of it comes back. The switch is the owner's own verified command (`cmd overlay
+enable-exclusive --user 0 --category com.android.internal.systemui.navbar.threebutton`)
+plus the setting the ROM keeps in step with it, read back before it counts as a
+change. The overlay that was enabled before — `gestural` on this phone, read from
+`cmd overlay list` — and the setting are both put back on exit; a phone that
+refuses is put back explicitly and told about in the log; a phone that will not say
+is left alone.
+
+**The Recents button is synced to this mode's list**: the daemon watches the
+phone's event log while the phone is on three buttons (whoever put it there), and
+the handover is verified — the list is started, the screen is read back, and if the
+launcher's recents screen came up instead it is stopped and the list is asked for
+again. A press that fails now says so in the log, with what `am start` answered,
+and a recents line the guard refuses is written down once per burst.
+
+**The four-minute step is gone.** `rom_bg_off` spent 264 seconds on fourteen
+packages because every package was tested against the protected lists with two
+`printf | grep` per test, and every value was read and written one at a time. The
+tests are string comparisons now and the writes run together.
+
+**The exit is shorter**: the daemon is stopped at the top (it was holding the lock
+against the exit), `app_restrict` releases its apps together, independent values
+inside a restore are written together rather than one at a time, and `log()` no
+longer forks a `wc` on every line.
 
 ## Measuring it
 
@@ -725,6 +759,7 @@ sh /data/adb/spsm/scripts/engine.sh toggle       # on / off
 sh /data/adb/spsm/scripts/engine.sh set deep_doze 1
 sh /data/adb/spsm/scripts/engine.sh deactivate   # full revert
 sh /data/adb/spsm/scripts/engine.sh clear-all   # close everything, stop the frozen apps
+sh /data/adb/spsm/scripts/engine.sh status | grep -i nav   # which navigation the phone is on
 sh /data/adb/spsm/scripts/engine.sh recents-guard "<one line of logcat -b events>"
 ```
 

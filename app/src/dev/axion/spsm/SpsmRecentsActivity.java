@@ -85,11 +85,6 @@ public class SpsmRecentsActivity extends Activity {
         if (home != null) home.setOnClickListener(v -> finish());
         View clear = findViewById(R.id.btn_clear_all);
         if (clear != null) clear.setOnClickListener(v -> clearAll());
-        // Back and Home both leave this list; Recents is where we already are.
-        // Wired here rather than in the layout so that a build of this screen
-        // without the bar (or on a phone showing its own three buttons) is not a
-        // screen with dead controls.
-        NavBar.wire(this, v -> finish(), v -> finish(), v -> load());
         adapter = new Adapter();
         try {
             list.setAdapter(adapter);
@@ -108,7 +103,6 @@ public class SpsmRecentsActivity extends Activity {
         super.onResume();
         visible = true;
         openedAt = SystemClock.uptimeMillis();
-        NavBar.refresh(this);
     }
 
     @Override
