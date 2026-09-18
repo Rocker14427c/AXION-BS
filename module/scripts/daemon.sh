@@ -150,11 +150,27 @@ if [ "$(nav_now)" = three ]; then
   WATCH_PID=$!
   recents_watch_touch &
   WATCH_TOUCH_PID=$!
+  # "watching" is a promise, and a watcher that dies the second it starts has
+  # broken it while the log still says it. The v3.6.2 device log said "watching"
+  # and never another word: the awk between getevent and the handover buffered
+  # every tap. This does not catch that case (the watcher lives, the pipe does
+  # not), but it catches the other way a watcher dies - getevent unable to read
+  # the touchscreen at all - and says so rather than leaving silence.
+  sleep 2
+  if ! kill -0 "$WATCH_TOUCH_PID" 2>/dev/null; then
+    log "recents: the Recents button watcher died at once - getevent could not read the touchscreen"
+  fi
 fi
 
 daemon_exit() {
-  [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
-  [ -n "$WATCH_TOUCH_PID" ] && kill "$WATCH_TOUCH_PID" 2>/dev/null
+  # The watchers are pipelines: killing the shell that runs the loop leaves the
+  # producer (logcat, getevent) alive with nothing reading it - an orphan every
+  # session, still listening. The children go first, then the shell itself.
+  for _w in "$WATCH_PID" "$WATCH_TOUCH_PID"; do
+    [ -n "$_w" ] || continue
+    has pkill && pkill -P "$_w" 2>/dev/null
+    kill "$_w" 2>/dev/null
+  done
   return 0
 }
 # TERM is how this loop is stopped when the mode is switched off, and a shell

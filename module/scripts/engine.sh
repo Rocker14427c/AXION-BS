@@ -69,7 +69,15 @@ knob_apply() { # knob_apply id
   # change we deliberately undid as one we broke.
   if [ "$_rc" = "2" ]; then
     j_record_state "$_id" restored
-    log "note $_id: applied, did not take, and was put back by the module"
+    # A knob that can explain its own refusal should: "would not say" and
+    # "applied and put back" are different facts, and the one generic sentence
+    # said the wrong thing for the frame-rate knob - nothing had even been
+    # attempted when this ROM's device log showed it.
+    if has_function "note_refused_$_id"; then
+      log "note $_id: $("note_refused_$_id")"
+    else
+      log "note $_id: applied, did not take, and was put back by the module"
+    fi
     return 0
   fi
 
@@ -813,7 +821,7 @@ case "$CMD" in
   screen-on)  do_screen_on ;;
   set)        do_set "$2" "$3" ;;
   verify)     do_verify ;;
-  probe)      do_probe ;;
+  probe)      do_probe "$2" ;;
   allow)      do_allow ;;
   recents)        do_recents ;;
   clear-all)      do_clear_all ;;
@@ -822,7 +830,14 @@ case "$CMD" in
   # not work - it separates "the button was not seen" from "the list would not
   # come up", which are different faults with different fixes:
   #   su -c 'sh /data/adb/spsm/scripts/engine.sh recents-button'
-  recents-button) recents_take_over "the command line" ;;
+  # An optional word ("tap", from the touchscreen watcher) so a handover a tap
+  # asked for can be told apart from one typed by hand.
+  recents-button) shift
+    if [ -f "$ACTIVE" ]; then
+      recents_take_over "the Recents button command${1:+ ($1)}"
+    else
+      log "recents: the mode is off, so there is no list to put up"
+    fi ;;
   # One line of the phone's event log, offered to the recents guard. The daemon
   # feeds it every line it sees; this form exists so the decision can be tested,
   # and run by hand, without waiting for the phone to open its own recents.
@@ -831,8 +846,13 @@ case "$CMD" in
   # at all - the answer to "why did nothing happen" without a log.
   recents-area)   recents_button_region || echo "this phone would not say where its navigation bar is" ;;
   # Watch the touchscreen for the Recents button, exactly as the daemon does, in
-  # the foreground: run it in a second Termux session and press the button.
-  recents-watch)  recents_watch_touch ;;
+  # the foreground: run it in a second Termux session and press the button. The
+  # region is printed first, so the session answers something even if the press
+  # never lands in it.
+  recents-watch)
+    _rw=$(recents_button_region 2>/dev/null)
+    echo "watching the touchscreen for the Recents button (x1 y1 x2 y2 = ${_rw:-this phone would not say}). Press it now - what happens is written to the SPSM log."
+    recents_watch_touch ;;
   # Written by the app whenever something opens the recents list: the button on
   # the home screen, the phone's own Recents key, or a MAIN/HOME intent. The
   # list itself logs what it found, so a press that opens nothing leaves a line

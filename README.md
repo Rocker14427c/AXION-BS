@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.6.2**.
+Current module: **v3.6.3**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,43 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.6.3 — the tap arrives, and the cap is honest
+
+**The v3.6.2 tap watcher was alive and never acted.** Your log showed it watching
+the Recents button the whole session and not one handover. The cause was proved
+in a test rig this round: the event stream was being read through **awk, and awk
+holds what a pipe gives it until the buffer is full or the stream ends**. A
+phone's event stream never ends and a tap is a few hundred bytes, so the press
+sat in that buffer for good — with the module's own tap rules, a held-open fake
+stream waited out the entire hold, while a ~137 KB burst answered in two
+seconds. Buffer behaviour, exactly. The tests never caught it because the fake
+`getevent`'s stream ends, and end-of-file flushes.
+
+**The fix: no awk in the stream path.** The tap state machine runs in plain POSIX
+shell now, one line at a time — `read` on a pipe takes whatever has arrived, so
+no implementation can wait for a full block. Hex-to-decimal and the tap timing
+are integer shell arithmetic (microseconds; no float, no overflow at any
+uptime). The rules are untouched: press inside the button's region, finger
+almost still, under 0.8 s, `TRACKING_ID` release counting like a `BTN_TOUCH`
+release. On a qualifying lift the same handover runs
+(`engine.sh recents-button tap`), the screen is read back, and the log line is
+the same. The suite now asserts the handover **with the stream still open** —
+the exact way v3.6.2 failed on the phone — plus the region misses, the
+died-at-once report, and the orphan cleanup after the mode switches off.
+
+**The frame-rate cap goes at the panel or says no.** v3.6.2 asked the ROM's Game
+Mode setting (`device_config game_overlay`), which your phone would not even
+show, and the mechanism caps games only — the launcher would never have
+followed it. Now the panel's own modes decide: a 30 Hz mode in `dumpsys display`
+gets `@system:peak_refresh_rate` and `@system:min_refresh_rate` written to 30.0
+while the mode is on, journalled, drift-checked, and both put back on exit. On a
+60-only panel the Game Mode setting survives as a named games-only fallback. A
+panel that offers neither, or will not say, gets an honest refusal in the
+option's note. 40 stays impossible: a panel shows counts that divide its
+refresh, and 40 does not divide 60.
+
+Full harness after this round: **594 checks, 0 failed.**
 
 ## What changed in 3.6.2 — the Recents button, for real, and 60 → 30 fps
 

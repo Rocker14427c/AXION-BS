@@ -172,10 +172,20 @@ case "$CMD" in
   # has to be in those units as well - that is the whole point of the file.
   getevent)
     case "$1" in
-      -*p*)
-        if [ -f "$S/raw_axes" ]; then cat "$S/raw_axes"; exit 0; fi ;;
+      -*p*|*-*i*)
+        # The print-info forms describe the device and EXIT - they never stream.
+        # Falling through here made the region probe sleep for hold_open's 30
+        # seconds and the watcher never reached its own stream.
+        [ -f "$S/raw_axes" ] && cat "$S/raw_axes"
+        exit 0 ;;
     esac
     cat "$S/touch_events" 2>/dev/null
+    # A real touchscreen stream never ends. hold_open is how a test says "keep
+    # this pipe open afterwards" - the v3.6.2 tap watcher looked alive and
+    # delivered nothing, because its awk buffered the taps waiting for exactly
+    # the end-of-file the phone never sends. A test that ends the stream cannot
+    # see that bug.
+    [ -f "$S/hold_open" ] && sleep 30
     ;;
 
   getprop)
@@ -544,6 +554,12 @@ case "$CMD" in
       battery)
         # Level is a file the test sets, so drain reporting can be asserted.
         echo "  level: $(cat "$S/battery_level" 2>/dev/null || echo 100)"
+        ;;
+      display)
+        # The panel's own modes, in the shape the phone prints them. What a
+        # frame-rate cap can ask for is decided here: a mode that does not exist
+        # is a frame rate the panel cannot show.
+        if [ -f "$S/display_modes" ]; then cat "$S/display_modes"; fi
         ;;
       deviceidle)
         if [ "$2" = "whitelist" ]; then cat "$S/deviceidle_whitelist"; fi

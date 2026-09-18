@@ -194,6 +194,13 @@ EOF
 </package-restrictions>
 XML
   echo 280 > "$S/wm_density"
+  # The refresh-rate keys the display follows, as this ROM ships them, and the
+  # panel's own modes: 60 only, which is what the owner's phone reports.
+  printf '%s' 60.0 > "$S/settings/system.peak_refresh_rate"
+  printf '%s' 60.0 > "$S/settings/system.min_refresh_rate"
+  cat > "$S/display_modes" <<'MODES'
+  mSupportedModes=[{id=1, width=720, height=1600, fps=60.0, alternativeRefreshRate=[]}]
+MODES
   printf '%s' 1 > "$S/settings/secure.location_mode"
   echo com.android.launcher3 > "$S/home_role"
   echo com.android.launcher3/.Launcher > "$S/home_activity"
@@ -270,6 +277,22 @@ stop_daemons() {
     sleep 0.3 2>/dev/null || sleep 1
   done
   return 0
+}
+
+# Stub input producers left running with nothing reading them. The daemon's
+# watchers are pipelines; killing the shell that runs the loop used to leave the
+# producer alive - an orphan still listening, one per session.
+orphans_alive() {
+  # The stub wrappers pass the command name by environment (CMD_OVERRIDE), so
+  # the process table only ever shows the flags: getevent runs as
+  # "stub.sh -lt", logcat as "stub.sh -b events ...".
+  _n=0
+  for _d in /proc/[0-9]*; do
+    case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
+      *"stub.sh -lt"*|*"stub.sh -b"*) _n=$((_n + 1)) ;;
+    esac
+  done
+  echo "$_n"
 }
 
 # How many of this workflow's daemons are still running, asked of the process
@@ -3459,12 +3482,12 @@ cat > "$WORK/stub/touch_events" <<'EV'
 EV
 screen_on
 run_engine activate >/dev/null 2>&1
-sh -c '. "'"$WORK"'/spsm/scripts/lib.sh"; . "'"$WORK"'/spsm/scripts/knobs.sh"; . "'"$WORK"'/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+SCRIPT_DIR="$WORK/spsm/scripts" run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; . "$SPSM_DIR/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
 grep -q "recents: watching the phone's Recents button itself" "$WORK/spsm/spsm.log"
 check "the daemon-side watcher says where the button is before it watches it" $?
 grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
 check "a tap on the Recents button opens this mode's list" $?
-grep -q "recents: the list was put up for a tap on the phone's Recents button" "$WORK/spsm/spsm.log"
+grep -q "recents: the list was put up for the Recents button command (tap)" "$WORK/spsm/spsm.log"
 check "and the log says it was the tap that did it" $?
 run_engine deactivate >/dev/null 2>&1
 
@@ -3488,7 +3511,7 @@ cat > "$WORK/stub/touch_events" <<'EV'
 EV
 screen_on
 run_engine activate >/dev/null 2>&1
-sh -c '. "'"$WORK"'/spsm/scripts/lib.sh"; . "'"$WORK"'/spsm/scripts/knobs.sh"; . "'"$WORK"'/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+SCRIPT_DIR="$WORK/spsm/scripts" run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; . "$SPSM_DIR/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
 if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
   bad "a tap on the Home button, and one well above the bar, open nothing"
 else
@@ -3518,7 +3541,7 @@ cat > "$WORK/stub/touch_events" <<'EV'
 EV
 screen_on
 run_engine activate >/dev/null 2>&1
-sh -c '. "'"$WORK"'/spsm/scripts/lib.sh"; . "'"$WORK"'/spsm/scripts/knobs.sh"; . "'"$WORK"'/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+SCRIPT_DIR="$WORK/spsm/scripts" run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; . "$SPSM_DIR/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
 if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
   bad "a drag and a long press on the button are not taps"
 else
@@ -3534,7 +3557,7 @@ cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
 screen_on
 run_engine activate >/dev/null 2>&1
 run_engine recents-button >/dev/null 2>&1
-grep -q "recents: the list was put up for the command line" "$WORK/spsm/spsm.log"
+grep -q "recents: the list was put up for the Recents button command" "$WORK/spsm/spsm.log"
 check "the handover can be run on its own, and says it worked" $?
 # Twice in a row is one press, not two lists.
 _n=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")
@@ -3552,7 +3575,7 @@ touch "$WORK/stub/start_recents_broken"
 screen_on
 run_engine activate >/dev/null 2>&1
 run_engine recents-button >/dev/null 2>&1
-grep -q "recents: could not put SPSM's list up for the command line" "$WORK/spsm/spsm.log"
+grep -q "recents: could not put SPSM's list up for the Recents button command" "$WORK/spsm/spsm.log"
 check "a start the phone refuses is reported, not claimed" $?
 grep -q "am start said: Error: Activity not started" "$WORK/spsm/spsm.log"
 check "and what the phone answered is in the log with it" $?
@@ -3592,7 +3615,7 @@ cat > "$WORK/stub/touch_events" <<'EV'
 EV
 screen_on
 run_engine activate >/dev/null 2>&1
-sh -c '. "$WORK/spsm/scripts/lib.sh"; . "$WORK/spsm/scripts/knobs.sh"; . "$WORK/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+SCRIPT_DIR="$WORK/spsm/scripts" run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; . "$SPSM_DIR/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
 grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
 check "and a tap on the Recents button is caught in those units too" $?
 run_engine deactivate >/dev/null 2>&1
@@ -3614,7 +3637,7 @@ cat > "$WORK/stub/touch_events" <<'EV'
 EV
 screen_on
 run_engine activate >/dev/null 2>&1
-sh -c '. "$WORK/spsm/scripts/lib.sh"; . "$WORK/spsm/scripts/knobs.sh"; . "$WORK/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+SCRIPT_DIR="$WORK/spsm/scripts" run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; . "$SPSM_DIR/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
 if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
   bad "and a tap in the left half of the bar is still not the button"
 else
@@ -3657,89 +3680,236 @@ else
   ok "and with the mode off the handover does nothing"
 fi
 
-say "79. the frame rate: 30 is what a 60 Hz screen can hold, and it is put back"
-# The owner's question: "My device produce 60fps all the time, is it possible to
-# reduce that 60fps to 40fps ... and 40fps is smooth too. If possible then
-# research properly and try to implement this to our spsm."
-#
-# 40 is not a rate a 60 Hz panel can show - Android's frame-rate throttling holds
-# an app to a rate that divides the display's refresh rate, and Google's own table
-# lists two values for 60 Hz: 60 and 30. What is implemented is the platform's own
-# intervention, at 30, with the phone's previous value journalled and put back.
+
+# 9. The tap must arrive while the stream is still open. A phone's touchscreen
+#    stream never ends, and v3.6.2's watcher piped its awk into a `while read` -
+#    an awk whose stdout is a pipe BLOCK-BUFFERS, so the taps sat in 4 KB the
+#    phone would take hours to fill. The watcher said it was watching and never
+#    delivered: exactly the device log. hold_open keeps this stream open too, so
+#    the handover has to arrive without any end-of-file to flush it.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    000002c8
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    000005f4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.050000] EV_KEY       BTN_TOUCH            UP
+[   101.050001] EV_SYN       SYN_REPORT           00000000
+EV
+touch "$WORK/stub/hold_open"
+screen_on
+run_engine activate >/dev/null 2>&1
+SCRIPT_DIR="$WORK/spsm/scripts" run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; . "$SPSM_DIR/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1 &
+_watcher=$!
+_got=1
+for _try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  sleep 1
+  if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls" 2>/dev/null; then _got=0; break; fi
+done
+kill "$_watcher" 2>/dev/null
+stop_daemons
+check "a tap is handed over while the stream is still open, with nothing to flush it" $_got
+grep -q "recents: the list was put up for the Recents button command (tap)" "$WORK/spsm/spsm.log"
+check "and the log says the tap asked for it" $?
+
+# 10. A watcher that dies the second it starts is not left saying "watching".
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+rm -f "$WORK/stub/touch_events"
+printf '#!/bin/sh\nexit 9\n' > "$BIN/getevent"
+chmod +x "$BIN/getevent"
+screen_on
+run_engine activate >/dev/null 2>&1
+_died=1
+for _try in 1 2 3 4 5 6; do
+  sleep 1
+  if grep -q "recents: the Recents button watcher died at once - getevent could not read the touchscreen" "$WORK/spsm/spsm.log" 2>/dev/null; then _died=0; break; fi
+done
+check "a touch watcher that dies at once is reported, not left watching in the log" $_died
+run_engine deactivate >/dev/null 2>&1
+make_stubs   # real stubs again for the cases below
+run_engine deactivate >/dev/null 2>&1
+make_stubs   # real stubs again for the cases below
+
+# 11. Switching the mode off takes the watcher processes with it: a pipeline
+#     whose producer outlives its reader is an orphan still listening to the
+#     touchscreen, one per session.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+touch "$WORK/stub/hold_open"
+# This scenario counts processes, so it must not inherit the previous
+# scenarios' watchers: each of those holds its fake stream open for another
+# while after the scenario moved on, and a wiped tree does not stop them.
+pkill -f "[t]ests/stub.sh -lt" 2>/dev/null
+pkill -f "[t]ests/stub.sh -b" 2>/dev/null
+sleep 1
+screen_on
+run_engine activate >/dev/null 2>&1
+sleep 2
+_orphans_before=$(orphans_alive)
+[ "$_orphans_before" -ge 1 ]
+check "the touch watcher is really running while the mode is on ($_orphans_before orphan-candidate(s))" $?
+run_engine deactivate >/dev/null 2>&1
+sleep 1
+[ "$(orphans_alive)" = "0" ]
+check "and switching the mode off leaves no getevent orphan behind ($(orphans_alive) left)" $?
+
+# 12. A kernel audit line that only mentions a file named recents is noise, not
+#     the phone speaking about recents - the v3.6.2 device log had one, and it
+#     read like a clue.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-guard "I/auditd (29414): type=1400 audit(0.0:1247): avc:  denied { read } for comm=\"pool-5-thread-7\" path=\"/data/adb/spsm/scripts/recents.sh\" dev=\"dm-41\"" >/dev/null 2>&1
+if grep -q "recents-guard: a line about recents" "$WORK/spsm/spsm.log"; then
+  bad "an audit line naming recents.sh is not reported as the phone talking about recents"
+else
+  ok "an audit line naming recents.sh is not reported as the phone talking about recents"
+fi
+[ "$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls" 2>/dev/null || true)" = "0" ]
+check "and it opens nothing" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 13. The watch command answers even before anything is pressed.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+_out=$(run_engine recents-watch 2>&1)
+printf '%s\n' "$_out" | grep -q "watching the touchscreen for the Recents button (x1 y1 x2 y2 = 540 1516 720 1600)"
+check "recents-watch prints the region it is watching before it waits" $?
+printf '%s\n' "$_out" | grep -q "Press it now"
+check "and tells the tester what to do next" $?
+
+say "79. the frame rate: the panel's own modes decide, and they are written down"
+# The owner asked for 40 fps; 40 is not a rate a 60 Hz panel can show, and the
+# v3.6.2 device log showed the Game Mode setting this ROM was asked to use
+# answering nothing at all ("this ROM would not say what its frame-rate setting
+# is"). So the knob now asks the panel first what it can do, and only ever
+# claims what actually happened.
+
+# 1. A panel that offers 30: the display's refresh rate is the cap, and it is
+#    put back on exit.
+make_tree; make_stubs; seed_stub_state
+cat > "$WORK/stub/display_modes" <<'MODES'
+  mSupportedModes=[{id=1, width=720, height=1600, fps=60.0, alternativeRefreshRate=[]}, {id=2, width=720, height=1600, fps=30.0, alternativeRefreshRate=[]}]
+MODES
+enable_knobs fps_cap
+screen_on
+run_engine activate >"$WORK/out.fps1" 2>&1
+[ "$(cat "$WORK/stub/settings/system.peak_refresh_rate" 2>/dev/null)" = "30.0" ] && [ "$(cat "$WORK/stub/settings/system.min_refresh_rate" 2>/dev/null)" = "30.0" ]
+check "a panel that offers 30 Hz is asked to run at 30" $?
+grep -q "fps: the panel offers these frame rates: 30.0 60.0 - it is asked to run at 30 Hz" "$WORK/spsm/spsm.log"
+check "and the log says what the panel offers and what was asked" $?
+run_engine deactivate >"$WORK/out.fps1b" 2>&1
+[ "$(cat "$WORK/stub/settings/system.peak_refresh_rate" 2>/dev/null)" = "60.0" ] && [ "$(cat "$WORK/stub/settings/system.min_refresh_rate" 2>/dev/null)" = "60.0" ]
+check "and the panel's own refresh rate is put back on exit" $?
+run_engine verify > "$WORK/out.vfps1" 2>&1
+grep -q "drift=0" "$WORK/out.vfps1"
+check "with nothing left behind ($(cat "$WORK/out.vfps1"))" $?
+
+# 2. The phone had no refresh-rate keys of its own: the exit deletes them again
+#    instead of leaving values behind that were never there before.
+make_tree; make_stubs; seed_stub_state
+cat > "$WORK/stub/display_modes" <<'MODES'
+  mSupportedModes=[{id=1, width=720, height=1600, fps=60.0, alternativeRefreshRate=[]}, {id=2, width=720, height=1600, fps=30.0, alternativeRefreshRate=[]}]
+MODES
+rm -f "$WORK/stub/settings/system.peak_refresh_rate" "$WORK/stub/settings/system.min_refresh_rate"
+enable_knobs fps_cap
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/system.peak_refresh_rate" 2>/dev/null)" = "30.0" ]
+check "a phone with no refresh-rate setting of its own still gets the cap" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/settings/system.peak_refresh_rate" ] && [ ! -e "$WORK/stub/settings/system.min_refresh_rate" ]
+check "and keys the phone never had are deleted again, not left behind" $?
+
+# 3. A panel that offers 60 only, and a ROM whose Game Mode setting answers
+#    nothing: the honest refusal, exactly what the owner's phone does.
+make_tree; make_stubs; seed_stub_state
+touch "$WORK/stub/no_device_config"
+enable_knobs fps_cap
+screen_on
+run_engine activate >"$WORK/out.fps3" 2>&1
+grep -q "fps: this panel offers only these frame rates: 60.0 - and this ROM answers nothing about a game-mode cap, so the frame rate cannot be lowered" "$WORK/spsm/spsm.log"
+check "a 60-only panel with no game-mode answer is told as it is" $?
+[ "$(cat "$WORK/stub/settings/system.peak_refresh_rate" 2>/dev/null)" = "60.0" ]
+check "and the refresh rate was never touched" $?
+grep -q "note fps_cap: this panel offers only 60.0 Hz and this ROM answers nothing about a game-mode cap, so nothing was changed" "$WORK/spsm/spsm.log"
+check "and the note next to the option says the same in the same words" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 4. A 60-only panel whose Game Mode setting DOES answer: games alone are
+#    capped, and the log says the screen itself stays at 60.
 make_tree; make_stubs; seed_stub_state
 enable_knobs fps_cap
-printf '%s' 'mode=2,fps=60' > "$WORK/stub/game_overlay"
 screen_on
-run_engine activate > "$WORK/out.a79" 2>&1
+run_engine activate >"$WORK/out.fps4" 2>&1
+grep -q "fps: this panel offers only these frame rates: 60.0 - the screen itself stays at 60; games alone are capped to 30 by the phone's Game Mode setting" "$WORK/spsm/spsm.log"
+check "on a 60-only panel the Game Mode cap is applied to games and named as such" $?
 grep -q '^device_config put game_overlay mode=1,fps=30:mode=2,fps=30:mode=3,fps=30$' "$WORK/stub/calls"
-check "the phone's own frame-rate setting is given 30 fps for every game mode" $?
-grep -q "fps: the phone is holding apps to 30 fps while this mode is on (was mode=2,fps=60)" "$WORK/spsm/spsm.log"
-check "and the log says what it was before" $?
+check "the phone's Game Mode setting was written with 30 for every mode" $?
+run_engine deactivate >"$WORK/out.fps4b" 2>&1
+[ ! -e "$WORK/stub/game_overlay" ]
+check "and a phone that had no Game Mode setting has none again" $?
+run_engine verify > "$WORK/out.vfps4" 2>&1
+grep -q "drift=0" "$WORK/out.vfps4"
+check "with a clean exit ($(cat "$WORK/out.vfps4"))" $?
+
+# 5. A Game Mode setting the phone already had is put back exactly as it was.
+make_tree; make_stubs; seed_stub_state
+printf '%s' 'mode=2,fps=60' > "$WORK/stub/game_overlay"
+enable_knobs fps_cap
+screen_on
+run_engine activate >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/game_overlay" 2>/dev/null)" = "mode=2,fps=60" ]
-check "the phone's own setting is put back exactly as it was on exit" $?
-run_engine verify > "$WORK/out.v79" 2>&1
-grep -q "drift=0" "$WORK/out.v79"
-check "with nothing left behind ($(cat "$WORK/out.v79"))" $?
+check "the phone's own Game Mode setting is put back exactly as it was" $?
 
-# A phone with no frame-rate setting at all: one is set, and deleted again.
+# 6. A Game Mode setting changed since ours is left as the phone now has it.
 make_tree; make_stubs; seed_stub_state
+printf '%s' 'mode=1,fps=45' > "$WORK/stub/game_overlay"
 enable_knobs fps_cap
-screen_on
-run_engine activate >/dev/null 2>&1
-grep -q '^device_config put game_overlay mode=1,fps=30' "$WORK/stub/calls"
-check "a phone with no frame-rate setting gets one" $?
-run_engine deactivate >/dev/null 2>&1
-[ ! -e "$WORK/stub/game_overlay" ]
-check "and it is deleted again on exit, because the phone never had one" $?
-
-# A ROM that takes the command and ignores it: nothing is claimed.
-make_tree; make_stubs; seed_stub_state
-enable_knobs fps_cap
-touch "$WORK/stub/refuse_game_overlay"
-screen_on
-run_engine activate >/dev/null 2>&1
-grep -q "fps: this ROM did not take the frame-rate setting" "$WORK/spsm/spsm.log"
-check "a ROM that ignores the frame-rate setting is told so, in the log" $?
-grep -q "note fps_cap: applied, did not take, and was put back by the module" "$WORK/spsm/spsm.log"
-check "and nothing is recorded as a change to undo" $?
-run_engine deactivate >/dev/null 2>&1
-run_engine verify > "$WORK/out.v79b" 2>&1
-grep -q "drift=0" "$WORK/out.v79b"
-check "with a clean exit ($(cat "$WORK/out.v79b"))" $?
-
-# A ROM with no device_config at all.
-make_tree; make_stubs; seed_stub_state
-enable_knobs fps_cap
-mv "$BIN/device_config" "$BIN/device_config.away"
-screen_on
-run_engine activate >/dev/null 2>&1
-grep -q "fps: this ROM has no device_config, so the frame rate is left alone" "$WORK/spsm/spsm.log"
-check "a phone with no device_config is left alone and told so" $?
-mv "$BIN/device_config.away" "$BIN/device_config"
-run_engine deactivate >/dev/null 2>&1
-run_engine verify > "$WORK/out.v79c" 2>&1
-grep -q "drift=0" "$WORK/out.v79c"
-check "with a clean exit ($(cat "$WORK/out.v79c"))" $?
-
-# A value something else moved after us is a newer decision than ours.
-make_tree; make_stubs; seed_stub_state
-enable_knobs fps_cap
-printf '%s' 'mode=1,fps=60' > "$WORK/stub/game_overlay"
 screen_on
 run_engine activate >/dev/null 2>&1
 printf '%s' 'mode=3,fps=45' > "$WORK/stub/game_overlay"
 run_engine deactivate >/dev/null 2>&1
-grep -q "keep fps_cap: the phone's frame-rate setting was changed since we set it" "$WORK/spsm/spsm.log"
-check "a frame-rate setting changed since is left as it was found" $?
 [ "$(cat "$WORK/stub/game_overlay" 2>/dev/null)" = "mode=3,fps=45" ]
-check "and the newer value is still there" $?
+check "a frame-rate setting changed since is left as it was found" $?
 
-# Switched off by the user: the phone's frame rate is not touched.
+# 7. The panel would not say what it can show at all: nothing is claimed.
+make_tree; make_stubs; seed_stub_state
+rm -f "$WORK/stub/display_modes"
+enable_knobs fps_cap
+screen_on
+run_engine activate >"$WORK/out.fps7" 2>&1
+grep -q "fps: this phone would not say which frame rates its panel offers, so it is left alone" "$WORK/spsm/spsm.log"
+check "a phone that will not describe its panel is left alone and told so" $?
+grep -q "note fps_cap: this phone would not say which frame rates its panel offers, so nothing was changed" "$WORK/spsm/spsm.log"
+check "and the note says the same" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 8. Check reports what the panel offers and what the cap did, so the answer to
+#    "why not 40" is on the phone, not in a log. (Check rewrites every value and
+#    puts it back, so it insists on the mode being off first.)
+make_tree; make_stubs; seed_stub_state
+cat > "$WORK/stub/display_modes" <<'MODES'
+  mSupportedModes=[{id=1, width=720, height=1600, fps=60.0, alternativeRefreshRate=[]}, {id=2, width=720, height=1600, fps=30.0, alternativeRefreshRate=[]}]
+MODES
+run_engine probe fps_cap > "$WORK/out.fps8" 2>&1
+grep -q "peak_refresh_rate: 60.0 -> 30.0" "$WORK/out.fps8"
+check "Check shows the refresh rate it held while it checked" $?
+grep -q "min_refresh_rate: 60.0 -> 30.0" "$WORK/out.fps8"
+check "both keys of it" $?
+run_engine verify > "$WORK/out.vfps8" 2>&1
+grep -q "drift=0" "$WORK/out.vfps8"
+check "and the check itself leaves nothing behind ($(cat "$WORK/out.vfps8"))" $?
+
+# 9. Switched off by the user: nothing at all is asked of the phone.
 make_tree; make_stubs; seed_stub_state
 screen_on
 run_engine activate >/dev/null 2>&1
-if grep -q "^device_config put game_overlay" "$WORK/stub/calls"; then
+if grep -q "^device_config put game_overlay" "$WORK/stub/calls" || grep -q "peak_refresh_rate" "$WORK/stub/calls"; then
   bad "with the option off the frame rate is left alone"
 else
   ok "with the option off the frame rate is left alone"

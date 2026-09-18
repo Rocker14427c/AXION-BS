@@ -2087,76 +2087,165 @@ restore_rom_bg_off() {
 # option's own Check, and the log line below, tell the truth about.
 FPS_VALUE=${FPS_VALUE:-30}
 
-# The phone's current intervention, "null" when it has none, or empty when the
-# phone will not answer.
+# The phone's current Game Mode intervention, "null" when it has none, or empty
+# when the phone will not answer.
 game_overlay_now() {
   has device_config || return 1
   device_config get game_overlay 2>/dev/null | tr -d '\r' | head -1
 }
 
-meta_fps_cap() {
-  echo "Display|Cap the frame rate while in use|Holds apps to 30 frames a second instead of 60 while the mode is on, which halves what the processor and graphics do for the screen. 40 is not a rate a 60 Hz screen can show: Android only holds a frame rate that divides 60, so 30 or 60. Uses the platform's own Game Mode frame-rate setting; on a ROM that does not have it, nothing is changed and the log says so.|0|session|battery"
+# Which frame rates this phone's panel can actually show, from the display's own
+# account of itself. This is the fact the whole knob turns on: a frame rate the
+# panel cannot draw is not a frame rate, and the v3.6.2 device log shows this
+# ROM's Game Mode setting answering nothing at all - so the panel's own modes
+# are the only answer that can be trusted here.
+display_fps_modes() {
+  has dumpsys || return 1
+  dumpsys display 2>/dev/null | tr ',' '\n' \
+    | sed -n 's/.*[^a-zA-Z]fps=\([0-9][0-9.]*\).*/\1/p' | sort -u
 }
-snapshot_fps_cap() {
-  if ! has device_config; then printf '(MISSING)'; return; fi
-  _v=$(game_overlay_now)
-  case "$_v" in
-    '') printf '(MISSING)' ;;   # would not answer: never ours to overwrite
-    *)  printf '%s' "$_v" ;;    # "null" is an answer: the phone has none set
-  esac
-}
-apply_fps_cap() {
-  if ! has device_config; then
-    log "fps: this ROM has no device_config, so the frame rate is left alone"
-    return 2
-  fi
-  _was=$(game_overlay_now)
-  if [ -z "$_was" ]; then
-    log "fps: this ROM would not say what its frame-rate setting is, so it is left alone"
-    return 2
-  fi
-  # All three modes - standard, performance, battery - carry the same frame rate,
-  # so whichever mode an app is in, the rate is this one. No per-app game mode is
-  # written: that is a user setting on this phone and there is no way to read one
-  # back, and this mode does not overwrite a setting it cannot read.
+
+# The Game Mode leg, on its own: write the cap and read it back. Silent on
+# purpose - the callers log what the outcome means in their own words.
+go_cap_apply() {
+  has device_config || return 1
+  _gwas=$(game_overlay_now)
+  [ -n "$_gwas" ] || return 1
   device_config put game_overlay \
     "mode=1,fps=$FPS_VALUE:mode=2,fps=$FPS_VALUE:mode=3,fps=$FPS_VALUE" >/dev/null 2>&1
-  _now=$(game_overlay_now)
-  case "$_now" in
-    *"fps=$FPS_VALUE"*)
-      log "fps: the phone is holding apps to ${FPS_VALUE} fps while this mode is on (was ${_was})"
-      return 0 ;;
+  case "$(game_overlay_now)" in
+    *"fps=$FPS_VALUE"*) return 0 ;;
   esac
-  log "fps: this ROM did not take the frame-rate setting (still ${_now:-unset}), so nothing was changed"
-  return 2
+  return 1
 }
-restore_fps_cap() {
-  has device_config || return 0
-  _want=$(cat "$1" 2>/dev/null)
-  case "$_want" in ''|'(MISSING)') return 0 ;; esac
-  _cur=$(game_overlay_now)
-  # Only undo our own change: a value something else has moved since is a newer
-  # decision than ours.
-  case "$_cur" in
-    *"fps=$FPS_VALUE"*) ;;
-    *) log "keep fps_cap: the phone's frame-rate setting was changed since we set it" ; return 0 ;;
-  esac
-  if [ "$_want" = null ]; then
-    device_config delete game_overlay >/dev/null 2>&1
-    log "fps: the phone's frame-rate setting is deleted again (it had none)"
-  else
-    device_config put game_overlay "$_want" >/dev/null 2>&1
-    log "fps: the phone's frame rate setting is back to what it was"
+
+meta_fps_cap() {
+  echo "Display|Cap the frame rate (30 fps)|Asks the phone to run its panel at 30 frames a second instead of 60 while the mode is on, and puts the phone's own value back on exit. 40 is not a rate a 60 Hz screen can show: a frame rate has to divide the panel's refresh, and the panel's own modes decide - Check lists them. A panel that offers 30 gets 30; a panel that offers 60 only gets told to the log as it is, because this ROM's Game Mode limit covers games only (and on this phone that setting answers nothing at all).|0|session|battery"
+}
+# What is recorded: the two refresh-rate keys the display follows, and the
+# phone's Game Mode intervention. "null" from settings means the key is absent -
+# readable, and restored by deleting; (MISSING) means unreadable, and untouched.
+snapshot_fps_cap() {
+  snap_kv "@system:peak_refresh_rate" "@system:min_refresh_rate"
+  printf 'game-overlay\t%s\n' "$(game_overlay_now 2>/dev/null || printf '(MISSING)')"
+}
+apply_fps_cap() {
+  _modes=$(display_fps_modes)
+  # One line, for the log: "30.0 60.0". The raw list has a newline per mode and
+  # a log line is one line.
+  _h=$(printf '%s' "$_modes" | tr '\n' ' ')
+  _h=${_h% }
+  if [ -z "$_modes" ]; then
+    log "fps: this phone would not say which frame rates its panel offers, so it is left alone"
+    return 2
   fi
+  _can30=''
+  for _m in $_modes; do
+    case "$_m" in 30|30.*) _can30=1 ;; esac
+  done
+  if [ -z "$_can30" ]; then
+    # The panel has no 30 Hz mode, so a refresh-rate setting would be a no-op
+    # and calling it applied would be the lie this knob exists not to tell.
+    # What is left is the phone's own Game Mode limit - which covers games
+    # only, when it answers at all.
+    if go_cap_apply; then
+      log "fps: this panel offers only these frame rates: $_h - the screen itself stays at 60; games alone are capped to ${FPS_VALUE} by the phone's Game Mode setting"
+      return 0
+    fi
+    log "fps: this panel offers only these frame rates: $_h - and this ROM answers nothing about a game-mode cap, so the frame rate cannot be lowered"
+    return 2
+  fi
+  # The panel can show 30. The cap is the display's own refresh rate - the same
+  # two keys the system's own refresh-rate switch writes - and the exit puts
+  # the phone's own values back, or deletes them if the phone had none.
+  apply_kv "@system:peak_refresh_rate=$FPS_VALUE.0" "@system:min_refresh_rate=$FPS_VALUE.0"
+  _p=$(sget system peak_refresh_rate)
+  _n=$(sget system min_refresh_rate)
+  case "$_p$_n" in
+    *$FPS_VALUE.*) ;;
+    *) log "fps: the phone did not take the ${FPS_VALUE} Hz refresh rate, so the frame rate is unchanged"; return 2 ;;
+  esac
+  log "fps: the panel offers these frame rates: $_h - it is asked to run at ${FPS_VALUE} Hz while this mode is on"
+  # Games are capped by the phone's own setting too, when that setting answers.
+  # When it does not, the refresh rate above is the cap and this is silent.
+  go_cap_apply >/dev/null 2>&1 || true
   return 0
 }
+restore_fps_cap() { # <orig> <applied>
+  [ -f "$1" ] || return 0
+  # The Game Mode leg first, under the same only-ours rule as everything else.
+  _o=$(snap_file_val "$1" "game-overlay")
+  if [ -n "$_o" ] && [ "$_o" != "(MISSING)" ]; then
+    _a=$(snap_file_val "${2:-}" "game-overlay")
+    _cur=$(game_overlay_now 2>/dev/null)
+    if [ -n "$_a" ] && [ "$_cur" = "$_a" ]; then
+      if [ "$_o" = "null" ]; then
+        device_config delete game_overlay >/dev/null 2>&1
+        log "fps: the phone's game-mode frame-rate setting is deleted again (it had none)"
+      else
+        device_config put game_overlay "$_o" >/dev/null 2>&1
+        log "fps: the phone's game-mode frame-rate setting is back to what it was"
+      fi
+    else
+      log "keep fps_cap: the phone's game-mode frame-rate setting was changed since we set it"
+    fi
+  fi
+  # The refresh-rate keys, by the generic machinery: per target, only if the
+  # value is still the one we set, and a key the phone had none of is deleted
+  # rather than written.
+  log "fps: the panel's refresh-rate setting is being put back"
+  restore_kv "$1" "$2"
+}
 probe_fps_cap() {
+  printf 'display_modes\t%s\n' "$(display_fps_modes 2>/dev/null | tr '\n' ' ')"
+  printf 'peak_refresh_rate\t%s\n' "$(sget system peak_refresh_rate 2>/dev/null)"
+  printf 'min_refresh_rate\t%s\n' "$(sget system min_refresh_rate 2>/dev/null)"
   printf 'frame_rate_setting\t%s\n' "$(game_overlay_now 2>/dev/null || echo none)"
   if has cmd && cmd game mode >/dev/null 2>&1; then
     printf 'game_mode_service\tavailable\n'
   else
     printf 'game_mode_service\tnot available on this ROM\n'
   fi
+}
+# What a refused application means, in this knob's own words: the three ways it
+# refuses are three different facts.
+note_refused_fps_cap() {
+  _modes=$(display_fps_modes 2>/dev/null)
+  _h=$(printf '%s' "$_modes" | tr '\n' ' ')
+  _h=${_h% }
+  if [ -z "$_modes" ]; then
+    printf 'this phone would not say which frame rates its panel offers, so nothing was changed\n'
+    return
+  fi
+  for _m in $_modes; do
+    case "$_m" in 30|30.*)
+      printf 'the phone was asked for 30 Hz and did not take it, so the frame rate is as it was\n'
+      return ;;
+    esac
+  done
+  printf 'this panel offers only %s Hz and this ROM answers nothing about a game-mode cap, so nothing was changed\n' "$_h"
+}
+
+note_fps_cap() {
+  _modes=$(display_fps_modes 2>/dev/null)
+  _h=$(printf '%s' "$_modes" | tr '\n' ' ')
+  _h=${_h% }
+  if [ -z "$_modes" ]; then
+    printf 'this phone would not say which frame rates its panel offers, so nothing was changed\n'
+    return
+  fi
+  for _m in $_modes; do
+    case "$_m" in 30|30.*)
+      printf 'the panel is asked for 30 Hz (it offers: %s)\n' "$_h"
+      return ;;
+    esac
+  done
+  case "$(game_overlay_now 2>/dev/null)" in
+    *"fps=$FPS_VALUE"*)
+      printf 'this panel offers only %s Hz, so games alone are capped, by the Game Mode setting of the phone\n' "$_h" ;;
+    *)
+      printf 'this panel offers only %s Hz and this ROM answers nothing about a game-mode cap, so nothing was changed\n' "$_h" ;;
+  esac
 }
 
 # ============================================================ registry

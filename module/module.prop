@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.6.2
-versionCode=54
+version=v3.6.3
+versionCode=55
 author=Axion SPSM
-description=v3.6.2 the Recents button fixed at its real cause: this ROM opens recents as a launcher animation, not an activity, so the daemon now watches the animation line and the touchscreen tap on the Recents area, and starts this mode's list, reads the screen back and tries again until it is what is up. Exit times are no longer understated (three stopwatches, not one). New optional 30 fps cap for this 60 Hz panel - 40 cannot be shown, 30 can. RMX3430.
+description=v3.6.3 the Recents tap is handed over the moment the finger lifts: the tap watcher no longer reads the event stream through awk, whose input buffering held the tap until the stream ended - a phone's stream never ends, so v3.6.2's watcher watched forever and never acted. The tap state machine now runs in plain shell, line by line, and the frame-rate cap refuses honestly on panels it cannot serve. RMX3430.

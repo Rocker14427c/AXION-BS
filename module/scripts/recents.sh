@@ -369,7 +369,12 @@ recents_guard() { # recents_guard <one line>
     # A line about this phone's recents that was not the screen itself. Written
     # down once per burst: if the button ever opens the phone's recents screen
     # and this mode's list does not follow, the log says whether the line even
-    # arrived and what it said.
+    # arrived and what it said. Kernel audit lines are not this: their text only
+    # mentions a file whose name happens to contain "recents", and one of those
+    # in the v3.6.2 device log read like a clue when it was only noise.
+    case "$_line" in
+      *avc:*|*type=1400*|*"audit ("*|*"audit("*) return 1 ;;
+    esac
     case "$_line" in
       *ecents*|*ECENTS*)
         _seen="$STATE/recents_seen.stamp"
@@ -424,11 +429,21 @@ recents_button_region() {
   # finger never reaches, which looks exactly like the bug this is here to fix.
   # The device declares its ranges itself, in `getevent -p`, so the same place on
   # the screen is expressed in whatever units the touchscreen actually uses.
-  _axes=$(getevent -p 2>/dev/null)
+  # Not every getevent answers -p (toybox's own dropped the toolbox flags), so a
+  # couple of spellings are tried before giving up and naming the region in
+  # pixels.
+  _axes=''
+  for _pf in -p -ip -il; do
+    _axes=$(getevent "$_pf" 2>/dev/null)
+    [ -n "$_axes" ] && break
+  done
   _rx=$(printf '%s\n' "$_axes" | sed -n 's/.*ABS_MT_POSITION_X.*max \([0-9][0-9]*\).*/\1/p' | head -1)
   _ry=$(printf '%s\n' "$_axes" | sed -n 's/.*ABS_MT_POSITION_Y.*max \([0-9][0-9]*\).*/\1/p' | head -1)
   case "${_rx:-}" in ''|*[!0-9]*) _rx='' ;; esac
   case "${_ry:-}" in ''|*[!0-9]*) _ry='' ;; esac
+  # A leading zero would send shell arithmetic into octal; strip it.
+  while [ "${_rx#0}" != "${_rx:-}" ] && [ "${#_rx}" -gt 1 ]; do _rx=${_rx#0}; done
+  while [ "${_ry#0}" != "${_ry:-}" ] && [ "${#_ry}" -gt 1 ]; do _ry=${_ry#0}; done
   if [ -n "$_rx" ] && [ -n "$_ry" ] && [ "$_rx" -gt 0 ] && [ "$_ry" -gt 0 ] &&
      { [ "$_rx" != "$_w" ] || [ "$_ry" != "$_h" ]; }; then
     _y1=$(( _ry * _top / _h ))
@@ -446,9 +461,22 @@ recents_button_region() {
 # the ROM logs - and it is why v3.6.1's silence is not repeated: the tap is seen
 # even on a phone whose log says nothing at all.
 #
-# The events are parsed by one awk, and the awk prints a line only when it has
-# seen a tap inside the button's own region: a press and a release with the
-# finger almost still, short enough to be a tap and not a drag.
+# The events are parsed right here in the shell, one line at a time, and the
+# handover runs the moment a tap inside the button's own region is complete: a
+# press and a release with the finger almost still, short enough to be a tap
+# and not a drag.
+#
+# This is not a style choice, it is the fix, twice over. v3.6.2 fed the stream
+# to an awk, and an awk reading a pipe BUFFERS ITS INPUT until it has a full
+# block or the stream ends: the tap sat in that buffer forever, because a
+# phone's event stream never ends - the watcher started, said it was watching,
+# and never handed anything over, exactly what the device log showed. (The
+# tests never caught it: the fake getevent's stream ends, and end-of-file
+# flushes.) A shell `read` asks the pipe for one line and takes whatever has
+# arrived - it cannot wait for a full block, so the tap is seen the moment the
+# touchscreen says it. v3.6.3 also does the hex-to-decimal conversion and the
+# tap-timing arithmetic in plain integer shell, so no second buffering layer
+# and no awk can come between the screen and the handover.
 recents_watch_touch() {
   if ! has getevent; then
     # Said out loud: "the button does nothing" has at least three causes now, and
@@ -467,47 +495,97 @@ recents_watch_touch() {
   log "recents: watching the phone's Recents button itself (x1 y1 x2 y2 = $_reg)"
   # shellcheck disable=SC2086
   set -- $_reg
-  getevent -lt 2>/dev/null | awk -v x1="$1" -v y1="$2" -v x2="$3" -v y2="$4" '
-    function h2d(s,  i, c, d, n) {
-      n = 0
-      for (i = 1; i <= length(s); i++) {
-        c = tolower(substr(s, i, 1))
-        d = index("0123456789abcdef", c) - 1
-        if (d < 0) d = 0
-        n = n * 16 + d
-      }
-      return n
-    }
-    function release(  d) {
-      if (!started) return
-      d = ts - st
-      if (!moved && d < 0.8 && sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2) {
-        printf "%d %d %.2f\n", sx, sy, d
-      }
-      started = 0; moved = 0
-    }
-    {
-      if ($1 == "[" && $2 != "") {
-        t = substr($2, 1, length($2) - 1) + 0
-        if (t > 0) ts = t
-      }
-    }
-    /ABS_MT_POSITION_X/ { x = h2d($NF) }
-    /ABS_MT_POSITION_Y/ { y = h2d($NF) }
-    /EV_ABS .*TRACKING_ID/ { if ($NF == "ffffffff") release() }
-    /BTN_TOUCH/ {
-      if ($NF == "DOWN" || $NF == "00000001") down = 1
-      else { down = 0; release() }
-    }
-    /SYN_REPORT/ {
-      if (down) {
-        if (!started) { started = 1; sx = x; sy = y; st = ts; moved = 0 }
-        else if ((x - sx > 40 || sx - x > 40) || (y - sy > 40 || sy - y > 40)) moved = 1
-      }
-    }
-  ' | while read -r _hit; do
-    [ -f "$ACTIVE" ] || break
-    recents_take_over "a tap on the phone's Recents button (${_hit})"
+  _x1=$1 _y1=$2 _x2=$3 _y2=$4
+  # The tap runs the same command the terminal does. Run in the foreground of
+  # this loop, exactly as awk's system() would: the stream keeps flowing into
+  # the pipe while the handover runs, so nothing behind the tap is lost.
+  _tap_cmd="sh $SCRIPT_DIR/engine.sh recents-button tap"
+  # Tap state, all of it in plain integers: the press, where it started, when
+  # (seconds + microseconds, the way getevent prints them), and whether the
+  # finger has travelled far enough to be a drag rather than a tap.
+  _down=0 _started=0 _moved=0 _sx=0 _sy=0 _ss=0 _sf=0 _ts=0 _tf=0 _x=0 _y=0
+
+  # Hex to decimal without leaving the shell: event values arrive as 000002c8,
+  # and the region check needs 712. Sets _h2d_out; no subshell per event.
+  _recents_h2d() {
+    _h2d_in=$1 _h2d_out=0
+    while [ -n "$_h2d_in" ]; do
+      _h2d_c=${_h2d_in%"${_h2d_in#?}"}; _h2d_in=${_h2d_in#?}
+      case $_h2d_c in
+        [0-9]) _h2d_out=$(( _h2d_out * 16 + _h2d_c )) ;;
+        [aA])  _h2d_out=$(( _h2d_out * 16 + 10 )) ;;
+        [bB])  _h2d_out=$(( _h2d_out * 16 + 11 )) ;;
+        [cC])  _h2d_out=$(( _h2d_out * 16 + 12 )) ;;
+        [dD])  _h2d_out=$(( _h2d_out * 16 + 13 )) ;;
+        [eE])  _h2d_out=$(( _h2d_out * 16 + 14 )) ;;
+        [fF])  _h2d_out=$(( _h2d_out * 16 + 15 )) ;;
+        *)     _h2d_in="" ;;
+      esac
+    done
+  }
+
+  # A release with no tap behind it is common (every drag ends in one); this
+  # only speaks - only runs the handover - when a real tap is complete.
+  _tap_release() {
+    [ "$_started" = 1 ] || return 0
+    _tap_us=$(( (_ts - _ss) * 1000000 + _tf - _sf ))
+    [ "$_tap_us" -lt 0 ] && _tap_us=0
+    if [ "$_moved" = 0 ] && [ "$_tap_us" -lt 800000 ] \
+        && [ "$_sx" -ge "$_x1" ] && [ "$_sx" -le "$_x2" ] \
+        && [ "$_sy" -ge "$_y1" ] && [ "$_sy" -le "$_y2" ]; then
+      $_tap_cmd >/dev/null 2>&1
+    fi
+    _started=0 _moved=0
+  }
+
+  # One line at a time, taken the moment getevent writes it: `read` on a pipe
+  # asks for a line and gets whatever has arrived, so the buffering that kept
+  # the awk waiting for a full block cannot happen here. The loop lives on the
+  # right of the pipe, in its own piece of shell - the same place awk's
+  # system() used to run the handover from.
+  getevent -lt 2>/dev/null | while IFS= read -r _line; do
+    # Every -lt line starts with the kernel timestamp: [ 12345.678901]
+    case $_line in
+      \[*\]*)
+        _t=${_line#\[}; _t=${_t%%]*}
+        _t=${_t#"${_t%%[! ]*}"}
+        case $_t in
+          *.*) _t_s=${_t%.*}; _t_f=${_t#*.} ;;
+          *)   _t_s=$_t;       _t_f=0 ;;
+        esac
+        while [ "${_t_s#0}" != "$_t_s" ]; do _t_s=${_t_s#0}; done
+        case $_t_s in ''|*[!0-9]*) _t_s=0 ;; esac
+        while [ "${_t_f#0}" != "$_t_f" ]; do _t_f=${_t_f#0}; done
+        case $_t_f in ''|*[!0-9]*) _t_f=0 ;; esac
+        while [ ${#_t_f} -lt 6 ]; do _t_f=$_t_f"0"; done
+        _t_f=${_t_f%"${_t_f#??????}"}
+        _ts=$_t_s _tf=$_t_f
+        ;;
+    esac
+    case $_line in
+      *ABS_MT_POSITION_X*) _recents_h2d "${_line##* }"; _x=$_h2d_out ;;
+      *ABS_MT_POSITION_Y*) _recents_h2d "${_line##* }"; _y=$_h2d_out ;;
+      *TRACKING_ID*)
+        [ "${_line##* }" = ffffffff ] && _tap_release
+        ;;
+      *BTN_TOUCH*)
+        case "${_line##* }" in
+          DOWN|00000001) _down=1 ;;
+          *)             _down=0; _tap_release ;;
+        esac
+        ;;
+      *SYN_REPORT*)
+        if [ "$_down" = 1 ]; then
+          if [ "$_started" = 0 ]; then
+            _started=1 _sx=$_x _sy=$_y _ss=$_ts _sf=$_tf _moved=0
+          else
+            _dx=$(( _x - _sx )); [ "$_dx" -lt 0 ] && _dx=$((- _dx))
+            _dy=$(( _y - _sy )); [ "$_dy" -lt 0 ] && _dy=$((- _dy))
+            if [ "$_dx" -gt 40 ] || [ "$_dy" -gt 40 ]; then _moved=1; fi
+          fi
+        fi
+        ;;
+    esac
   done
 }
 
