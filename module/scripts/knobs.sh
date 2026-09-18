@@ -1938,12 +1938,29 @@ sf_set_fps() { # sf_set_fps <rate>
 }
 
 meta_fps_cap() {
-  echo "Display|Cap the frame rate (30 fps)|Holds the whole screen - every app and this mode's home - to 30 frames a second while the mode is on, with the command verified on this phone (SurfaceFlinger's own frame-rate override), and puts the phone's own 60 back on exit. 40 is not a rate a 60 Hz screen can show: the rate has to divide the panel's refresh.|0|session|battery"
+  echo "Display|Cap the frame rate (30 fps)|Holds the whole screen - every app and this mode's home - to 30 frames a second while the mode is on, with the command verified on this phone (SurfaceFlinger's own frame-rate override), and puts the phone's own 60 back on exit. Needs one reboot after installing before it can work (the module arms the phone's override at boot); until then the option says so and touches nothing. 40 is not a rate a 60 Hz screen can show: the rate has to divide the panel's refresh.|0|session|battery"
 }
 # Nothing on the phone reports this rate back, so the snapshot is the fact that
 # the knob is ours to undo, nothing more.
 snapshot_fps_cap() { printf 'sf-fps\tset\n'; }
+# The override must be armed before the command is safe: with it off, the very
+# command that sets the rate crashes SurfaceFlinger and soft-reboots the phone
+# - the owner proved that on this device. The module's own system.prop arms it
+# at boot (the module manager writes it before SurfaceFlinger starts), so a
+# refused application here means "one more reboot", never a prop written by
+# this script at runtime.
+sf_override_armed() {
+  case "$(gprop ro.surface_flinger.enable_frame_rate_override)" in
+    true) return 0 ;;
+  esac
+  return 1
+}
+
 apply_fps_cap() {
+  if ! sf_override_armed; then
+    log "fps: the phone's frame-rate override is still off - one more reboot after installing arms it (the module's system.prop does that at boot); until then the command is left alone, because with the override off it would crash the screen's compositor"
+    return 2
+  fi
   if ! sf_set_fps "$FPS_VALUE"; then
     log "fps: this phone has no service command, so the frame rate cannot be set"
     return 2
@@ -1963,6 +1980,10 @@ probe_fps_cap_verdict() {
   printf 'works\tset by the owner-verified SurfaceFlinger command (%s fps); the phone cannot read it back, and the exit always puts %s back\n' "$FPS_VALUE" "$FPS_RESTORE_VALUE"
 }
 note_refused_fps_cap() {
+  if ! sf_override_armed; then
+    printf "the phone's frame-rate override is still off; one reboot after installing arms it, and then the cap works\n"
+    return
+  fi
   printf 'this phone has no service command, so the frame rate was not touched\n'
 }
 note_fps_cap() {

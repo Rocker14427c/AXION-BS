@@ -35,14 +35,14 @@ command -v zip >/dev/null || { echo "zip not installed" >&2; exit 1; }
 
 ( cd "$MOD" && zip -qr "$ZIP" \
     META-INF module.prop customize.sh service.sh post-fs-data.sh action.sh \
-    uninstall.sh scripts system app README.md HOW_TO_USE.txt 2>/dev/null )
+    uninstall.sh scripts system system.prop app README.md HOW_TO_USE.txt 2>/dev/null )
 
 echo "==> $ZIP ($(du -h "$ZIP" | cut -f1))"
 python3 - "$ZIP" <<'PY'
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1])
 names = z.namelist()
-for must in ("module.prop", "customize.sh", "META-INF/com/google/android/update-binary",
+for must in ("module.prop", "customize.sh", "system.prop", "META-INF/com/google/android/update-binary",
              "scripts/engine.sh", "scripts/lib.sh", "scripts/knobs.sh"):
     print("  %-46s %s" % (must, "ok" if must in names else "MISSING"))
 apk = [n for n in names if n.endswith("AxionSPSM.apk")]

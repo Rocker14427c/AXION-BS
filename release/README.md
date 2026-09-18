@@ -1,7 +1,7 @@
 # Release artifacts
 
 The file to flash is the one matching the newest release:
-**`Axion-SPSM-v3.6.4-RMX3430.zip`**
+**`Axion-SPSM-v3.6.5-RMX3430.zip`**
 
 `tools/makezip.sh` writes it here, taking the version from `module/module.prop`,
 so the file name, the zip's `module.prop` and the app's version stamp cannot
@@ -9,7 +9,8 @@ disagree.
 
 | file | release |
 |---|---|
-| `Axion-SPSM-v3.6.4-RMX3430.zip` | [v3.6.4](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.4) — current |
+| `Axion-SPSM-v3.6.5-RMX3430.zip` | [v3.6.5](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.5) — current |
+| `Axion-SPSM-v3.6.4-RMX3430.zip` | [v3.6.4](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.4) — cap not armed; superseded |
 | `Axion-SPSM-v3.6.3-RMX3430.zip` | [v3.6.3](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.3) — the last of the watchers; superseded |
 | `Axion-SPSM-v3.6.2-RMX3430.zip` | [v3.6.2](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.2) — the tap watcher buffered; superseded |
 | `Axion-SPSM-v3.6.1-RMX3430.zip` | [v3.6.1](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.6.1) — the Recents button it did not catch; superseded |

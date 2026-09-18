@@ -194,6 +194,9 @@ EOF
 </package-restrictions>
 XML
   echo 280 > "$S/wm_density"
+  # The frame-rate override, armed by the module's system.prop at boot - the
+  # state this phone is in after the reboot that installed the module.
+  printf '%s' true > "$S/props/ro.surface_flinger.enable_frame_rate_override"
   printf '%s' 1 > "$S/settings/secure.location_mode"
   echo com.android.launcher3 > "$S/home_role"
   echo com.android.launcher3/.Launcher > "$S/home_activity"
@@ -3215,7 +3218,29 @@ run_engine probe fps_cap > "$WORK/out.p79" 2>&1
 grep -q "works - set by the owner-verified SurfaceFlinger command" "$WORK/out.p79"
 check "Check says what the option does on this phone" $?
 
-# 3. With the option off, SurfaceFlinger is never asked.
+# 3. Without the override armed (a phone that has not rebooted since install)
+#    the command is left alone and the refusal is honest - the owner proved the
+#    alternative: the same command with the override off crashes the compositor.
+make_tree; make_stubs; seed_stub_state
+enable_knobs fps_cap
+rm -f "$WORK/stub/props/ro.surface_flinger.enable_frame_rate_override" "$WORK/stub/calls"
+screen_on
+run_engine activate >/dev/null 2>&1
+if grep -q "service call SurfaceFlinger" "$WORK/stub/calls" 2>/dev/null; then
+  bad "an unarmed phone is never given the frame-rate command"
+else
+  ok "an unarmed phone is never given the frame-rate command"
+fi
+grep -q "one more reboot after installing arms it" "$WORK/spsm/spsm.log"
+check "and the log says exactly that, and why" $?
+run_engine deactivate >/dev/null 2>&1
+if grep -q "f 60 f 60" "$WORK/stub/calls" 2>/dev/null; then
+  bad "nothing was applied, so the exit restores nothing"
+else
+  ok "nothing was applied, so the exit restores nothing"
+fi
+
+# 4. With the option off, SurfaceFlinger is never asked.
 make_tree; make_stubs; seed_stub_state
 disable_knobs fps_cap
 rm -f "$WORK/stub/calls"

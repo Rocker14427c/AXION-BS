@@ -23,7 +23,7 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.6.4) - A CLEAN RESET
+NEW IN THIS BUILD (v3.6.5) - THE CAP, ARMED PROPERLY
 - THE RECENTS WATCHERS ARE GONE. All of them: the daemon no longer reads the
   phone's event log for the launcher's recents animation, nothing reads the
   touchscreen any more, and the app no longer consumes the Recents key. The
@@ -41,8 +41,17 @@ NEW IN THIS BUILD (v3.6.4) - A CLEAN RESET
   set and what was restored, and nothing else is claimed. 40 is still not a
   rate a 60 Hz screen can show: the rate has to divide the panel's refresh.
   The old attempts (panel modes, the ROM's Game Mode setting) are deleted.
+- AND IT IS ARMED FOR IT. You found why the command soft-reboots the phone
+  after a fresh start: the phone's own frame-rate override
+  (ro.surface_flinger.enable_frame_rate_override) is OFF at boot, and with it
+  off the command crashes SurfaceFlinger. This module now ships that switch in
+  its system.prop, so the module manager turns it on at every boot BEFORE the
+  screen's compositor starts - one normal reboot after installing, and the cap
+  command is safe for good. SPSM never writes that property itself and never
+  restarts SurfaceFlinger; and if the option is switched on before that reboot
+  has happened, it refuses honestly and touches nothing.
 - The rest of the mode is unchanged: the same knobs, the same exit, the same
-  guarantees. The full test rig passes 517 checks, 0 failed.
+  guarantees. The full test rig passes 520 checks, 0 failed.
 FROM v3.6.3
 - The tap watcher was rewritten in plain shell (the awk underneath it buffered
   every tap forever - a phone's event stream never ends), and the frame-rate
@@ -202,7 +211,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.4-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.5-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

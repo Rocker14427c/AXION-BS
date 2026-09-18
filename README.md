@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.6.4**.
+Current module: **v3.6.5**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,25 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.6.5 — the cap, armed properly
+
+The owner found why the verified 30 fps command soft-reboots the phone after a
+fresh start: the phone boots with `ro.surface_flinger.enable_frame_rate_override=false`,
+and with the override off, transaction 1035 crashes SurfaceFlinger. The fix is
+the module's own `system.prop`:
+
+```
+ro.surface_flinger.enable_frame_rate_override=true
+```
+
+The module manager applies that at boot — **before SurfaceFlinger starts** — so
+one normal reboot after installing arms the override for good. SPSM's scripts
+never write the property (no `resetprop` at runtime) and never restart the
+compositor. The option now guards on the override: armed, it runs the verified
+30 command and restores the verified 60 on exit; not armed, it refuses honestly
+("one more reboot after installing arms it") and issues nothing — the crash
+path can never be reached through SPSM. Full harness: **520 checks, 0 failed.**
 
 ## What changed in 3.6.4 — the clean reset
 
