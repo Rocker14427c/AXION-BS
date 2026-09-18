@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.6.1**.
+Current module: **v3.6.2**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -64,6 +64,11 @@ default install turns on:
    Settings offers per app — and are put back on wake. Nothing is disabled or
    suspended, the phone's own core is on a protected list, and each value is only
    restored if it is still ours.
+8. **The frame rate** (`fps_cap`, off by default) — this panel is 60 Hz, and the
+   platform's own frame-rate limit only accepts values that divide the refresh, so
+   60 or 30 are the two real choices: the option caps the phone at **30** for as
+   long as the mode is on and puts the phone's own value back on exit. Halving the
+   frame rate is a visible trade, so it is yours to make, not the module's.
 
 Every one of those is a switch in the app's **Options** screen. Nothing is
 all-or-nothing.
@@ -676,6 +681,47 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.6.2 — the Recents button, for real, and 60 → 30 fps
+
+**The button was watched in the wrong place.** The v3.6.1 guard waited for the
+launcher's recents *activity*. Your log has that activity zero times in nine
+hours, and this line exactly once: `I/input_focus: [Focus entering
+recents_animation_input_consumer, reason=setFocusedWindow]`. This launcher does
+not start an activity for Recents — Quickstep plays a *recents animation* inside
+itself and the screen that slides up belongs to no activity the guard could ever
+match. So the guard watched a door nobody uses.
+
+The daemon now (a) matches that animation line as well, (b) reads the touchscreen
+itself and watches a tap in the Recents area of the navigation bar, taken from the
+phone's own insets and density rather than a hard-coded guess, (c) starts this
+mode's list and **reads the screen back**, asking again if the launcher's screen
+came up instead — three tries, and a press that fails writes what `am start`
+answered, and (d) follows the log from *now* (`logcat -T`) instead of replaying
+the buffer, which is why v3.6.1 acted on a pre-mode line the moment the daemon
+started. A phone with no `getevent` says so in the log instead of staying silent.
+
+```
+sh /data/adb/spsm/scripts/engine.sh recents-button   # hand over as if the button was pressed
+sh /data/adb/spsm/scripts/engine.sh recents-area     # the region being watched, and where it came from
+sh /data/adb/spsm/scripts/engine.sh recents-watch    # watch the button for 20 s - press it now
+```
+
+**The exit time was understated.** The log said "revert clean in 4 s" for a 97 s
+exit: one stopwatch was shared by the exit and by the phase loops, so the number
+printed was the last knob's revert, not the exit. Three stopwatches now, and the
+line reports the real one.
+
+**40 fps is not a thing this panel can do.** The platform's FPS limit (Game Mode,
+A13+) only accepts values that divide the display refresh, and Google's own table
+for a 60 Hz panel lists **60 and 30**. So the new option is `fps_cap`, **off by
+default**, capping the phone at **30 fps** while the mode is on — journalled,
+restored to the phone's own value on exit, refused loudly if the phone will not
+answer or will not take it, and shown in Check as `frame_rate_setting`.
+
+**DeepDoze-Enforcer** was read end to end and adds nothing this module does not
+already do (lock-gated Doze, buckets, `RUN_ANY_IN_BACKGROUND` deny, whitelist,
+record/restore, newer-values-win). Nothing was ported from it.
 
 ## What changed in 3.6.1 — the phone's own bar, and an exit that is not four minutes
 

@@ -19,6 +19,36 @@ mkdir -p "$S/props" "$S/settings" "$S/bucket" "$S/appop" "$S/pkg"
 
 log_call() { echo "$CMD $*" >> "$S/calls"; }
 
+# Suspending a package is not a note the stub keeps to itself: the system owns
+# that state and persists it in package-restrictions.xml, which is the file the
+# module reads the suspended list from. A fake phone that suspends without
+# writing it down would be lying about its own state - and it did: the module
+# trusted the file, and the file said the apps it had just suspended were not
+# suspended at all.
+xml_suspend() { # xml_suspend <pkg> <true|false>
+  _x="$S/users/0/package-restrictions.xml"
+  [ -f "$_x" ] || return 0
+  # The module releases several apps at once on purpose (they run together, the
+  # way the phone does it), and the real PackageManager serialises those writes
+  # inside the system server. `sed -i` does not: two of them at the same moment
+  # on the same file lose one of the two updates, and the module then reads that
+  # back as an app it failed to release. So the write is serialised here as well.
+  _lock="$S/users/.xml.lock"
+  _i=0
+  while ! mkdir "$_lock" 2>/dev/null; do
+    _i=$((_i + 1))
+    [ "$_i" -gt 600 ] && break      # never hang the phone over a test lock
+    sleep 0.05 2>/dev/null || sleep 1
+  done
+  if grep -q "<pkg name=\"$1\"" "$_x"; then
+    sed -i "s#\(<pkg name=\"$1\"[^>]*suspended=\"\)[a-z]*#\1$2#" "$_x"
+  else
+    [ "$2" = true ] || return 0
+    sed -i "s#^</package-restrictions>#<pkg name=\"$1\" ceDataInode=\"900\" enabled=\"1\" installed=\"1\" stopped=\"0\" hidden=\"false\" suspended=\"true\" />\n</package-restrictions>#" "$_x"
+  fi
+  rmdir "$_lock" 2>/dev/null
+}
+
 # ----------------------------------------------------------------- settings
 sget() { cat "$S/settings/$1.$2" 2>/dev/null; }
 
@@ -108,6 +138,46 @@ case "$CMD" in
     esac
     ;;
 
+  wm)
+    case "$1" in
+      size)
+        echo "Physical size: 720x1600"
+        [ -f "$S/wm_size_override" ] && cat "$S/wm_size_override"
+        ;;
+      density)
+        echo "Physical density: $(cat "$S/wm_density" 2>/dev/null || echo 280)"
+        ;;
+    esac
+    ;;
+
+  # The phone's own frame-rate setting (Game Mode's FPS intervention). A ROM
+  # without device_config has no such file at all.
+  device_config)
+    log_call "$@"
+    [ -f "$S/no_device_config" ] && exit 1
+    case "$1 $2" in
+      "get game_overlay") cat "$S/game_overlay" 2>/dev/null || echo null ;;
+      "put game_overlay")
+        [ -f "$S/refuse_game_overlay" ] && exit 0
+        printf '%s' "$3" > "$S/game_overlay" ;;
+      "delete game_overlay") rm -f "$S/game_overlay" ;;
+    esac
+    ;;
+
+  # The raw input stream: whatever the test put in touch_events, printed in the
+  # shape `getevent -lt` prints it, then the stream ends and the watcher stops.
+  #
+  # `getevent -p` is the device describing itself: a phone whose touchscreen
+  # counts in its own raw units says so in raw_axes, and then the touch stream
+  # has to be in those units as well - that is the whole point of the file.
+  getevent)
+    case "$1" in
+      -*p*)
+        if [ -f "$S/raw_axes" ]; then cat "$S/raw_axes"; exit 0; fi ;;
+    esac
+    cat "$S/touch_events" 2>/dev/null
+    ;;
+
   getprop)
     cat "$S/props/$1" 2>/dev/null
     ;;
@@ -194,8 +264,10 @@ case "$CMD" in
         _target=$1
         if [ "$_action" = "suspend" ]; then
           printf 'true\n' > "$S/pkg/$_target.suspended"
+          xml_suspend "$_target" true
         else
           rm -f "$S/pkg/$_target.suspended"
+          xml_suspend "$_target" false
         fi
         ;;
       *) : ;;
@@ -324,6 +396,15 @@ case "$CMD" in
           com.android.internal.systemui.navbar.gestural)    printf '%s' 2 > "$S/settings/secure.navigation_mode" ;;
         esac
         ;;
+      "game mode")
+        [ -f "$S/no_game_service" ] && { echo "Game manager service is not available"; exit 1; }
+        _m=$2
+        [ "$_m" = "--user" ] && _m=$4
+        case "$_m" in
+          "") ;;   # asked with no mode: the current one, which this phone does not print
+          *) printf '%s' "$_m" > "$S/game_mode" ;;
+        esac
+        ;;
       "overlay list")
         # The shape this ROM prints: the category's overlays, [x] for the one
         # that is on. A test can make the phone refuse to answer at all.
@@ -446,6 +527,20 @@ case "$CMD" in
 
   dumpsys)
     case "$1" in
+      window)
+        # The navigation bar, the way the phone prints it in its insets - the
+        # frame is what the touch watcher reads to know where the bar is. A test
+        # with no file falls back to the 48dp heuristic.
+        if [ -f "$S/no_nav_insets" ]; then
+          echo "  InsetsState"
+          echo "    InsetsSource: {type=ITYPE_STATUS_BAR frame=[0,0][720,72] visible=true}"
+        else
+          _top=$(cat "$S/navbar_top" 2>/dev/null || echo 1516)
+          echo "  InsetsState"
+          echo "    InsetsSource: {type=ITYPE_STATUS_BAR frame=[0,0][720,72] visible=true}"
+          echo "    InsetsSource: {type=ITYPE_NAVIGATION_BAR frame=[0,$_top][720,1600] visible=true}"
+        fi
+        ;;
       battery)
         # Level is a file the test sets, so drain reporting can be asserted.
         echo "  level: $(cat "$S/battery_level" 2>/dev/null || echo 100)"

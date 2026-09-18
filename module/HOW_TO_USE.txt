@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.1.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.2.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -23,7 +23,44 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.6.1)
+NEW IN THIS BUILD (v3.6.2)
+- THE RECENTS BUTTON. v3.6.1 watched for the launcher's recents *activity*, and
+  your log has it zero times in nine hours. This launcher does not start an
+  activity for Recents at all - it plays a recents *animation* inside itself
+  ("recents_animation_input_consumer" is the only thing your log says when you
+  press it), so there was nothing for the old guard to see. Now: the animation
+  line is matched too, the touchscreen itself is read and a tap in the Recents
+  area of the navigation bar is watched (the area comes from your phone's own
+  navigation-bar insets and screen density, not from a hard-coded guess, and it
+  is expressed in the units your touchscreen actually uses - a driver that counts
+  in its own raw range gets the region in those numbers), this
+  mode's list is started and the screen is READ BACK - if the launcher's screen
+  came up instead, the list is asked for again, up to three times. A press that
+  fails writes what "am start" answered into spsm.log, and a phone without
+  "getevent" says so rather than staying silent.
+  Three commands to test it from inside an app while the mode is on:
+    su -c 'sh /data/adb/spsm/scripts/engine.sh recents-button'
+    su -c 'sh /data/adb/spsm/scripts/engine.sh recents-area'
+    su -c 'sh /data/adb/spsm/scripts/engine.sh recents-watch'
+- The daemon no longer acts on the past. logcat replays its whole buffer before it
+  follows, and v3.6.1 acted on a line from before the mode was on the second it
+  came up because of it. It now follows the log from the moment it starts.
+- The exit time is no longer understated. "revert clean in 4s" was printed for a
+ 97-second exit because one stopwatch was shared by the exit and by the loops that
+  put each change back. There are three stopwatches now and the line is the real
+  one.
+- New option: "Cap the frame rate (30 fps)" (Options -> Display, OFF by default).
+  Your panel is 60 Hz and the platform's frame-rate limit only accepts values that
+  divide the refresh, so 40 is not possible on it - Google's own table for a 60 Hz
+  display lists 60 and 30. This option caps the phone at 30 while the mode is on
+  and puts the phone's own value back on exit. Halving the frame rate is visible,
+  so it is off unless you ask for it. The log says when the phone would not take
+  the value and puts it back itself; Check reports frame_rate_setting.
+- Everything else is unchanged: the same knobs, the same exit, the same
+  guarantees. Nothing was taken from DeepDoze-Enforcer - it does what this module
+  already does.
+
+FROM v3.6.1
 - THE BAR IS THE PHONE'S OWN. The three buttons this app drew for itself in v3.6.0
   are gone - no layout, no code, no icons. What puts the phone on three-button
   navigation is the system's own command, the same one you ran by hand:
@@ -163,7 +200,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.2-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

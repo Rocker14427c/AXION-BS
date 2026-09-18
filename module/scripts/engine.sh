@@ -35,7 +35,7 @@ knob_apply() { # knob_apply id
   # the original they must not stray from (see apply_kv).
   KNOB_ID=$_id
   _fn="apply_$_id"
-  [ "$(type "$_fn" 2>/dev/null)" ] || { log "no apply function for $_id"; return 1; }
+  has_function "$_fn" || { log "no apply function for $_id"; return 1; }
 
   # Remember what the knob looked like before we touch it. "Before" means before
   # THIS application, not before this session: when a value has already been
@@ -87,7 +87,7 @@ knob_apply() { # knob_apply id
         # ROM has no policy_control" are different facts, and the old sentence
         # covered both by suggesting something was missing.
         _nf="note_$_id"
-        if [ "$(type "$_nf" 2>/dev/null)" ]; then
+        if has_function "$_nf"; then
           log "note $_id: $("$_nf")"
         else
           log "note $_id: no visible change (optional node missing?)"
@@ -116,17 +116,15 @@ knob_revert() { # knob_revert id
     applied|restored-drift) ;;
     *) return 0 ;;
   esac
-  [ "$(type "$_fn" 2>/dev/null)" ] || { log "no restore function for $_id"; return 1; }
+  has_function "$_fn" || { log "no restore function for $_id"; return 1; }
 
   # Both snapshots go to the restore function: it decides per value whether
-  # that value is still ours to undo.
-  # The journal files are already one target per line, so they are handed over
-  # as they are; restore_kv decodes each value on the way out to the device.
-  cp -f "$JOURNAL/$_id.orig" "$JOURNAL/$_id.orig.txt" 2>/dev/null
-  cp -f "$JOURNAL/$_id.applied" "$JOURNAL/$_id.applied.txt" 2>/dev/null
-  "$_fn" "$JOURNAL/$_id.orig.txt" "$JOURNAL/$_id.applied.txt"
+  # that value is still ours to undo. The journal files are already one target
+  # per line, so they are handed over as they are - two copies and two deletes
+  # per knob used to sit here for no reason, and every one of those is a process
+  # this phone has to fork.
+  "$_fn" "$JOURNAL/$_id.orig" "$JOURNAL/$_id.applied"
   _rc=$?
-  rm -f "$JOURNAL/$_id.orig.txt" "$JOURNAL/$_id.applied.txt"
 
   _after=$("snapshot_$_id" 2>/dev/null)
   case "$(revert_verdict "$_after" "$(j_orig "$_id")" "$(j_applied "$_id")")" in
@@ -158,7 +156,7 @@ phase_session() { # apply|revert
   [ "$_mode" = revert ] && _list=$(knobs_reversed) || _list=$(knobs_all)
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
-    _t0=$(date +%s)
+    _kt0=$(date +%s)
     if [ "$_mode" = apply ]; then
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
       progress "Applying: $(knob_meta "$_k" | cut -d'|' -f2)"
@@ -166,7 +164,7 @@ phase_session() { # apply|revert
     else
       knob_revert "$_k"
     fi
-    _d=$(( $(date +%s) - _t0 ))
+    _d=$(( $(date +%s) - _kt0 ))
     # A step that takes more than a couple of seconds is worth naming: this
     # phone spends about a fifth of a second on every settings read, so a whole
     # exit is minutes of these added up, and the log is the only place that can
@@ -181,7 +179,7 @@ phase_deep() { # apply|revert
   [ "$_mode" = revert ] && _list=$(knobs_reversed) || _list=$(knobs_all)
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
-    _t0=$(date +%s)
+    _kt0=$(date +%s)
     if [ "$_mode" = apply ]; then
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
       if [ -f "$STATE/deep_report" ]; then
@@ -196,7 +194,7 @@ phase_deep() { # apply|revert
     else
       knob_revert "$_k"
     fi
-    _d=$(( $(date +%s) - _t0 ))
+    _d=$(( $(date +%s) - _kt0 ))
     [ "$_d" -ge 2 ] && log "  slow: $_mode $_k took ${_d}s"
   done
 }
@@ -206,9 +204,9 @@ phase_deep() { # apply|revert
 phase_deep_revert() {
   for _k in $(knobs_reversed); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
-    _t0=$(date +%s)
+    _kt0=$(date +%s)
     knob_revert "$_k"
-    _d=$(( $(date +%s) - _t0 ))
+    _d=$(( $(date +%s) - _kt0 ))
     [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
   done
 }
@@ -235,7 +233,7 @@ do_activate() {
     return 0
   fi
 
-  _t0=$(date +%s)
+  _on_t0=$(date +%s)
   sync_scripts
   j_reset
   log "===== SPSM v3 ON (scripts $(scripts_stamp), module $(spsm_version)) ====="
@@ -266,7 +264,7 @@ do_activate() {
   start_daemon
   tmp_sweep
   progress "On"
-  log "SPSM ON: $(applied_count) knobs applied in $(( $(date +%s) - _t0 ))s"
+  log "SPSM ON: $(applied_count) knobs applied in $(( $(date +%s) - _on_t0 ))s"
   lock_release
   return 0
 }
@@ -275,7 +273,12 @@ do_deactivate() {
   # High priority: the exit is the promise. It ends an in-flight screen
   # transition rather than queueing behind it.
   lock_acquire high || { log "deactivate: busy"; return 1; }
-  _t0=$(date +%s)
+  # A name of its own: `_t0` is also used inside the phase loops below, and a
+  # shell has no local variables - so the exit's own stopwatch was being reset by
+  # the last knob it reverted, and the log reported a few seconds for an exit
+  # that had taken a minute and a half. The owner asked for a faster exit; the
+  # first thing it needed was an honest number to measure it by.
+  _exit_t0=$(date +%s)
   sync_scripts
   log "===== SPSM v3 OFF (scripts $(scripts_stamp), module $(spsm_version)) ====="
   progress "Restoring"
@@ -330,7 +333,7 @@ do_deactivate() {
   # answered milliseconds earlier. `engine.sh verify` is still the honest
   # end-to-end read, and it is what a human runs when they want the truth.
   DRIFT=$(drift_from_journal)
-  _took=$(( $(date +%s) - _t0 ))
+  _took=$(( $(date +%s) - _exit_t0 ))
   if [ "$(pending_knobs)" = "0" ]; then
     log "exit: nothing of ours is left in place, so nothing needs forcing"
   elif [ "${DRIFT:-0}" != "0" ]; then
@@ -685,8 +688,8 @@ probe_one() { # probe_one <knob> -> "verdict<TAB>detail"
   # every reading after the apply came back empty. That is how a probe reports
   # "changed ... did not come back" for an option that did nothing at all.
   _snapfn="snapshot_$_k"
-  [ "$(type "$_snapfn" 2>/dev/null)" ] || { printf 'unknown\tno snapshot function'; return 0; }
-  [ "$(type "apply_$_k" 2>/dev/null)" ] || { printf 'unknown\tno apply function'; return 0; }
+  has_function "$_snapfn" || { printf 'unknown\tno snapshot function'; return 0; }
+  has_function "apply_$_k" || { printf 'unknown\tno apply function'; return 0; }
 
   _before=$(probe_reading "$_k" "$_snapfn")
   if [ -z "$(norm "$_before")" ]; then
@@ -719,7 +722,7 @@ probe_reading() { # probe_reading <knob> <snapshot-function>
   "$2" 2>/dev/null
   printf '\n'
   _pf="probe_$1"
-  [ "$(type "$_pf" 2>/dev/null)" ] && "$_pf" 2>/dev/null
+  has_function "$_pf" && "$_pf" 2>/dev/null
   return 0
 }
 
@@ -814,10 +817,22 @@ case "$CMD" in
   allow)      do_allow ;;
   recents)        do_recents ;;
   clear-all)      do_clear_all ;;
+  # The handover on its own: put this mode's list up and prove it is up, exactly
+  # as the Recents button does. This is the command to run when the button does
+  # not work - it separates "the button was not seen" from "the list would not
+  # come up", which are different faults with different fixes:
+  #   su -c 'sh /data/adb/spsm/scripts/engine.sh recents-button'
+  recents-button) recents_take_over "the command line" ;;
   # One line of the phone's event log, offered to the recents guard. The daemon
   # feeds it every line it sees; this form exists so the decision can be tested,
   # and run by hand, without waiting for the phone to open its own recents.
   recents-guard)  recents_guard "$2" ;;
+  # Where the phone thinks its Recents button is, and whether it can be watched
+  # at all - the answer to "why did nothing happen" without a log.
+  recents-area)   recents_button_region || echo "this phone would not say where its navigation bar is" ;;
+  # Watch the touchscreen for the Recents button, exactly as the daemon does, in
+  # the foreground: run it in a second Termux session and press the button.
+  recents-watch)  recents_watch_touch ;;
   # Written by the app whenever something opens the recents list: the button on
   # the home screen, the phone's own Recents key, or a MAIN/HOME intent. The
   # list itself logs what it found, so a press that opens nothing leaves a line
@@ -833,6 +848,6 @@ case "$CMD" in
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|recents-guard <line>|status|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-button|recents-area|recents-watch|recents-opened <how>|recents-guard <line>|status|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac

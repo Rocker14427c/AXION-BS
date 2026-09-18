@@ -477,6 +477,23 @@ dprop() {
 }
 has() { command -v "$1" >/dev/null 2>&1; }
 
+# Is this a function this shell has actually loaded?
+#
+#   [ "$(type foo 2>/dev/null)" ]     <- this is NOT the test it looks like.
+#
+# Android's sh prints "foo: inaccessible or not found" on STDOUT when the name
+# does not exist, so that test is true for every function that is missing - and
+# the engine then called it. The v3.6.1 log has the result on every knob without
+# a note: a shell error next to a log line reading "note rom_bg_off:" with
+# nothing after it.
+has_function() { # has_function <name>
+  command -v "$1" >/dev/null 2>&1 && return 0
+  case "$(type "$1" 2>&1)" in
+    ''|*'not found'*) return 1 ;;
+  esac
+  return 0
+}
+
 # ------------------------------------------------------------------ memory
 # Free memory, in kilobytes, straight from the kernel: the number the background
 # sweep reports before and after it stops the frozen apps. One redirection and a
@@ -844,13 +861,10 @@ tmp_sweep() {
 # read-based check is still what `engine.sh verify` does, and what a human runs
 # when they want to be told the truth about the device.
 drift_from_journal() {
-  _n=0
-  for _f in "$JOURNAL"/*.state; do
-    [ -f "$_f" ] || continue
-    case "$(cat "$_f" 2>/dev/null)" in
-      restored-drift) _n=$((_n + 1)) ;;
-    esac
-  done
+  [ -d "$JOURNAL" ] || { echo 0; return; }
+  _n=$(grep -l -E '^restored-drift$' "$JOURNAL"/*.state 2>/dev/null | wc -l)
+  _n=${_n##* }
+  case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
   echo "$_n"
 }
 
@@ -859,12 +873,13 @@ drift_from_journal() {
 # forcing values back onto a phone. A journal full of finished records is just
 # paper.
 pending_knobs() {
-  _n=0
-  for _f in "$JOURNAL"/*.state; do
-    [ -f "$_f" ] || continue
-    case "$(cat "$_f" 2>/dev/null)" in
-      applied|restored-drift) _n=$((_n + 1)) ;;
-    esac
-  done
+  # One `grep -l` over the journal rather than a `cat` per file: this is asked
+  # twice in every exit (once for the launcher refresh, once for the safety
+  # net), and a fork per knob for a question grep can answer in one pass is a
+  # second of a slow phone's time on the way out.
+  [ -d "$JOURNAL" ] || { echo 0; return; }
+  _n=$(grep -l -E '^(applied|restored-drift)$' "$JOURNAL"/*.state 2>/dev/null | wc -l)
+  _n=${_n##* }
+  case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
   echo "$_n"
 }

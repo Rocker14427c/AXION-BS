@@ -93,16 +93,25 @@ make_tree() {
 }
 
 # ------------------------------------------------------------------- stubs
+# Somebody other than the mode suspends an app - the user in Settings, or one of
+# their own tools. It is the same system call the mode makes (the stub persists it
+# in the system's own record, as the real one does), made by somebody else, so the
+# module has to be able to tell their decision from its own.
+user_suspends() {
+  SPSM_STUB="$WORK/stub" PATH="$BIN:$PATH" "$BIN/pm" suspend --user 0 "$1" >/dev/null 2>&1
+  : > "$WORK/stub/calls"   # it happened before the mode was turned on
+}
+
 make_stubs() {
   BIN="$WORK/bin"
   rm -rf "$BIN"; mkdir -p "$BIN"
-  for c in settings getprop setprop resetprop svc pm am cmd dumpsys ps logcat; do
+  for c in settings getprop setprop resetprop svc pm am cmd dumpsys ps logcat wm getevent device_config; do
     printf '#!/bin/sh\nexec sh "%s/stub.sh" "$@"\n' "$REPO/tests" > "$BIN/$c"
     chmod +x "$BIN/$c"
   done
   # The dispatcher needs to know which name it was called as, which $0 gives
   # us only if we do not exec through another shell, so pass it explicitly.
-  for c in settings getprop setprop resetprop svc pm am cmd dumpsys ps logcat; do
+  for c in settings getprop setprop resetprop svc pm am cmd dumpsys ps logcat wm getevent device_config; do
     cat > "$BIN/$c" <<EOF
 #!/bin/sh
 CMD_OVERRIDE=$c
@@ -171,6 +180,20 @@ EOF
   # navigation-bar overlay and this setting are the same thing in the stub, the
   # way they are on the phone.
   printf '%s' 2 > "$S/settings/secure.navigation_mode"
+  # The navigation bar's own place on the screen (its inset frame), the phone's
+  # screen size and density, and the platform's frame-rate setting.
+  echo 1516 > "$S/navbar_top"
+  # The system's own record of which packages are suspended, in the shape the
+  # phone writes it. Read by the module instead of asking about each app.
+  mkdir -p "$S/users/0"
+  cat > "$S/users/0/package-restrictions.xml" <<'XML'
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<package-restrictions>
+<pkg name="com.example.suspended.by.user" ceDataInode="123" enabled="1" installed="1" stopped="0" hidden="false" suspended="true" />
+<pkg name="com.whatsapp" ceDataInode="124" enabled="1" installed="1" stopped="0" hidden="false" suspended="false" />
+</package-restrictions>
+XML
+  echo 280 > "$S/wm_density"
   printf '%s' 1 > "$S/settings/secure.location_mode"
   echo com.android.launcher3 > "$S/home_role"
   echo com.android.launcher3/.Launcher > "$S/home_activity"
@@ -194,8 +217,17 @@ run_engine() { # run_engine args...
   SPSM_ROOT="$ROOT" \
   SPSM_DIR="$WORK/spsm" \
   SPSM_STUB="$WORK/stub" \
+  SPSM_USERS="$WORK/stub/users" \
   PATH="$BIN:$PATH" \
   sh "$WORK/spsm/scripts/engine.sh" "$@"
+}
+run_shell_env() { # the same environment, for a piece of the module run by hand
+  SPSM_ROOT="$ROOT" \
+  SPSM_DIR="$WORK/spsm" \
+  SPSM_STUB="$WORK/stub" \
+  SPSM_USERS="$WORK/stub/users" \
+  PATH="$BIN:$PATH" \
+  "$@"
 }
 
 run_shell() { # run_shell script args...
@@ -219,15 +251,37 @@ journal_entries_states() {
   echo "$_n"
 }
 
+# Daemons from earlier cases keep watching the work directory, and there is more
+# than one way for one of them to survive: its pid file is deleted with the old
+# tree, so the module's own stop-daemon cannot recognise it afterwards. The
+# harness kills by command line instead, asks again, and then insists - a live
+# daemon mid-test acts on this case's files, and a test that measures work while
+# a second process is doing the same work is measuring noise.
 stop_daemons() {
   _p=$(cat "$WORK/spsm/daemon.pid" 2>/dev/null)
   [ -n "$_p" ] && kill "$_p" 2>/dev/null
-  for _d in /proc/[0-9]*; do
-    case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
-      *"$WORK/spsm/scripts/daemon.sh"*) kill "$(basename "$_d")" 2>/dev/null ;;
-    esac
+  for _try in 1 2 3; do
+    for _d in /proc/[0-9]*; do
+      case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
+        *"$WORK/spsm/scripts/daemon.sh"*)
+          [ "$_try" = 3 ] && kill -9 "$(basename "$_d")" 2>/dev/null || kill "$(basename "$_d")" 2>/dev/null ;;
+      esac
+    done
+    sleep 0.3 2>/dev/null || sleep 1
   done
   return 0
+}
+
+# How many of this workflow's daemons are still running, asked of the process
+# table rather than of the module's own bookkeeping.
+daemons_alive() {
+  _n=0
+  for _d in /proc/[0-9]*; do
+    case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
+      *"$WORK/spsm/scripts/daemon.sh"*) _n=$((_n + 1)) ;;
+    esac
+  done
+  echo "$_n"
 }
 
 dump_state() {
@@ -250,6 +304,21 @@ dump_state() {
       # that counted it would demand the module leave a component of its own
       # enabled that it must not.
       component/dev.axion.spsm/*) continue ;;
+      # The phone's own record of which packages are suspended is compared by what
+      # it says, not by its bytes. The system rewrites that file whenever a
+      # restriction changes - including when the mode suspends or releases an app,
+      # which is the phone doing its job, not the mode leaving something behind -
+      # and it keeps a line saying suspended="false" for an app that had none.
+      # What has to come back is the set of suspensions itself, so that is what is
+      # compared: the names the record says are suspended. A line saying
+      # suspended="false" for an app that had no line before is the phone writing
+      # down that nothing is suspended - it is not the mode leaving something
+      # behind, and demanding it be erased would be demanding the phone forget.
+      users/*/package-restrictions.xml)
+        printf '%s=' "${f#$WORK/stub}"
+        sed -n 's/.*<pkg name="\([^"]*\)".*suspended="true".*/\1/p' "$f" | sort | tr '\n' ' '
+        printf '\n'
+        continue ;;
     esac
     printf '%s=' "${f#$WORK/stub}"; cat "$f"; printf '\n'
   done >> "$_out"
@@ -1277,7 +1346,7 @@ make_tree; make_stubs; seed_stub_state
 # Four third-party apps: one the user allowed, one the user had already
 # suspended themselves, one root manager, and one ordinary app.
 printf 'com.whatsapp\ncom.spotify.music\ncom.example.game\ncom.resukisu.resukisu\n' > "$WORK/stub/pkgs3"
-printf 'true\n' > "$WORK/stub/pkg/com.example.game.suspended"
+user_suspends com.example.game
 printf 'com.spotify.music\n' > "$WORK/spsm/whitelist.txt"
 enable_knobs block_other_apps
 screen_on
@@ -1791,7 +1860,7 @@ check "with no drift ($(cat "$WORK/out.v54"))" $?
 # slot - that is their own decision, not ours to undo.
 make_tree; make_stubs; seed_stub_state
 printf 'com.example.game\n' > "$WORK/stub/pkgs3"
-printf 'true\n' > "$WORK/stub/pkg/com.example.game.suspended"
+user_suspends com.example.game
 enable_knobs block_other_apps
 screen_on
 run_engine activate >/dev/null 2>&1
@@ -2102,7 +2171,7 @@ check "with no drift ($(cat "$WORK/out.v60"))" $?
 # Suspension by the user is still theirs: we do not release it on the way out.
 make_tree; make_stubs; seed_stub_state
 printf 'com.example.game\n' > "$WORK/stub/pkgs3"
-printf 'true\n' > "$WORK/stub/pkg/com.example.game.suspended"
+user_suspends com.example.game
 enable_knobs block_other_apps
 screen_on
 run_engine activate >/dev/null 2>&1
@@ -2461,7 +2530,14 @@ else
 fi
 grep -q "KEYCODE_APP_SWITCH" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'openRecents("recents-button")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
-check "the phone's own Recents button opens this mode's list" $?
+check "the phone's own Recents key opens this mode's list when this home has it" $?
+# And when it does not - which is what the phone actually does: the press never
+# became a key this app could see. The daemon watches for it instead.
+grep -q 'recents_animation_input_consumer' "$REPO/module/scripts/recents.sh"
+check "the guard acts on the recents animation the phone's own log names" $?
+grep -q 'recents_watch_touch' "$REPO/module/scripts/daemon.sh" && \
+  grep -q 'getevent' "$REPO/module/scripts/recents.sh"
+check "and the touchscreen itself is watched, so the button works whatever the ROM logs" $?
 grep -q 'engine.sh recents-opened' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'recents-opened)' "$REPO/module/scripts/engine.sh"
 check "and every open of the list is noted in the log, with what opened it" $?
@@ -3205,7 +3281,7 @@ grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
 check "a line naming the phone's recents screen opens this mode's list" $?
 grep -q "^am force-stop com.android.launcher3$" "$WORK/stub/calls"
 check "and the screen the button did open is taken down again" $?
-grep -q "recents: the phone's own recents screen opened - handed to SPSM's list" "$WORK/spsm/spsm.log"
+grep -q "recents: the list was put up for the phone's own Recents button" "$WORK/spsm/spsm.log"
 check "and the log says it happened" $?
 # Our own list, in the same log, must not start a second copy of itself.
 _n=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")
@@ -3232,7 +3308,7 @@ touch "$WORK/stub/start_recents_broken"
 screen_on
 run_engine activate >/dev/null 2>&1
 run_engine recents-guard "am_create_activity: [0,1,2,com.android.launcher3/com.android.quickstep.RecentsActivity]" >/dev/null 2>&1
-grep -q "recents: could not put SPSM's list up for the phone's Recents button" "$WORK/spsm/spsm.log"
+grep -q "recents: could not put SPSM's list up for the phone's own Recents button" "$WORK/spsm/spsm.log"
 check "a start the phone refuses is reported, not claimed" $?
 grep -q "am start said: Error: Activity not started" "$WORK/spsm/spsm.log"
 check "and what the phone answered is in the log with it" $?
@@ -3338,6 +3414,440 @@ check "a phone the owner put on three buttons himself is watched too" $?
 run_engine deactivate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
 check "and his own navigation is not changed by an option he switched off" $?
+
+
+# ==========================================================================
+say "78. the Recents button: the tap itself is watched, and the list is proved up"
+# The owner's report on v3.6.1: "only problem is recent button didn't do anything,
+# i click it but it didn't open spsm's recents". His log says why - the press left
+# exactly one line, and it was not the line v3.6.1 was waiting for:
+#
+#   recents-guard: a line about recents it did not act on:
+#     I/input_focus( 1910): [Focus entering recents_animation_input_consumer, reason=setFocusedWindow]
+#
+# On this ROM the Recents button runs a *recents animation* rather than starting
+# the launcher's RecentsActivity, so the activity the old guard matched on never
+# appears. Both ways of catching the press are tested here, and so is the promise
+# that matters: the list is up and read back, not merely requested.
+
+# 1. The log line the phone actually produces.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-guard "I/input_focus( 1910): [Focus entering recents_animation_input_consumer, reason=setFocusedWindow]" >/dev/null 2>&1
+grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
+check "the recents animation line the phone really logs opens this mode's list" $?
+grep -q "recents: the list was put up for the phone's own Recents button" "$WORK/spsm/spsm.log"
+check "and the log says the list was put up, for that reason" $?
+grep -q "^am force-stop com.android.launcher3$" "$WORK/stub/calls"
+check "and the screen the button did open is taken down again" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 2. The tap itself, on the touchscreen - which is what works even on a phone
+#    whose log says nothing at all. Coordinates: 720x1600, the navigation bar
+#    starts at 1516, so the Recents button is in its right-hand quarter.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    000002c8
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    000005f4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.050000] EV_KEY       BTN_TOUCH            UP
+[   101.050001] EV_SYN       SYN_REPORT           00000000
+EV
+screen_on
+run_engine activate >/dev/null 2>&1
+sh -c '. "'"$WORK"'/spsm/scripts/lib.sh"; . "'"$WORK"'/spsm/scripts/knobs.sh"; . "'"$WORK"'/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+grep -q "recents: watching the phone's Recents button itself" "$WORK/spsm/spsm.log"
+check "the daemon-side watcher says where the button is before it watches it" $?
+grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
+check "a tap on the Recents button opens this mode's list" $?
+grep -q "recents: the list was put up for a tap on the phone's Recents button" "$WORK/spsm/spsm.log"
+check "and the log says it was the tap that did it" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 3. The same stream, with the tap somewhere else: the Home button, the middle of
+#    the bar, and the screen above it must all be left alone.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    00000140
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    000005f4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.050000] EV_KEY       BTN_TOUCH            UP
+[   101.050001] EV_SYN       SYN_REPORT           00000000
+[   102.000001] EV_ABS       ABS_MT_POSITION_X    000002c8
+[   102.000002] EV_ABS       ABS_MT_POSITION_Y    00000200
+[   102.000003] EV_KEY       BTN_TOUCH            DOWN
+[   102.000004] EV_SYN       SYN_REPORT           00000000
+[   102.050000] EV_KEY       BTN_TOUCH            UP
+[   102.050001] EV_SYN       SYN_REPORT           00000000
+EV
+screen_on
+run_engine activate >/dev/null 2>&1
+sh -c '. "'"$WORK"'/spsm/scripts/lib.sh"; . "'"$WORK"'/spsm/scripts/knobs.sh"; . "'"$WORK"'/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
+  bad "a tap on the Home button, and one well above the bar, open nothing"
+else
+  ok "a tap on the Home button, and one well above the bar, open nothing"
+fi
+run_engine deactivate >/dev/null 2>&1
+
+# 4. A drag that starts on the Recents button is not a tap, and a press held for
+#    a second and a half is not one either: neither is how this button is used.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    000002c8
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    000005f4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.100000] EV_ABS       ABS_MT_POSITION_Y    00000500
+[   101.100001] EV_SYN       SYN_REPORT           00000000
+[   101.200000] EV_KEY       BTN_TOUCH            UP
+[   101.200001] EV_SYN       SYN_REPORT           00000000
+[   103.000001] EV_ABS       ABS_MT_POSITION_X    000002c8
+[   103.000002] EV_ABS       ABS_MT_POSITION_Y    000005f4
+[   103.000003] EV_KEY       BTN_TOUCH            DOWN
+[   103.000004] EV_SYN       SYN_REPORT           00000000
+[   104.600000] EV_KEY       BTN_TOUCH            UP
+[   104.600001] EV_SYN       SYN_REPORT           00000000
+EV
+screen_on
+run_engine activate >/dev/null 2>&1
+sh -c '. "'"$WORK"'/spsm/scripts/lib.sh"; . "'"$WORK"'/spsm/scripts/knobs.sh"; . "'"$WORK"'/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
+  bad "a drag and a long press on the button are not taps"
+else
+  ok "a drag and a long press on the button are not taps"
+fi
+run_engine deactivate >/dev/null 2>&1
+
+# 5. The handover on its own, which is what the command line gives the owner when
+#    he wants to know whether it works at all:
+#      su -c 'sh /data/adb/spsm/scripts/engine.sh recents-button'
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-button >/dev/null 2>&1
+grep -q "recents: the list was put up for the command line" "$WORK/spsm/spsm.log"
+check "the handover can be run on its own, and says it worked" $?
+# Twice in a row is one press, not two lists.
+_n=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")
+run_engine recents-button >/dev/null 2>&1
+_m=$(grep -c "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls")
+[ "$_n" = "$_m" ]
+check "and a second one straight after does not open a second list (${_n} start(s))" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 6. A phone that refuses the start: the truth, in the log, with what the phone
+#    answered - the same honesty the owner asked for when closing an app.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+touch "$WORK/stub/start_recents_broken"
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-button >/dev/null 2>&1
+grep -q "recents: could not put SPSM's list up for the command line" "$WORK/spsm/spsm.log"
+check "a start the phone refuses is reported, not claimed" $?
+grep -q "am start said: Error: Activity not started" "$WORK/spsm/spsm.log"
+check "and what the phone answered is in the log with it" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 7. Where the phone thinks its button is. Without the phone's own insets the
+#    fallback is the bar's standard height in this phone's density.
+make_tree; make_stubs; seed_stub_state
+_area=$(run_engine recents-area 2>/dev/null)
+printf '%s\n' "$_area" | grep -q "^540 1516 720 1600$"
+check "the Recents area is read from the phone's own navigation bar ($_area)" $?
+touch "$WORK/stub/no_nav_insets"
+_area=$(run_engine recents-area 2>/dev/null)
+printf '%s\n' "$_area" | grep -q "^540 1516 720 1600$"
+check "and a phone with no insets to read falls back to 48dp in its own density ($_area)" $?
+rm -f "$WORK/stub/no_nav_insets"
+
+# 7b. A touchscreen that counts in its own raw units, not in the screen's pixels:
+#     the region has to be in those units or the finger never lands in it - and
+#     "the button does nothing" is exactly what that looks like.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+cat > "$WORK/stub/raw_axes" <<'AX'
+  ABS_MT_POSITION_X     : value 0, min 0, max 4095, fuzz 0, flat 0, resolution 0
+  ABS_MT_POSITION_Y     : value 0, min 0, max 8191, fuzz 0, flat 0, resolution 0
+AX
+_area=$(run_engine recents-area 2>/dev/null)
+printf '%s\n' "$_area" | grep -q "^3072 7760 4095 8191$"
+check "a touchscreen counting in its own units gets the same place in those units ($_area)" $?
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    00000f3c
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    00001fa4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.050000] EV_KEY       BTN_TOUCH            UP
+[   101.050001] EV_SYN       SYN_REPORT           00000000
+EV
+screen_on
+run_engine activate >/dev/null 2>&1
+sh -c '. "$WORK/spsm/scripts/lib.sh"; . "$WORK/spsm/scripts/knobs.sh"; . "$WORK/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"
+check "and a tap on the Recents button is caught in those units too" $?
+run_engine deactivate >/dev/null 2>&1
+
+# 7c. In those same units, a tap in the left half of the bar is not the button.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+cat > "$WORK/stub/raw_axes" <<'AX'
+  ABS_MT_POSITION_X     : value 0, min 0, max 4095, fuzz 0, flat 0, resolution 0
+  ABS_MT_POSITION_Y     : value 0, min 0, max 8191, fuzz 0, flat 0, resolution 0
+AX
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    000003e8
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    00001fa4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.050000] EV_KEY       BTN_TOUCH            UP
+[   101.050001] EV_SYN       SYN_REPORT           00000000
+EV
+screen_on
+run_engine activate >/dev/null 2>&1
+sh -c '. "$WORK/spsm/scripts/lib.sh"; . "$WORK/spsm/scripts/knobs.sh"; . "$WORK/spsm/scripts/recents.sh"; recents_watch_touch' >/dev/null 2>&1
+if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
+  bad "and a tap in the left half of the bar is still not the button"
+else
+  ok "and a tap in the left half of the bar is still not the button"
+fi
+rm -f "$WORK/stub/raw_axes"
+run_engine deactivate >/dev/null 2>&1
+
+# 8. The watcher is not started on a phone with no Recents button, and the guard
+#    does nothing when the mode is off.
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+printf '%s' 2 > "$WORK/stub/settings/secure.navigation_mode"
+# The navigation option off is what leaves the phone on gesture navigation: with
+# it on, this mode's own knob is what puts the phone on three buttons.
+disable_knobs nav_buttons
+cat > "$WORK/stub/touch_events" <<'EV'
+[   101.000001] EV_ABS       ABS_MT_POSITION_X    000002c8
+[   101.000002] EV_ABS       ABS_MT_POSITION_Y    000005f4
+[   101.000003] EV_KEY       BTN_TOUCH            DOWN
+[   101.000004] EV_SYN       SYN_REPORT           00000000
+[   101.050000] EV_KEY       BTN_TOUCH            UP
+[   101.050001] EV_SYN       SYN_REPORT           00000000
+EV
+screen_on
+run_engine activate >/dev/null 2>&1
+run_engine recents-watch >/dev/null 2>&1
+if grep -q "^am start -n dev.axion.spsm/.SpsmRecentsActivity$" "$WORK/stub/calls"; then
+  bad "a phone on gesture navigation has its taps left alone"
+else
+  ok "a phone on gesture navigation has its taps left alone"
+fi
+run_engine deactivate >/dev/null 2>&1
+make_tree; make_stubs; seed_stub_state
+cp "$REPO/tests/fixtures/recents-narzo.txt" "$WORK/stub/recents.dump"
+run_engine recents-button >/dev/null 2>&1
+if grep -q "recents: the list was put up" "$WORK/spsm/spsm.log" 2>/dev/null; then
+  bad "and with the mode off the handover does nothing"
+else
+  ok "and with the mode off the handover does nothing"
+fi
+
+say "79. the frame rate: 30 is what a 60 Hz screen can hold, and it is put back"
+# The owner's question: "My device produce 60fps all the time, is it possible to
+# reduce that 60fps to 40fps ... and 40fps is smooth too. If possible then
+# research properly and try to implement this to our spsm."
+#
+# 40 is not a rate a 60 Hz panel can show - Android's frame-rate throttling holds
+# an app to a rate that divides the display's refresh rate, and Google's own table
+# lists two values for 60 Hz: 60 and 30. What is implemented is the platform's own
+# intervention, at 30, with the phone's previous value journalled and put back.
+make_tree; make_stubs; seed_stub_state
+enable_knobs fps_cap
+printf '%s' 'mode=2,fps=60' > "$WORK/stub/game_overlay"
+screen_on
+run_engine activate > "$WORK/out.a79" 2>&1
+grep -q '^device_config put game_overlay mode=1,fps=30:mode=2,fps=30:mode=3,fps=30$' "$WORK/stub/calls"
+check "the phone's own frame-rate setting is given 30 fps for every game mode" $?
+grep -q "fps: the phone is holding apps to 30 fps while this mode is on (was mode=2,fps=60)" "$WORK/spsm/spsm.log"
+check "and the log says what it was before" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/game_overlay" 2>/dev/null)" = "mode=2,fps=60" ]
+check "the phone's own setting is put back exactly as it was on exit" $?
+run_engine verify > "$WORK/out.v79" 2>&1
+grep -q "drift=0" "$WORK/out.v79"
+check "with nothing left behind ($(cat "$WORK/out.v79"))" $?
+
+# A phone with no frame-rate setting at all: one is set, and deleted again.
+make_tree; make_stubs; seed_stub_state
+enable_knobs fps_cap
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q '^device_config put game_overlay mode=1,fps=30' "$WORK/stub/calls"
+check "a phone with no frame-rate setting gets one" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/game_overlay" ]
+check "and it is deleted again on exit, because the phone never had one" $?
+
+# A ROM that takes the command and ignores it: nothing is claimed.
+make_tree; make_stubs; seed_stub_state
+enable_knobs fps_cap
+touch "$WORK/stub/refuse_game_overlay"
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q "fps: this ROM did not take the frame-rate setting" "$WORK/spsm/spsm.log"
+check "a ROM that ignores the frame-rate setting is told so, in the log" $?
+grep -q "note fps_cap: applied, did not take, and was put back by the module" "$WORK/spsm/spsm.log"
+check "and nothing is recorded as a change to undo" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v79b" 2>&1
+grep -q "drift=0" "$WORK/out.v79b"
+check "with a clean exit ($(cat "$WORK/out.v79b"))" $?
+
+# A ROM with no device_config at all.
+make_tree; make_stubs; seed_stub_state
+enable_knobs fps_cap
+mv "$BIN/device_config" "$BIN/device_config.away"
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q "fps: this ROM has no device_config, so the frame rate is left alone" "$WORK/spsm/spsm.log"
+check "a phone with no device_config is left alone and told so" $?
+mv "$BIN/device_config.away" "$BIN/device_config"
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v79c" 2>&1
+grep -q "drift=0" "$WORK/out.v79c"
+check "with a clean exit ($(cat "$WORK/out.v79c"))" $?
+
+# A value something else moved after us is a newer decision than ours.
+make_tree; make_stubs; seed_stub_state
+enable_knobs fps_cap
+printf '%s' 'mode=1,fps=60' > "$WORK/stub/game_overlay"
+screen_on
+run_engine activate >/dev/null 2>&1
+printf '%s' 'mode=3,fps=45' > "$WORK/stub/game_overlay"
+run_engine deactivate >/dev/null 2>&1
+grep -q "keep fps_cap: the phone's frame-rate setting was changed since we set it" "$WORK/spsm/spsm.log"
+check "a frame-rate setting changed since is left as it was found" $?
+[ "$(cat "$WORK/stub/game_overlay" 2>/dev/null)" = "mode=3,fps=45" ]
+check "and the newer value is still there" $?
+
+# Switched off by the user: the phone's frame rate is not touched.
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+if grep -q "^device_config put game_overlay" "$WORK/stub/calls"; then
+  bad "with the option off the frame rate is left alone"
+else
+  ok "with the option off the frame rate is left alone"
+fi
+run_engine deactivate >/dev/null 2>&1
+
+say "80. the exit measures itself honestly, and stops doing work it does not need"
+# The owner asked for a faster exit. The first thing it needed was a number worth
+# trusting: `_t0` in the exit was also used inside the phase loops, and a shell has
+# no local variables, so the stopwatch was being reset by the last knob reverted -
+# the log said "revert clean in 4s" for an exit that took ninety seconds.
+grep -q "_exit_t0" "$REPO/module/scripts/engine.sh" && grep -q "_kt0" "$REPO/module/scripts/engine.sh"
+check "the exit and the phase loops keep their own stopwatches" $?
+if grep -qE '(^|[^_a-zA-Z])_t0=' "$REPO/module/scripts/engine.sh"; then
+  bad "and no two stopwatches share a variable"
+else
+  ok "and no two stopwatches share a variable"
+fi
+# The journal files are handed over as they are: the two copies and two deletes
+# per knob were four processes each, twenty-odd times.
+if grep -q 'JOURNAL"\/$_id.orig.txt' "$REPO/module/scripts/engine.sh"; then
+  bad "the revert does not copy the journal for no reason"
+else
+  ok "the revert does not copy the journal for no reason"
+fi
+grep -q 'has_function' "$REPO/module/scripts/engine.sh" && grep -q "^has_function()" "$REPO/module/scripts/lib.sh"
+check "and a function that is missing is no longer called anyway" $?
+
+# The two things the device log showed: a per-knob note line with nothing after
+# it (a shell error next to it), and the app list being read again on every
+# screen-off even though the journal already knew what it looked like.
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+if grep -q "^2026.*note [a-z_]*: $" "$WORK/spsm/spsm.log"; then
+  bad "no knob writes an empty note line"
+else
+  ok "no knob writes an empty note line"
+fi
+if grep -q "note .*: inaccessible or not found" "$WORK/spsm/spsm.log"; then
+  bad "and no missing function is called"
+else
+  ok "and no missing function is called"
+fi
+# A second deep pass inside one idle period does not read every app again: the
+# journal already says what the phone looked like before we touched it.
+#
+# The daemon is stopped first on purpose. It does a pass of its own the moment it
+# sees the screen go off, and with the two racing, "how much did the second pass
+# read" becomes a question about the race rather than about the code - that is
+# how this check first failed, with four reads and then ten.
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+stop_daemons
+[ "$(daemons_alive)" = "0" ]
+check "no daemon is running while the idle pass is measured ($(daemons_alive) alive)" $?
+screen_off
+run_engine screen-off >/dev/null 2>&1
+_n1=$(grep -c "^am get-standby-bucket" "$WORK/stub/calls" 2>/dev/null || true)
+run_engine screen-off >/dev/null 2>&1
+_n2=$(grep -c "^am get-standby-bucket" "$WORK/stub/calls" 2>/dev/null || true)
+_n2=$(( ${_n2:-0} - ${_n1:-0} ))
+[ "$_n2" = "0" ]
+check "a second idle pass inside the same idle period reads nothing again (${_n1:-0} reads, then $_n2 more)" $?
+screen_on
+run_engine screen-on >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v80" 2>&1
+grep -q "drift=0" "$WORK/out.v80"
+check "and it leaves nothing behind ($(cat "$WORK/out.v80"))" $?
+
+# The suspend state, read from the file the system keeps, rather than by asking
+# about each app: twenty apps asked separately was eighteen seconds of the exit
+# in the v3.6.1 log, and it is the exit the owner asked to be quicker.
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/stub/users/0"
+cat > "$WORK/stub/users/0/package-restrictions.xml" <<'XML'
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<package-restrictions>
+<pkg name="com.whatsapp" ceDataInode="124" enabled="1" installed="1" stopped="0" hidden="false" suspended="true" />
+<pkg name="com.spotify.music" ceDataInode="125" enabled="1" installed="1" stopped="0" hidden="false" suspended="false" />
+</package-restrictions>
+XML
+screen_on
+run_engine activate >/dev/null 2>&1
+# com.whatsapp is recorded as suspended by somebody else, so it is not ours to
+# take over - and it is not suspended again by us.
+grep -q "^com.whatsapp	1$" "$WORK/spsm/journal/block_other_apps.orig"
+check "an app suspended by somebody else is recorded as theirs" $?
+[ ! -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "and it is left exactly as it was" $?
+run_engine deactivate >/dev/null 2>&1
+[ -f "$WORK/stub/pkg/com.whatsapp.suspended" ] && bad "and it is not unsuspended on the way out either" || ok "and it is not unsuspended on the way out either"
+run_engine verify > "$WORK/out.v80b" 2>&1
+grep -q "drift=0" "$WORK/out.v80b"
+check "with a clean exit ($(cat "$WORK/out.v80b"))" $?
+# And with no such file at all, the phone is asked per app as it always was.
+make_tree; make_stubs; seed_stub_state
+rm -rf "$WORK/stub/users"
+screen_on
+run_engine activate >/dev/null 2>&1
+grep -q "^com.whatsapp	0$" "$WORK/spsm/journal/block_other_apps.orig"
+check "a phone without that file is asked about each app, as before" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v80c" 2>&1
+grep -q "drift=0" "$WORK/out.v80c"
+check "with a clean exit ($(cat "$WORK/out.v80c"))" $?
 
 
 # ==========================================================================

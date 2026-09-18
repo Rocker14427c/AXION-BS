@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.6.1
-versionCode=53
+version=v3.6.2
+versionCode=54
 author=Axion SPSM
-description=v3.6.1 the phone's own three-button navigation, switched by the phone's own overlay command (this app draws no bar of its own), with its Recents button handed to this mode's list - and put back to the owner's gesture navigation on exit. The ROM-background step no longer takes four minutes: the work is batched, the exit writes independent values together and stops the daemon before the revert instead of after it. RMX3430.
+description=v3.6.2 the Recents button fixed at its real cause: this ROM opens recents as a launcher animation, not an activity, so the daemon now watches the animation line and the touchscreen tap on the Recents area, and starts this mode's list, reads the screen back and tries again until it is what is up. Exit times are no longer understated (three stopwatches, not one). New optional 30 fps cap for this 60 Hz panel - 40 cannot be shown, 30 can. RMX3430.

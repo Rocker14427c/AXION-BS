@@ -115,7 +115,15 @@ watch_recents() {
   # guard reads it from here and falls back to asking itself.
   RECENTS_HOST=$(host_recents_component 2>/dev/null)
   export RECENTS_HOST
-  logcat -b events -v brief 2>/dev/null | while read -r _l; do
+  # -T now, and not the whole buffer.
+  #
+  # logcat prints what is already in the buffer before it follows, so the first
+  # lines here can be from before the mode was ever switched on. The v3.6.1 log
+  # has exactly that shape: the one recents line in a nine-hour session arrived
+  # in the same second the daemon started, which is what a replayed old line
+  # looks like - and it was answered with a handover for a press that had
+  # happened while the phone was still in gesture navigation.
+  logcat -b events -v brief -T "$(date '+%m-%d %H:%M:%S.000')" 2>/dev/null | while read -r _l; do
     [ -f "$ACTIVE" ] || break
     # Everything that mentions recents, in either spelling: the guard decides
     # what it is and writes down the ones it refuses, so a button that opens the
@@ -126,18 +134,27 @@ watch_recents() {
 }
 
 WATCH_PID=""
+WATCH_TOUCH_PID=""
 # Gated on what the phone is actually drawing, not on our own option: our
 # option is what usually puts the phone on three buttons, but the user may
 # equally have chosen it himself, and the button has to work either way. A phone
 # on gesture navigation has no Recents button at all, so there is nothing to
 # watch and nothing to hand over.
 if [ "$(nav_now)" = three ]; then
+  # Two watchers, because a button can be quiet in one of them and not the other.
+  # The log says what the phone is doing; the touchscreen says what the finger
+  # did. v3.6.1 had only the first and the phone never said anything - so the
+  # second is the one that has to work, and the first is what makes the log
+  # readable when it does not.
   watch_recents &
   WATCH_PID=$!
+  recents_watch_touch &
+  WATCH_TOUCH_PID=$!
 fi
 
 daemon_exit() {
   [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
+  [ -n "$WATCH_TOUCH_PID" ] && kill "$WATCH_TOUCH_PID" 2>/dev/null
   return 0
 }
 # TERM is how this loop is stopped when the mode is switched off, and a shell

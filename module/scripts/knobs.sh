@@ -1268,20 +1268,31 @@ apply_app_restrict() {
   mkdir -p "$_d" 2>/dev/null
   _r="$_d/restrict.$$"
   : > "$_r"
+  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   managed_packages > "$_d/restrict.pkgs.$$" 2>/dev/null
   while read -r _pkg; do
     [ -n "$_pkg" ] || continue
-    (
-      _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
-      [ -n "$_ob" ] || _ob=-
-      _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
-            | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
-      [ -n "$_oo" ] || _oo=-
-      [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
-      printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
-      [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
-      [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
-    ) &
+    case "$_known" in
+      *" $_pkg "*)
+        # Already recorded in this idle period: these are our values, so hold
+        # them in place without reading anything.
+        (
+          am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
+        ) & ;;
+      *)
+        (
+          _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+          [ -n "$_ob" ] || _ob=-
+          _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
+                | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
+          [ -n "$_oo" ] || _oo=-
+          [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
+          printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
+          [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
+        ) & ;;
+    esac
   done < "$_d/restrict.pkgs.$$"
   wait
   rm -f "$_d/restrict.pkgs.$$"
@@ -1471,9 +1482,19 @@ meta_block_other_apps() {
 # managed to record every app as "already suspended before us" and then leave
 # them all suspended on exit.)
 snapshot_block_other_apps() {
+  _susp=''
+  if suspended_packages > "$SPSM_DIR/.tmp/susp.$$" 2>/dev/null; then
+    _susp=" $(tr '\n' ' ' < "$SPSM_DIR/.tmp/susp.$$") "
+  fi
+  rm -f "$SPSM_DIR/.tmp/susp.$$"
   blockable_packages | while read -r _p; do
+    [ -n "$_p" ] || continue
     _s=0
-    dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && _s=1
+    if [ -n "$_susp" ]; then
+      case "$_susp" in *" $_p "*) _s=1 ;; esac
+    else
+      dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && _s=1
+    fi
     printf '%s\t%s\n' "$_p" "$_s"
   done
 }
@@ -1499,12 +1520,22 @@ apply_block_other_apps() {
   mkdir -p "$_d" 2>/dev/null
   _r="$_d/block.$$"
   : > "$_r"
+  # Who is already suspended, read once above rather than asked once per app.
+  _susp=''
+  if suspended_packages > "$_d/susp.$$" 2>/dev/null; then
+    _susp=" $(tr '\n' ' ' < "$_d/susp.$$") "
+  fi
+  rm -f "$_d/susp.$$"
   for _p in $(blockable_packages); do
     [ -n "$_p" ] || continue
     (
       # An app that is already suspended is somebody else's decision - the user's,
       # or another tool's. Never ours to take over, and never ours to release.
-      dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && exit 0
+      if [ -n "$_susp" ]; then
+        case "$_susp" in *" $_p "*) exit 0 ;; esac
+      else
+        dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && exit 0
+      fi
       if pm suspend --user 0 "$_p" >/dev/null 2>&1 || pm suspend "$_p" >/dev/null 2>&1; then
         am force-stop "$_p" >/dev/null 2>&1
         printf '%s\n' "$_p" >> "$_r"
@@ -1522,6 +1553,14 @@ apply_block_other_apps() {
 
 restore_block_other_apps() {
   [ -f "$BLOCKED_BY_US" ] || return 0
+  # Same reading on the way out, which is where it matters most: this was the
+  # single slowest step of the exit (18 seconds in the v3.6.1 log) because every
+  # app was asked about separately.
+  _susp=''
+  if suspended_packages > "$SPSM_DIR/.tmp/susp.$$" 2>/dev/null; then
+    _susp=" $(tr '\n' ' ' < "$SPSM_DIR/.tmp/susp.$$") "
+  fi
+  rm -f "$SPSM_DIR/.tmp/susp.$$"
   # Together, like the apply: releasing a dozen apps one at a time is most of a
   # slow exit.
   while read -r _p; do
@@ -1529,7 +1568,19 @@ restore_block_other_apps() {
     (
       # Only if it is still suspended: if something else has since had an opinion
       # about this app, that opinion wins.
-      dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' || exit 0
+      #
+      # The journal above is what authorizes releasing this app at all; the
+      # system's record is only the fast path to "it is still suspended". A
+      # record that does not name it is NOT proof that it is not suspended -
+      # the system writes that file asynchronously, so an app this session
+      # suspended a moment ago can be missing from it - and this is the one
+      # mistake that cannot be left behind: the phone would keep an app that
+      # cannot be opened. When the record is silent about this app, the app is
+      # asked directly.
+      case "$_susp" in
+        *" $_p "*) ;;
+        *) dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' || exit 0 ;;
+      esac
       pm unsuspend --user 0 "$_p" >/dev/null 2>&1 || pm unsuspend "$_p" >/dev/null 2>&1
     ) &
   done < "$BLOCKED_BY_US"
@@ -2008,6 +2059,106 @@ restore_rom_bg_off() {
   rm -f "$_list"
 }
 
+# ============================================================ Frame rate
+
+# The owner's question: "My device produce 60fps all the time, is it possible to
+# reduce that 60fps to 40fps because it will reduce some cpu/gpu load and 40fps
+# is smooth too. If possible then research properly and try to implement this to
+# our spsm."
+#
+# Researched, and the honest answer has two halves.
+#
+#   * 40 is not a rate a 60 Hz panel can show. Android's own frame-rate
+#     throttling - the one this knob uses, and the only one the platform offers -
+#     holds an app to a rate that DIVIDES the display's refresh rate, and
+#     Google's own table for it lists exactly two values for a 60 Hz display: 60
+#     and 30. A 40 fps cap would leave every third frame late by a vsync; that is
+#     judder, not a smooth 40, and it saves nothing on the panel side because the
+#     panel still scans at 60 Hz.
+#   * The lever that does exist: the FPS-throttling intervention for Game Mode
+#     (Android 13+). `device_config game_overlay` carries a frame rate per game
+#     mode, GameManagerService hands it to SurfaceFlinger, and SurfaceFlinger
+#     holds the app's frames to it by skipping vsyncs. One value, read back, put
+#     back on the way out.
+#
+# The panel on this phone is 60 Hz and has no other mode, so 30 is the only lower
+# rate this can hold. Default off: it is a visible change to how the phone feels
+# and it is worth nothing on a ROM that ignores it - which is exactly what the
+# option's own Check, and the log line below, tell the truth about.
+FPS_VALUE=${FPS_VALUE:-30}
+
+# The phone's current intervention, "null" when it has none, or empty when the
+# phone will not answer.
+game_overlay_now() {
+  has device_config || return 1
+  device_config get game_overlay 2>/dev/null | tr -d '\r' | head -1
+}
+
+meta_fps_cap() {
+  echo "Display|Cap the frame rate while in use|Holds apps to 30 frames a second instead of 60 while the mode is on, which halves what the processor and graphics do for the screen. 40 is not a rate a 60 Hz screen can show: Android only holds a frame rate that divides 60, so 30 or 60. Uses the platform's own Game Mode frame-rate setting; on a ROM that does not have it, nothing is changed and the log says so.|0|session|battery"
+}
+snapshot_fps_cap() {
+  if ! has device_config; then printf '(MISSING)'; return; fi
+  _v=$(game_overlay_now)
+  case "$_v" in
+    '') printf '(MISSING)' ;;   # would not answer: never ours to overwrite
+    *)  printf '%s' "$_v" ;;    # "null" is an answer: the phone has none set
+  esac
+}
+apply_fps_cap() {
+  if ! has device_config; then
+    log "fps: this ROM has no device_config, so the frame rate is left alone"
+    return 2
+  fi
+  _was=$(game_overlay_now)
+  if [ -z "$_was" ]; then
+    log "fps: this ROM would not say what its frame-rate setting is, so it is left alone"
+    return 2
+  fi
+  # All three modes - standard, performance, battery - carry the same frame rate,
+  # so whichever mode an app is in, the rate is this one. No per-app game mode is
+  # written: that is a user setting on this phone and there is no way to read one
+  # back, and this mode does not overwrite a setting it cannot read.
+  device_config put game_overlay \
+    "mode=1,fps=$FPS_VALUE:mode=2,fps=$FPS_VALUE:mode=3,fps=$FPS_VALUE" >/dev/null 2>&1
+  _now=$(game_overlay_now)
+  case "$_now" in
+    *"fps=$FPS_VALUE"*)
+      log "fps: the phone is holding apps to ${FPS_VALUE} fps while this mode is on (was ${_was})"
+      return 0 ;;
+  esac
+  log "fps: this ROM did not take the frame-rate setting (still ${_now:-unset}), so nothing was changed"
+  return 2
+}
+restore_fps_cap() {
+  has device_config || return 0
+  _want=$(cat "$1" 2>/dev/null)
+  case "$_want" in ''|'(MISSING)') return 0 ;; esac
+  _cur=$(game_overlay_now)
+  # Only undo our own change: a value something else has moved since is a newer
+  # decision than ours.
+  case "$_cur" in
+    *"fps=$FPS_VALUE"*) ;;
+    *) log "keep fps_cap: the phone's frame-rate setting was changed since we set it" ; return 0 ;;
+  esac
+  if [ "$_want" = null ]; then
+    device_config delete game_overlay >/dev/null 2>&1
+    log "fps: the phone's frame-rate setting is deleted again (it had none)"
+  else
+    device_config put game_overlay "$_want" >/dev/null 2>&1
+    log "fps: the phone's frame rate setting is back to what it was"
+  fi
+  return 0
+}
+probe_fps_cap() {
+  printf 'frame_rate_setting\t%s\n' "$(game_overlay_now 2>/dev/null || echo none)"
+  if has cmd && cmd game mode >/dev/null 2>&1; then
+    printf 'game_mode_service\tavailable\n'
+  else
+    printf 'game_mode_service\tnot available on this ROM\n'
+  fi
+}
+
 # ============================================================ registry
 # Order matters: cheapest and most visible first, and the deep system-wide
 # switches last, so that a failure part-way through never leaves the phone
@@ -2045,6 +2196,7 @@ sync_off
 battery_saver
 mtk_low_power
 blur_off
+fps_cap
 host_recents_off
 statusbar_on
 "
@@ -2087,6 +2239,38 @@ knob_default() {
 # or suspending them is how a power saving mode locks somebody out of their own
 # phone. ResukiSU's package was missing from this list while it was running on
 # the device this was written for - it was being treated as an ordinary app.
+# Which packages are suspended right now, one per line.
+#
+# `dumpsys package <pkg> | grep suspended=true` is one process per package, and
+# on this phone a process costs a fifth of a second: twenty apps meant eighteen
+# seconds of the exit, measured. The state lives in the file the system itself
+# keeps, and this runs as root - so it is read once instead.
+#
+# Nothing is guessed: if the file is not there or nothing in it matches, this
+# prints nothing and the caller falls back to asking the system per package -
+# the same shape as every other device reading in this module.
+SPSM_USERS=${SPSM_USERS:-/data/system/users}
+
+suspended_packages() {
+  _found=0
+  for _f in "$SPSM_USERS"/*/package-restrictions.xml; do
+    [ -f "$_f" ] || continue
+    _found=1
+    awk '
+      {
+        n = split($0, part, "<pkg ")
+        for (i = 2; i <= n; i++) {
+          if (part[i] !~ /suspended="true"/) continue
+          if (match(part[i], /name="[^"]+"/)) {
+            print substr(part[i], RSTART + 6, RLENGTH - 7)
+          }
+        }
+      }
+    ' "$_f" 2>/dev/null
+  done
+  [ "$_found" = 1 ]
+}
+
 ESSENTIALS="com.android.dialer com.android.server.telecom com.android.mms com.android.messaging com.google.android.apps.messaging com.android.providers.telephony com.android.phone com.android.deskclock com.android.systemui com.android.settings dev.axion.spsm"
 ROOT_APPS="com.topjohnwu.magisk me.weishu.kernelsu com.rifsxd.ksunext com.sukisu.ultra com.resukisu.resukisu me.resukisu.resukisu com.resukisu.manager com.dergoogler.mmrl com.franco.kernel eu.chainfire.supersu com.koushikdutta.superuser com.noshufou.android.su"
 
@@ -2127,10 +2311,16 @@ managed_packages() {
   _keep="$_keep $ESSENTIALS "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
+  # `echo "$_exempt" | grep -q "$_p"` inside this loop was a process per
+  # installed app - about a hundred of them, twice per idle period - and it is
+  # what made the app list the slowest single step of an activation on the
+  # device (69 seconds, in the v3.6.1 log). The same test against a string costs
+  # nothing and returns the same answer.
+  _ex_s=" $(printf '%s\n' $_exempt | tr '\n' ' ') "
   for _p in $_all; do
     [ -n "$_p" ] || continue
     case "$_keep" in *" $_p "*) continue ;; esac
-    echo "$_exempt" | grep -qxF "$_p" && continue
+    case "$_ex_s" in *" $_p "*) continue ;; esac
     echo "$_p"
   done
 }
