@@ -690,6 +690,13 @@ probe_one() { # probe_one <knob> -> "verdict<TAB>detail"
   case "$(knob_meta "$_k" | cut -d'|' -f6)" in
     *control*) printf 'preference\tthis is a setting, not a change to the phone'; return 0 ;;
   esac
+  # An option whose change cannot be read back answers for itself: the snapshot
+  # diff below would call it "inert" (nothing moved) when the truth is "applied,
+  # and the phone cannot show it". The frame-rate cap is that case - Surface-
+  # Flinger's override is a setter with no getter - and its own verdict hook
+  # says so instead of leaving the sentence to a machinery that cannot see it.
+  _pfv="probe_${_k}_verdict"
+  if has_function "$_pfv"; then "$_pfv"; return 0; fi
   # NOT "_snap": knob_apply assigns to a variable of that name (it holds the
   # snapshot text), and there are no locals in POSIX sh - so the name of the
   # function to call was being overwritten by the very call it was used for, and
@@ -825,34 +832,6 @@ case "$CMD" in
   allow)      do_allow ;;
   recents)        do_recents ;;
   clear-all)      do_clear_all ;;
-  # The handover on its own: put this mode's list up and prove it is up, exactly
-  # as the Recents button does. This is the command to run when the button does
-  # not work - it separates "the button was not seen" from "the list would not
-  # come up", which are different faults with different fixes:
-  #   su -c 'sh /data/adb/spsm/scripts/engine.sh recents-button'
-  # An optional word ("tap", from the touchscreen watcher) so a handover a tap
-  # asked for can be told apart from one typed by hand.
-  recents-button) shift
-    if [ -f "$ACTIVE" ]; then
-      recents_take_over "the Recents button command${1:+ ($1)}"
-    else
-      log "recents: the mode is off, so there is no list to put up"
-    fi ;;
-  # One line of the phone's event log, offered to the recents guard. The daemon
-  # feeds it every line it sees; this form exists so the decision can be tested,
-  # and run by hand, without waiting for the phone to open its own recents.
-  recents-guard)  recents_guard "$2" ;;
-  # Where the phone thinks its Recents button is, and whether it can be watched
-  # at all - the answer to "why did nothing happen" without a log.
-  recents-area)   recents_button_region || echo "this phone would not say where its navigation bar is" ;;
-  # Watch the touchscreen for the Recents button, exactly as the daemon does, in
-  # the foreground: run it in a second Termux session and press the button. The
-  # region is printed first, so the session answers something even if the press
-  # never lands in it.
-  recents-watch)
-    _rw=$(recents_button_region 2>/dev/null)
-    echo "watching the touchscreen for the Recents button (x1 y1 x2 y2 = ${_rw:-this phone would not say}). Press it now - what happens is written to the SPSM log."
-    recents_watch_touch ;;
   # Written by the app whenever something opens the recents list: the button on
   # the home screen, the phone's own Recents key, or a MAIN/HOME intent. The
   # list itself logs what it found, so a press that opens nothing leaves a line
@@ -868,6 +847,6 @@ case "$CMD" in
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-button|recents-area|recents-watch|recents-opened <how>|recents-guard <line>|status|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|status|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac

@@ -205,29 +205,6 @@ public class SpsmHomeActivity extends Activity {
         }
     }
 
-    /**
-     * The Recents button, as the shell sends it.
-     *
-     * <p>In three-button navigation the phone's own Recents button sends
-     * KEYCODE_APP_SWITCH, and a key event is delivered to the focused window
-     * first - which is this activity while the mode is on. Consuming it here is
-     * what makes that button open <em>this</em> mode's list: no launcher is
-     * started, and there is no second screen left behind to cover up.
-     */
-    @Override
-    public boolean dispatchKeyEvent(android.view.KeyEvent ev) {
-        try {
-            if (ev != null && ev.getKeyCode() == android.view.KeyEvent.KEYCODE_APP_SWITCH) {
-                if (ev.getAction() == android.view.KeyEvent.ACTION_UP && !ev.isCanceled()) {
-                    openRecents("recents-button");
-                }
-                return true;
-            }
-        } catch (Throwable ignored) {
-        }
-        return super.dispatchKeyEvent(ev);
-    }
-
 
     /** Opens the recents list, once per press, and says in the log what opened it. */
     private void openRecents(String how) {

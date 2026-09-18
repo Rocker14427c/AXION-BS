@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.6.3
-versionCode=55
+version=v3.6.4
+versionCode=56
 author=Axion SPSM
-description=v3.6.3 the Recents tap is handed over the moment the finger lifts: the tap watcher no longer reads the event stream through awk, whose input buffering held the tap until the stream ended - a phone's stream never ends, so v3.6.2's watcher watched forever and never acted. The tap state machine now runs in plain shell, line by line, and the frame-rate cap refuses honestly on panels it cannot serve. RMX3430.
+description=v3.6.4 a clean reset: every Recents watcher is gone - the button is the phone's own again and SPSM touches nothing of Quickstep's pipeline - and the frame-rate cap now uses the command verified on this phone (SurfaceFlinger 1035): the whole screen held to 30 while the mode is on, 60 back on exit. RMX3430.

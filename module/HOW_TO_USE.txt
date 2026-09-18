@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.3.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.4.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -23,36 +23,32 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.6.3)
-- THE RECENTS TAP ARRIVES NOW. v3.6.2's tap watcher was alive the whole session
-  and never handed a single press over. The cause was underneath the watcher: the
-  event stream was read through awk, and awk holds what a pipe gives it until the
-  buffer is full or the stream ends. Your phone's event stream never ends, and a
-  tap is a few hundred bytes - the press sat in that buffer for good. (This was
-  reproduced with the module's own tap rules in a test rig: with the stream held
-  open the old code waited out the whole hold; fed a big burst it answers in
-  seconds - buffer behaviour, exactly.) The tap is now read in the shell one line
-  at a time, which cannot wait for a full buffer: the moment your finger lifts,
-  the list goes up - the same region, the same still-finger and under-0.8-second
-  rules as before, all in plain integer arithmetic now. The log line is unchanged
-  ("the list was put up for the Recents button command (tap)"), and a getevent
-  that cannot read the touchscreen is reported within seconds instead of leaving
-  a silent "watching" line.
-- THE FRAME-RATE CAP GOES AT THE PANEL, OR SAYS NO. v3.6.2 asked the ROM's Game
-  Mode setting, which your phone would not even show (the log said so) - and it
-  caps games only, so the launcher and normal apps would never have followed it.
-  Now: if your panel offers a 30 Hz mode, the option writes the phone's own peak
-  and minimum refresh-rate settings to 30 while the mode is on and puts both back
-  on exit (journalled and drift-checked like every other knob). On a 60-only
-  panel the Game Mode setting survives as a games-only fallback and the log says
-  that is what it is. A phone that offers neither, or will not say, gets an
-  honest refusal in the option's note - nothing is written that the phone has to
-  undo. 40 fps stays impossible: a panel can only show counts that divide its
-  refresh, and 40 does not divide 60.
-- Everything else is unchanged: the same knobs, the same exit, the same
-  guarantees. The full test rig passes 594 checks, 0 failed - including a tap
-  handed over while the fake stream is still open, which is the exact way
-  v3.6.2 failed on your phone.
+NEW IN THIS BUILD (v3.6.4) - A CLEAN RESET
+- THE RECENTS WATCHERS ARE GONE. All of them: the daemon no longer reads the
+  phone's event log for the launcher's recents animation, nothing reads the
+  touchscreen any more, and the app no longer consumes the Recents key. The
+  Recents button is the phone's own again - it opens the launcher's own recents,
+  exactly as it does with this module off - and SPSM touches nothing of that
+  pipeline. This mode's own recents list is still here, one tap of Home away,
+  and Clear all still works as it did.
+- THE FRAME-RATE CAP USES THE COMMAND YOU FOUND. "Cap the frame rate (30 fps)"
+  now runs the command you verified on this phone -
+    service call SurfaceFlinger 1035 i32 0 i64 0 f 30 f 30
+  - which holds the WHOLE screen (every app, and this mode's home) to 30 frames
+  a second while the mode is on. On exit it runs your 60 command, and the
+  phone's own default is back. There is nothing to read back - the phone does
+  not answer questions about this setting - so the log says exactly what was
+  set and what was restored, and nothing else is claimed. 40 is still not a
+  rate a 60 Hz screen can show: the rate has to divide the panel's refresh.
+  The old attempts (panel modes, the ROM's Game Mode setting) are deleted.
+- The rest of the mode is unchanged: the same knobs, the same exit, the same
+  guarantees. The full test rig passes 517 checks, 0 failed.
+FROM v3.6.3
+- The tap watcher was rewritten in plain shell (the awk underneath it buffered
+  every tap forever - a phone's event stream never ends), and the frame-rate
+  option asked the panel's own modes first. Your device showed the tap still
+  never arriving and the panel answering nothing, so all of it was removed in
+  v3.6.4.
 
 FROM v3.6.2
 - The Recents tap watcher itself arrived here: the launcher's recents animation
@@ -206,7 +202,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.3-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.6.4-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

@@ -20,10 +20,9 @@
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/lib.sh"
-# The daemon is where the phone's own recents screen is watched for (the option
-# list is needed to know whether three-button navigation was asked for, and the
-# recents list to hand that screen over), so it reads the same three files the
-# engine does.
+# The daemon shares the engine's own libraries (the option list to know what was
+# asked for, the recents list for the task commands it serves), so it reads the
+# same three files the engine does.
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/knobs.sh"
 # shellcheck source=/dev/null
@@ -95,89 +94,11 @@ poked=0
 trap 'poked=1' USR1
 log "daemon start (pid $$)"
 
-# The Recents button, while the mode is on.
-#
-# With three-button navigation the Recents button is the phone's, and on this ROM
-# it opens the launcher's own recents screen. That screen is watched for on the
-# phone's own event log - the events buffer only, a trickle rather than the
-# firehose of the main log buffer, because this runs on a phone whose whole point
-# is not spending power - and every line that names it is handed to recents_guard,
-# which opens this mode's list and takes the phone's screen down.
-#
-# The watcher is a child of this process: it is killed on the way out, and it
-# also stops of its own accord the moment the mode is off (it checks the active
-# flag on every line).
-watch_recents() {
-  has logcat || return 0
-  log "recents: watching the phone's event log for its own recents screen"
-  # Which screen the phone's Recents button opens, read once: it cannot change
-  # while the mode is on, and asking per line would be a dumpsys per line. The
-  # guard reads it from here and falls back to asking itself.
-  RECENTS_HOST=$(host_recents_component 2>/dev/null)
-  export RECENTS_HOST
-  # -T now, and not the whole buffer.
-  #
-  # logcat prints what is already in the buffer before it follows, so the first
-  # lines here can be from before the mode was ever switched on. The v3.6.1 log
-  # has exactly that shape: the one recents line in a nine-hour session arrived
-  # in the same second the daemon started, which is what a replayed old line
-  # looks like - and it was answered with a handover for a press that had
-  # happened while the phone was still in gesture navigation.
-  logcat -b events -v brief -T "$(date '+%m-%d %H:%M:%S.000')" 2>/dev/null | while read -r _l; do
-    [ -f "$ACTIVE" ] || break
-    # Everything that mentions recents, in either spelling: the guard decides
-    # what it is and writes down the ones it refuses, so a button that opens the
-    # phone's recents screen can never fail silently here.
-    case "$_l" in *ecents*|*ECENTS*) ;; *) continue ;; esac
-    recents_guard "$_l"
-  done
-}
-
-WATCH_PID=""
-WATCH_TOUCH_PID=""
-# Gated on what the phone is actually drawing, not on our own option: our
-# option is what usually puts the phone on three buttons, but the user may
-# equally have chosen it himself, and the button has to work either way. A phone
-# on gesture navigation has no Recents button at all, so there is nothing to
-# watch and nothing to hand over.
-if [ "$(nav_now)" = three ]; then
-  # Two watchers, because a button can be quiet in one of them and not the other.
-  # The log says what the phone is doing; the touchscreen says what the finger
-  # did. v3.6.1 had only the first and the phone never said anything - so the
-  # second is the one that has to work, and the first is what makes the log
-  # readable when it does not.
-  watch_recents &
-  WATCH_PID=$!
-  recents_watch_touch &
-  WATCH_TOUCH_PID=$!
-  # "watching" is a promise, and a watcher that dies the second it starts has
-  # broken it while the log still says it. The v3.6.2 device log said "watching"
-  # and never another word: the awk between getevent and the handover buffered
-  # every tap. This does not catch that case (the watcher lives, the pipe does
-  # not), but it catches the other way a watcher dies - getevent unable to read
-  # the touchscreen at all - and says so rather than leaving silence.
-  sleep 2
-  if ! kill -0 "$WATCH_TOUCH_PID" 2>/dev/null; then
-    log "recents: the Recents button watcher died at once - getevent could not read the touchscreen"
-  fi
-fi
-
-daemon_exit() {
-  # The watchers are pipelines: killing the shell that runs the loop leaves the
-  # producer (logcat, getevent) alive with nothing reading it - an orphan every
-  # session, still listening. The children go first, then the shell itself.
-  for _w in "$WATCH_PID" "$WATCH_TOUCH_PID"; do
-    [ -n "$_w" ] || continue
-    has pkill && pkill -P "$_w" 2>/dev/null
-    kill "$_w" 2>/dev/null
-  done
-  return 0
-}
+daemon_exit() { return 0; }
 # TERM is how this loop is stopped when the mode is switched off, and a shell
 # that traps TERM carries on running unless the handler says otherwise - so this
-# one exits after it has taken the watcher with it.
-trap 'daemon_exit' EXIT
-trap 'daemon_exit; exit 0' TERM INT
+# one exits.
+trap 'exit 0' TERM INT
 
 # A mode that saves nothing and a mode that is not running look identical from
 # the outside, which is a bad way to find out that a daemon died. Two things

@@ -1018,155 +1018,6 @@ probe_statusbar_on() {
   esac
 }
 
-# ------------------------------------------------------------------- recents
-# The recents screen the phone's own launcher provides, switched off for the
-# session.
-#
-# The owner's report: swiping up (or going home from an app) kept starting the
-# launcher and showing its wallpaper, over and over, in a mode whose whole point
-# is not to run the launcher. The recents screen is not the launcher's home
-# activity - it is its own component, and this ROM names it in the task dump:
-#
-#   mRecentsComponent=ComponentInfo{com.android.launcher3/com.android.quickstep.RecentsActivity}
-#
-# Component on/off state is exact, per-user and reversible, and it is the only
-# lever that stops the system STARTING it - which is what was happening. The
-# reading is taken before anything is written, the write is verified against a
-# read-back, and the recorded state is put back on exit. A phone whose recents
-# screen cannot be read is left completely alone: an unreadable value is never
-# written, and an unverifiable change is never made.
-host_recents_component() {
-  if type recents_component >/dev/null 2>&1; then
-    recents_component
-    return
-  fi
-  # Standing on its own (an option list built without the engine): the same
-  # reading, from the same dump.
-  has dumpsys || return 0
-  dumpsys activity recents 2>/dev/null | awk '
-    /^mRecentsComponent=/ {
-      line = $0
-      sub(/^mRecentsComponent=ComponentInfo\{/, "", line)
-      sub(/\}.*$/, "", line)
-      if (line ~ /^[A-Za-z0-9._]+\/[A-Za-z0-9._$]+$/) print line
-      exit
-    }'
-}
-
-# What the phone says the component's own on/off setting is: default, enabled,
-# disabled, disabled-user or disabled-until-used. Empty means "no reading" - the
-# command may not exist on this ROM, and then the package dump is asked instead.
-component_setting() { # component_setting <pkg/component>
-  _c=$1
-  case "$_c" in */*) ;; *) return 0 ;; esac
-  _out=$(cmd package get-component-enabled-setting "$_c" 2>/dev/null | tail -1)
-  case "$_out" in
-    *EFAULT*|*efault*)                     printf 'default'; return 0 ;;
-    *ISABLED_UNTIL_USED*|*isabled-until-used*) printf 'disabled-until-used'; return 0 ;;
-    *ISABLED_USER*|*isabled-user*)         printf 'disabled-user'; return 0 ;;
-    *ISABLED*|*isabled*)                   printf 'disabled'; return 0 ;;
-    *ENABLED*|*nabled*)                    printf 'enabled'; return 0 ;;
-    *[0-9]*)
-      # A bare number is the PackageManager constant: 0 default, 1 enabled,
-      # 2 disabled, 3 disabled-user, 4 disabled-until-used. The last number on
-      # the line is the value.
-      case "$(printf '%s' "$_out" | grep -o '[0-9]' | tail -1)" in
-        0) printf 'default' ;;
-        1) printf 'enabled' ;;
-        2) printf 'disabled' ;;
-        3) printf 'disabled-user' ;;
-        4) printf 'disabled-until-used' ;;
-      esac
-      return 0 ;;
-  esac
-  # No usable answer from that command. The package dump lists components that
-  # were switched off by setting; anything else is at its manifest default.
-  _d=$(dumpsys package "${_c%%/*}" 2>/dev/null)
-  case "$_d" in
-    *"disabled"*"$_c"*) printf 'disabled' ; return 0 ;;
-    *"enabled"*"$_c"*)  printf 'enabled' ; return 0 ;;
-  esac
-  printf 'default'
-}
-
-# Set it, in whichever form this ROM accepts, and say whether it worked.
-component_set() { # component_set <pkg/component> <default|enabled|disabled>
-  _c=$1
-  _v=$2
-  case "$_c" in */*) ;; *) return 1 ;; esac
-  if cmd package set-component-enabled-setting --user 0 "$_c" "$_v" >/dev/null 2>&1; then return 0; fi
-  if cmd package set-component-enabled-setting "$_c" "$_v" >/dev/null 2>&1; then return 0; fi
-  case "$_v" in
-    disabled) has pm && pm disable --user 0 "$_c" >/dev/null 2>&1 && return 0 ;;
-    *)        has pm && pm enable  --user 0 "$_c" >/dev/null 2>&1 && return 0 ;;
-  esac
-  return 1
-}
-
-meta_host_recents_off() {
-  # Off by default, and this phone's own log is the reason: it does not accept the
-  # switch ("this phone did not accept switching
-  # com.android.launcher3/com.android.quickstep.RecentsActivity off"), so every
-  # activation spent seconds asking for something it then had to undo. The option
-  # stays - other ROMs do accept it - but nothing asks for it by default.
-  echo "Display|Switch the launcher's recents off|The phone's own recents belong to the launcher: swiping up starts it and draws its screen over whatever you were doing. This switches that screen off for as long as the mode is on, and puts its setting back on exit. This phone does not accept the switch (see the log), so it is off by default.|0|session|core"
-}
-snapshot_host_recents_off() {
-  _c=$(host_recents_component)
-  printf 'recents\t%s\n' "$(enc_val "$_c")"
-  printf 'setting\t%s\n' "$(enc_val "$(component_setting "$_c")")"
-}
-apply_host_recents_off() {
-  _c=$(host_recents_component)
-  case "$_c" in
-    ''|none|*' '*) log "host recents: this phone does not name a recents screen"; return 2 ;;
-  esac
-  case "${_c%%/*}" in
-    dev.axion.spsm) return 0 ;;      # already ours: nothing to switch off
-  esac
-  _cur=$(component_setting "$_c")
-  case "$_cur" in
-    '') log "host recents: $_c cannot be read, so it is left alone"; return 2 ;;
-    disabled*) return 0 ;;           # switched off by someone else: their choice
-  esac
-  component_set "$_c" disabled
-  if [ "$(component_setting "$_c")" = "disabled" ] || [ "$(component_setting "$_c")" = "disabled-user" ]; then
-    log "host recents: $_c switched off for this session"
-    return 0
-  fi
-  log "host recents: this phone did not accept switching $_c off"
-  return 2
-}
-restore_host_recents_off() {
-  _want=$(snap_file_val "$1" setting)
-  _c=$(snap_file_val "$1" recents)
-  [ -n "$_c" ] || _c=$(host_recents_component)
-  case "$_c" in ''|*' ') return 0 ;; esac
-  case "$_want" in
-    ''|disabled*)
-      # It was already off before us, so there is nothing of ours to put back.
-      return 0 ;;
-  esac
-  # Only if it is still switched off by us: a user who switched it back on
-  # themselves has said what they want.
-  case "$(component_setting "$_c")" in
-    disabled*) ;;
-    *) return 0 ;;
-  esac
-  component_set "$_c" "$_want"
-  case "$(component_setting "$_c")" in
-    disabled*) log "host recents: $_c did not come back on; a reboot restores it" ;;
-  esac
-  return 0
-}
-probe_host_recents_off() {
-  _c=$(host_recents_component)
-  case "$_c" in
-    '') printf 'recents_screen\tthis phone does not name its recents screen\n' ;;
-    *)  printf 'recents_screen\t%s (%s)\n' "$_c" "$(component_setting "$_c")" ;;
-  esac
-}
-
 meta_cpu_offline_big() {
   echo "Processor|Switch off the big cores|Two of the eight processor cores are switched off completely. Saves the most, but the phone feels slower if something wakes it.|0|deep|experimental"
 }
@@ -2060,192 +1911,62 @@ restore_rom_bg_off() {
 }
 
 # ============================================================ Frame rate
-
-# The owner's question: "My device produce 60fps all the time, is it possible to
-# reduce that 60fps to 40fps because it will reduce some cpu/gpu load and 40fps
-# is smooth too. If possible then research properly and try to implement this to
-# our spsm."
 #
-# Researched, and the honest answer has two halves.
+# The owner asked for a lower frame rate while the mode is on, and then found the
+# lever that actually works on this phone, verified by him on the device:
 #
-#   * 40 is not a rate a 60 Hz panel can show. Android's own frame-rate
-#     throttling - the one this knob uses, and the only one the platform offers -
-#     holds an app to a rate that DIVIDES the display's refresh rate, and
-#     Google's own table for it lists exactly two values for a 60 Hz display: 60
-#     and 30. A 40 fps cap would leave every third frame late by a vsync; that is
-#     judder, not a smooth 40, and it saves nothing on the panel side because the
-#     panel still scans at 60 Hz.
-#   * The lever that does exist: the FPS-throttling intervention for Game Mode
-#     (Android 13+). `device_config game_overlay` carries a frame rate per game
-#     mode, GameManagerService hands it to SurfaceFlinger, and SurfaceFlinger
-#     holds the app's frames to it by skipping vsyncs. One value, read back, put
-#     back on the way out.
+#   su -c 'service call SurfaceFlinger 1035 i32 0 i64 0 f 30 f 30'   -> 30 fps
+#   su -c 'service call SurfaceFlinger 1035 i32 0 i64 0 f 60 f 60'   -> 60 fps (the phone's own default)
 #
-# The panel on this phone is 60 Hz and has no other mode, so 30 is the only lower
-# rate this can hold. Default off: it is a visible change to how the phone feels
-# and it is worth nothing on a ROM that ignores it - which is exactly what the
-# option's own Check, and the log line below, tell the truth about.
+# Transaction 1035 is SurfaceFlinger's own frame-rate override. It sits BELOW
+# everything else this knob tried before: not a panel mode, not a settings key,
+# not the ROM's Game Mode setting (which answers nothing here) - the compositor
+# itself is told the rate, and every app and every screen follows, this mode's
+# home included. It is a setter with no getter: there is nothing to read back and
+# nothing to snapshot, so what is journalled is the fact that WE set it, and the
+# exit always puts the phone's own 60 back with the owner's own restore command.
+#
+# 40 is still not a rate a 60 Hz panel can show - a rate must divide the refresh
+# for the frames to land evenly - and 30 is what the option has always said.
+# Default off: half the frame rate is visible, so it is only on when asked.
 FPS_VALUE=${FPS_VALUE:-30}
+FPS_RESTORE_VALUE=${FPS_RESTORE_VALUE:-60}
 
-# The phone's current Game Mode intervention, "null" when it has none, or empty
-# when the phone will not answer.
-game_overlay_now() {
-  has device_config || return 1
-  device_config get game_overlay 2>/dev/null | tr -d '\r' | head -1
-}
-
-# Which frame rates this phone's panel can actually show, from the display's own
-# account of itself. This is the fact the whole knob turns on: a frame rate the
-# panel cannot draw is not a frame rate, and the v3.6.2 device log shows this
-# ROM's Game Mode setting answering nothing at all - so the panel's own modes
-# are the only answer that can be trusted here.
-display_fps_modes() {
-  has dumpsys || return 1
-  dumpsys display 2>/dev/null | tr ',' '\n' \
-    | sed -n 's/.*[^a-zA-Z]fps=\([0-9][0-9.]*\).*/\1/p' | sort -u
-}
-
-# The Game Mode leg, on its own: write the cap and read it back. Silent on
-# purpose - the callers log what the outcome means in their own words.
-go_cap_apply() {
-  has device_config || return 1
-  _gwas=$(game_overlay_now)
-  [ -n "$_gwas" ] || return 1
-  device_config put game_overlay \
-    "mode=1,fps=$FPS_VALUE:mode=2,fps=$FPS_VALUE:mode=3,fps=$FPS_VALUE" >/dev/null 2>&1
-  case "$(game_overlay_now)" in
-    *"fps=$FPS_VALUE"*) return 0 ;;
-  esac
-  return 1
+sf_set_fps() { # sf_set_fps <rate>
+  has service || return 1
+  service call SurfaceFlinger 1035 i32 0 i64 0 f "$1" f "$1" >/dev/null 2>&1
 }
 
 meta_fps_cap() {
-  echo "Display|Cap the frame rate (30 fps)|Asks the phone to run its panel at 30 frames a second instead of 60 while the mode is on, and puts the phone's own value back on exit. 40 is not a rate a 60 Hz screen can show: a frame rate has to divide the panel's refresh, and the panel's own modes decide - Check lists them. A panel that offers 30 gets 30; a panel that offers 60 only gets told to the log as it is, because this ROM's Game Mode limit covers games only (and on this phone that setting answers nothing at all).|0|session|battery"
+  echo "Display|Cap the frame rate (30 fps)|Holds the whole screen - every app and this mode's home - to 30 frames a second while the mode is on, with the command verified on this phone (SurfaceFlinger's own frame-rate override), and puts the phone's own 60 back on exit. 40 is not a rate a 60 Hz screen can show: the rate has to divide the panel's refresh.|0|session|battery"
 }
-# What is recorded: the two refresh-rate keys the display follows, and the
-# phone's Game Mode intervention. "null" from settings means the key is absent -
-# readable, and restored by deleting; (MISSING) means unreadable, and untouched.
-snapshot_fps_cap() {
-  snap_kv "@system:peak_refresh_rate" "@system:min_refresh_rate"
-  printf 'game-overlay\t%s\n' "$(game_overlay_now 2>/dev/null || printf '(MISSING)')"
-}
+# Nothing on the phone reports this rate back, so the snapshot is the fact that
+# the knob is ours to undo, nothing more.
+snapshot_fps_cap() { printf 'sf-fps\tset\n'; }
 apply_fps_cap() {
-  _modes=$(display_fps_modes)
-  # One line, for the log: "30.0 60.0". The raw list has a newline per mode and
-  # a log line is one line.
-  _h=$(printf '%s' "$_modes" | tr '\n' ' ')
-  _h=${_h% }
-  if [ -z "$_modes" ]; then
-    log "fps: this phone would not say which frame rates its panel offers, so it is left alone"
+  if ! sf_set_fps "$FPS_VALUE"; then
+    log "fps: this phone has no service command, so the frame rate cannot be set"
     return 2
   fi
-  _can30=''
-  for _m in $_modes; do
-    case "$_m" in 30|30.*) _can30=1 ;; esac
-  done
-  if [ -z "$_can30" ]; then
-    # The panel has no 30 Hz mode, so a refresh-rate setting would be a no-op
-    # and calling it applied would be the lie this knob exists not to tell.
-    # What is left is the phone's own Game Mode limit - which covers games
-    # only, when it answers at all.
-    if go_cap_apply; then
-      log "fps: this panel offers only these frame rates: $_h - the screen itself stays at 60; games alone are capped to ${FPS_VALUE} by the phone's Game Mode setting"
-      return 0
-    fi
-    log "fps: this panel offers only these frame rates: $_h - and this ROM answers nothing about a game-mode cap, so the frame rate cannot be lowered"
-    return 2
-  fi
-  # The panel can show 30. The cap is the display's own refresh rate - the same
-  # two keys the system's own refresh-rate switch writes - and the exit puts
-  # the phone's own values back, or deletes them if the phone had none.
-  apply_kv "@system:peak_refresh_rate=$FPS_VALUE.0" "@system:min_refresh_rate=$FPS_VALUE.0"
-  _p=$(sget system peak_refresh_rate)
-  _n=$(sget system min_refresh_rate)
-  case "$_p$_n" in
-    *$FPS_VALUE.*) ;;
-    *) log "fps: the phone did not take the ${FPS_VALUE} Hz refresh rate, so the frame rate is unchanged"; return 2 ;;
-  esac
-  log "fps: the panel offers these frame rates: $_h - it is asked to run at ${FPS_VALUE} Hz while this mode is on"
-  # Games are capped by the phone's own setting too, when that setting answers.
-  # When it does not, the refresh rate above is the cap and this is silent.
-  go_cap_apply >/dev/null 2>&1 || true
+  log "fps: the whole screen is held to ${FPS_VALUE} frames a second while this mode is on (SurfaceFlinger, verified on this phone)"
   return 0
 }
 restore_fps_cap() { # <orig> <applied>
-  [ -f "$1" ] || return 0
-  # The Game Mode leg first, under the same only-ours rule as everything else.
-  _o=$(snap_file_val "$1" "game-overlay")
-  if [ -n "$_o" ] && [ "$_o" != "(MISSING)" ]; then
-    _a=$(snap_file_val "${2:-}" "game-overlay")
-    _cur=$(game_overlay_now 2>/dev/null)
-    if [ -n "$_a" ] && [ "$_cur" = "$_a" ]; then
-      if [ "$_o" = "null" ]; then
-        device_config delete game_overlay >/dev/null 2>&1
-        log "fps: the phone's game-mode frame-rate setting is deleted again (it had none)"
-      else
-        device_config put game_overlay "$_o" >/dev/null 2>&1
-        log "fps: the phone's game-mode frame-rate setting is back to what it was"
-      fi
-    else
-      log "keep fps_cap: the phone's game-mode frame-rate setting was changed since we set it"
-    fi
-  fi
-  # The refresh-rate keys, by the generic machinery: per target, only if the
-  # value is still the one we set, and a key the phone had none of is deleted
-  # rather than written.
-  log "fps: the panel's refresh-rate setting is being put back"
-  restore_kv "$1" "$2"
+  sf_set_fps "$FPS_RESTORE_VALUE" || return 1
+  log "fps: the screen's frame rate is put back to ${FPS_RESTORE_VALUE} (the phone's own default)"
+  return 0
 }
 probe_fps_cap() {
-  printf 'display_modes\t%s\n' "$(display_fps_modes 2>/dev/null | tr '\n' ' ')"
-  printf 'peak_refresh_rate\t%s\n' "$(sget system peak_refresh_rate 2>/dev/null)"
-  printf 'min_refresh_rate\t%s\n' "$(sget system min_refresh_rate 2>/dev/null)"
-  printf 'frame_rate_setting\t%s\n' "$(game_overlay_now 2>/dev/null || echo none)"
-  if has cmd && cmd game mode >/dev/null 2>&1; then
-    printf 'game_mode_service\tavailable\n'
-  else
-    printf 'game_mode_service\tnot available on this ROM\n'
-  fi
+  printf 'frame_rate\t%s while the mode is on, %s on exit (set by SurfaceFlinger command; the phone cannot read it back)\n' "$FPS_VALUE" "$FPS_RESTORE_VALUE"
 }
-# What a refused application means, in this knob's own words: the three ways it
-# refuses are three different facts.
+probe_fps_cap_verdict() {
+  printf 'works\tset by the owner-verified SurfaceFlinger command (%s fps); the phone cannot read it back, and the exit always puts %s back\n' "$FPS_VALUE" "$FPS_RESTORE_VALUE"
+}
 note_refused_fps_cap() {
-  _modes=$(display_fps_modes 2>/dev/null)
-  _h=$(printf '%s' "$_modes" | tr '\n' ' ')
-  _h=${_h% }
-  if [ -z "$_modes" ]; then
-    printf 'this phone would not say which frame rates its panel offers, so nothing was changed\n'
-    return
-  fi
-  for _m in $_modes; do
-    case "$_m" in 30|30.*)
-      printf 'the phone was asked for 30 Hz and did not take it, so the frame rate is as it was\n'
-      return ;;
-    esac
-  done
-  printf 'this panel offers only %s Hz and this ROM answers nothing about a game-mode cap, so nothing was changed\n' "$_h"
+  printf 'this phone has no service command, so the frame rate was not touched\n'
 }
-
 note_fps_cap() {
-  _modes=$(display_fps_modes 2>/dev/null)
-  _h=$(printf '%s' "$_modes" | tr '\n' ' ')
-  _h=${_h% }
-  if [ -z "$_modes" ]; then
-    printf 'this phone would not say which frame rates its panel offers, so nothing was changed\n'
-    return
-  fi
-  for _m in $_modes; do
-    case "$_m" in 30|30.*)
-      printf 'the panel is asked for 30 Hz (it offers: %s)\n' "$_h"
-      return ;;
-    esac
-  done
-  case "$(game_overlay_now 2>/dev/null)" in
-    *"fps=$FPS_VALUE"*)
-      printf 'this panel offers only %s Hz, so games alone are capped, by the Game Mode setting of the phone\n' "$_h" ;;
-    *)
-      printf 'this panel offers only %s Hz and this ROM answers nothing about a game-mode cap, so nothing was changed\n' "$_h" ;;
-  esac
+  printf "the screen is held to %s fps; the phone's own %s comes back on exit\n" "$FPS_VALUE" "$FPS_RESTORE_VALUE"
 }
 
 # ============================================================ registry
@@ -2286,7 +2007,6 @@ battery_saver
 mtk_low_power
 blur_off
 fps_cap
-host_recents_off
 statusbar_on
 "
 

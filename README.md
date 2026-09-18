@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.6.3**.
+Current module: **v3.6.4**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,38 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.6.4 — the clean reset
+
+**Every Recents watcher is gone.** Three rounds of watching — the launcher's
+recents animation on the event log, the touchscreen tap in the button's region,
+each proven correct in the test rig and each still failing on the phone — are
+deleted, not patched again. The daemon no longer reads the event log, nothing
+reads the touchscreen, the app no longer consumes the Recents key
+(`KEYCODE_APP_SWITCH` is explicitly left alone, as instructed). **The Recents
+button is the phone's own again**: it opens Quickstep's own recents, exactly as
+with the module off, and this mode touches nothing of that pipeline. SPSM's own
+recents list remains what it always was — one tap of Home away — and Clear all
+is unchanged.
+
+**The frame-rate cap uses the command verified on the phone.** The owner found
+and tested the lever that actually works on this device:
+
+```
+su -c 'service call SurfaceFlinger 1035 i32 0 i64 0 f 30 f 30'   # 30 fps
+su -c 'service call SurfaceFlinger 1035 i32 0 i64 0 f 60 f 60'   # 60, his default
+```
+
+That is SurfaceFlinger's own frame-rate override — below panel modes, below
+settings keys, below the ROM's Game Mode setting (which never answered here).
+The option now runs exactly that: the whole screen — every app and this mode's
+home — held to 30 while the mode is on, and the owner's 60 command on exit. It
+is a setter with no getter, so the log claims exactly what was set and what was
+restored and nothing more; the probe answers "works — set by the owner-verified
+command; the phone cannot read it back". The panel-modes path and the Game Mode
+path are deleted. 40 stays impossible (40 does not divide 60).
+
+Full harness after the reset: **517 checks, 0 failed.**
 
 ## What changed in 3.6.3 — the tap arrives, and the cap is honest
 

@@ -164,28 +164,14 @@ case "$CMD" in
     esac
     ;;
 
-  # The raw input stream: whatever the test put in touch_events, printed in the
-  # shape `getevent -lt` prints it, then the stream ends and the watcher stops.
-  #
-  # `getevent -p` is the device describing itself: a phone whose touchscreen
-  # counts in its own raw units says so in raw_axes, and then the touch stream
-  # has to be in those units as well - that is the whole point of the file.
-  getevent)
-    case "$1" in
-      -*p*|*-*i*)
-        # The print-info forms describe the device and EXIT - they never stream.
-        # Falling through here made the region probe sleep for hold_open's 30
-        # seconds and the watcher never reached its own stream.
-        [ -f "$S/raw_axes" ] && cat "$S/raw_axes"
-        exit 0 ;;
+  # The binder caller. The frame-rate cap speaks to SurfaceFlinger through it;
+  # the command is recorded by log_call like every other, so the test can assert
+  # the exact rate the module asked for.
+  service)
+    log_call "$@"
+    case "$1 $2" in
+      "call SurfaceFlinger") echo "Result: Parcel(00000000  '........')" ;;
     esac
-    cat "$S/touch_events" 2>/dev/null
-    # A real touchscreen stream never ends. hold_open is how a test says "keep
-    # this pipe open afterwards" - the v3.6.2 tap watcher looked alive and
-    # delivered nothing, because its awk buffered the taps waiting for exactly
-    # the end-of-file the phone never sends. A test that ends the stream cannot
-    # see that bug.
-    [ -f "$S/hold_open" ] && sleep 30
     ;;
 
   getprop)
