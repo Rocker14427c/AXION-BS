@@ -2578,6 +2578,18 @@ check "and a press during a transition waits instead of stacking a second one" $
 grep -q "btn_recents" "$REPO/app/res/layout/activity_home.xml" && \
   grep -q 'openRecents("home-button")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
 check "the SPSM launcher itself carries the recents icon" $?
+# In its place: beside the pencil, top-right - not floating in the middle.
+grep -q 'layout_marginEnd="58dp"' "$REPO/app/res/layout/activity_home.xml" && \
+  grep -q 'btn_recents' "$REPO/app/res/layout/activity_home.xml"
+check "and it sits next to the pencil" $?
+# The launcher icon is the mode's own: an adaptive icon (dark, green battery,
+# S) - the old white-and-yellow square PNG is gone.
+[ -f "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" ] && \
+  grep -q "adaptive-icon" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" && \
+  grep -q "ic_launcher_fg" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml"
+check "the launcher icon is a proper adaptive icon of its own" $?
+[ ! -e "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png" ]
+check "and the old white-and-yellow square is gone" $?
 if grep -q "btn_recents" "$REPO/app/res/layout/activity_setup.xml" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"; then
   bad "and the app carries no recents button (the user's launcher has its own)"
 else
@@ -2587,6 +2599,8 @@ fi
 # existence - a stale file must not read as "working" forever.
 grep -q "Applying" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
 check "the tile says working only while a transition really runs" $?
+grep -q "readStateOrNull" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "and a failed state read never repaints the tile" $?
 grep -q 'rm -f "\$PROGRESS"' "$REPO/module/scripts/engine.sh"
 check "and the engine takes the working sign down when the mode settles" $?
 grep -q 'state/progress' "$REPO/module/post-fs-data.sh"

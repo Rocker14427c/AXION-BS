@@ -1,24 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Quick Settings tile icon: a WIDE, FILLED battery with an S, drawn the
-     way system tiles are drawn - one flat shape on a transparent 24dp canvas,
-     which the system tints by state (white on the coloured circle while the
-     mode is on, plain while off, exactly like Wi-Fi and Bluetooth). The S is
-     part of the same path, so it is a true cut-out: it shows the tile's own
-     colour through the filled battery, which is how it reads as white on the
-     active tile. -->
+<!-- The Quick Settings tile icon: a WIDE battery with an S, at the battery-
+     saver tile's own proportions (about 2:1, like the ROM's own). One flat
+     shape set on a transparent canvas, the way system tiles draw: the system
+     tints it by state, so it colours while the mode is on and goes plain when
+     off, like Wi-Fi and Bluetooth. The S is painted dark so it reads on the
+     active tile's coloured circle and on the plain one alike. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
 
-    <!-- The battery, edge to edge, solid - body, rounded shoulders and
-         terminal - with the S cut out of the fill (fillType evenOdd). -->
+    <!-- The battery, edge to edge: body and terminal, solid. -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="
-            M3.0,6.6 L20.2,6.6 A1.5,1.5 0 0 1 21.7,8.1 L21.7,15.9 A1.5,1.5 0 0 1 20.2,17.4 L3.0,17.4 A1.5,1.5 0 0 1 1.5,15.9 L1.5,8.1 A1.5,1.5 0 0 1 3.0,6.6 Z
-            M22.3,10.1 L22.7,10.1 A0.9,0.9 0 0 1 23.6,11.0 L23.6,13.0 A0.9,0.9 0 0 1 22.7,13.9 L22.3,13.9 Z
-            M7.5,9.0 L15.5,9.0 L15.5,10.5 L9.5,10.5 L9.5,11.8 L15.5,11.8 L15.5,16.0 L7.5,16.0 L7.5,14.5 L13.5,14.5 L13.5,13.3 L7.5,13.3 Z" />
+        android:pathData="M2.8,7.0 H20.2 A1.6,1.6 0 0 1 21.8,8.6 V15.4 A1.6,1.6 0 0 1 20.2,17.0 H2.8 A1.6,1.6 0 0 1 1.2,15.4 V8.6 A1.6,1.6 0 0 1 2.8,7.0 Z
+            M22.3,9.4 H22.7 A0.9,0.9 0 0 1 23.6,10.3 V13.7 A0.9,0.9 0 0 1 22.7,14.6 H22.3 Z" />
+
+    <!-- The S: top bar, connector down the left, middle bar, connector down
+         the right, bottom bar. -->
+    <path
+        android:fillColor="#14181C"
+        android:pathData="M6,9.2 H16.6 V10.9 H7.7 V11.75 H16.6 V13.45 H6 Z
+            M14.9,13.45 H16.6 V14.3 H14.9 Z
+            M6,14.3 H16.6 V16.0 H6 Z" />
 </vector>

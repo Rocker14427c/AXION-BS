@@ -94,7 +94,6 @@ poked=0
 trap 'poked=1' USR1
 log "daemon start (pid $$)"
 
-daemon_exit() { return 0; }
 # TERM is how this loop is stopped when the mode is switched off, and a shell
 # that traps TERM carries on running unless the handler says otherwise - so this
 # one exits.

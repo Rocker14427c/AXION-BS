@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.2
-versionCode=60
+version=v3.7.3
+versionCode=61
 author=Axion SPSM
-description=v3.7.2 the exit at the installer's pace for real: the deep phase and the session phase revert together now (his own log showed a third of a 33s exit spent waiting for the deep phase to finish first), and the navigation overlay is the only ordered step left. The tile is fixed - a stale working sign from a crash can never stick again - and the battery icon is wide, filled, with the S cut out of the fill. The recents icon lives on the SPSM launcher itself, and the app carries none. RMX3430.
+description=v3.7.3 polish from the owner's report: the recents icon sits beside the pencil on this mode's home, the tile battery is the battery-saver shape (wide, 2:1) and its colour is the system's own tint, the launcher icon is a proper adaptive icon (dark, green battery, S), and a failed tile read can never repaint the mode as off. Full audit round: a dead watcher-cleanup function removed, sweep/monitor ordering asserted.

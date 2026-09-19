@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.2**.
+Current module: **v3.7.3**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,27 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.3 — polish, in the places pointed at
+
+* **The recents icon sits beside the pencil** on the SPSM launcher's home
+  (top-right), where it belongs.
+* **The tile battery is the battery-saver shape** — wide, 2:1, like the ROM's
+  own — and the active colour is the system's own tile tint, exactly as Wi-Fi
+  and Bluetooth are painted.
+* **A new launcher icon**: the white-square-with-yellow-battery PNG is gone;
+  the app is now an adaptive icon — near-black background, tall green battery
+  (the mode's own `#3DDC84`) with the S on it — mask-safe on every launcher,
+  with a themed (monochrome) layer for Android 13+.
+* **Audit round.** Removed the last dead relic of the watcher era (a no-op
+  `daemon_exit` whose name promised child-killing that stopped existing in
+  v3.6.4). Hardened the tile once more: a failed state read (slow `su`, busy
+  binder) now leaves the tile untouched instead of repainting an active mode
+  as off. Re-asserted by test the two orders that matter on the way in
+  (app-blocking before the memory sweep; home role before navigation).
+
+The owner's exit measured **16 s clean** on v3.7.2 — that code is untouched.
+Full harness: **539 checks, 0 failed.**
 
 ## What changed in 3.7.2 — the last wait is gone; the tile fixed
 

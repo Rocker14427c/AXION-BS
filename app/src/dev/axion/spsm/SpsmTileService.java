@@ -37,7 +37,8 @@ public class SpsmTileService extends TileService {
 
     private void refresh() {
         new Thread(() -> {
-            final State s = readState();
+            final State s = readStateOrNull();
+            if (s == null) return;
             main.post(() -> {
                 Tile t = getQsTile();
                 if (t != null) paint(t, s);
@@ -50,7 +51,7 @@ public class SpsmTileService extends TileService {
         boolean busy;
     }
 
-    private State readState() {
+    private State readStateOrNull() {
         State s = new State();
         // Busy is what the progress file SAYS, not whether it exists: the
         // engine writes "Applying…"/"Restoring…" while a transition runs and
@@ -60,7 +61,10 @@ public class SpsmTileService extends TileService {
         String out = Root.exec("[ -f " + Root.ACTIVE + " ] && echo on || echo off; "
                 + "p=" + Root.DIR + "/state/progress; "
                 + "case $(cat $p 2>/dev/null) in Applying*|Restoring*|Starting*) echo busy ;; esac", 10);
-        if (out == null) return s;
+        // A failed read says nothing about the mode. Returning nothing makes the
+        // callers leave the tile exactly as it is, instead of repainting a mode
+        // that is on as if it were off because su was slow once.
+        if (out == null) return null;
         if (out.contains("on")) s.on = true;
         if (out.contains("busy")) s.busy = true;
         return s;
@@ -75,7 +79,8 @@ public class SpsmTileService extends TileService {
 
     @Override
     public void onClick() {
-        final State s = readState();
+        final State s = readStateOrNull();
+        if (s == null) return;
         if (s.busy) {
             // A transition is already running: pressing again must not start a
             // second one on top of it. Say so, and keep watching until the
@@ -109,10 +114,12 @@ public class SpsmTileService extends TileService {
 
     private void watchTick(final int n) {
         main.postDelayed(() -> {
-            final State s = readState();
+            final State s = readStateOrNull();
             Tile t = getQsTile();
-            if (t != null) paint(t, s);
-            if (s.busy && n < 100) {
+            if (t != null && s != null) paint(t, s);
+            if (s != null && !s.busy) {
+                watching = false;
+            } else if (n < 100) {
                 watchTick(n + 1);
             } else {
                 watching = false;

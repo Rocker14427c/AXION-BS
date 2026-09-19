@@ -172,6 +172,38 @@ mkdir -p "$ROOT/module/app" "$ROOT/module/system/app/AxionSPSM"
 cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/app/AxionSPSM.apk"
 cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/system/app/AxionSPSM/AxionSPSM.apk"
 
+# ---------------------------------------------------------------- staged = built
+# A stale APK in the module tree is the one mistake this pipeline must never
+# make twice: an APK that predates the current resources installs, starts, and
+# then crashes the first time it opens a screen whose layout it does not carry.
+# So the STAGED file is read back and every resource file in app/res must be
+# in it - layouts, drawables, everything. One missing file fails the build.
+python3 - "$OUT/AxionSPSM.apk" "$APP/res" <<'PYGUARD'
+import os, sys, zipfile
+apk, res = sys.argv[1], sys.argv[2]
+z = zipfile.ZipFile(apk)
+names = set(z.namelist())
+missing = []
+for root, _dirs, files in os.walk(res):
+    # values/*.xml are COMPILED into resources.arsc - they correctly never
+    # appear as file entries. Everything else (layouts, drawables, mipmaps)
+    # must be in the APK by its own path.
+    if os.path.basename(root) == "values":
+        continue
+    for f in files:
+        p = os.path.join(root, f)
+        rel = os.path.relpath(p, res)
+        arc = "res/" + rel
+        if arc not in names:
+            missing.append(arc)
+if missing:
+    print("STALE APK: %d resource file(s) missing:" % len(missing), file=sys.stderr)
+    for m in missing:
+        print("  " + m, file=sys.stderr)
+    sys.exit(1)
+print("staged APK carries every resource (%d entries)" % len(names))
+PYGUARD
+
 # ------------------------------------------------------------ 7. assert version
 # Cheap insurance: the APK and module.prop must agree, or the phone shows one
 # version and the manager shows another.

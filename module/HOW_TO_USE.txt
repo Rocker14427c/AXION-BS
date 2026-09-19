@@ -23,32 +23,24 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.7.2)
-- THE EXIT, AT THE INSTALLER'S PACE - THE LAST WAIT IS GONE. Your own log
-  settled it: a 33s exit spent its first quarter just waiting for the deep
-  phase to finish before the session reverts even started. The two phases now
-  run TOGETHER - they are disjoint sets of values, each knob journalling only
-  itself - and the navigation overlay going back after the home role is now
-  the ONLY step that waits for another. Everything else is one parallel pool,
-  exactly what the installer's revert does when it rewrote your session in
-  8-10 seconds. The door runs the identical scripts, so it now runs at that
-  pace too.
-- THE TILE IS FIXED. What stuck it on "working": the working sign is a file
-  the engine writes during a transition - and a sign left over from a crash,
-  a power cut, or a reboot never came down, so the tile read "working"
-  forever and ignored every press. Now: the sign is taken down the moment the
-  mode settles, a boot clears any sign a crash left, and the tile reads what
-  the sign SAYS - only a real, running transition counts. A press during one
-  waits; the moment the phone is idle the tile is yours again.
-- THE ICON, REDRAWN AS YOU DESCRIBED: wide and filled, edge to edge, with the
-  S cut out of the fill - on the coloured tile the S shows white, and the
-  whole icon is tinted by the system exactly like Wi-Fi and Bluetooth.
-- RECENTS, IN ITS RIGHT PLACE. The button is OUT of the app - with the SPSM
-  home off you already have your launcher's recents. Instead, the RECENTS
-  ICON is now on the SPSM launcher's home screen itself, between the door and
-  the edit pencil: the one screen from which the phone's own recents cannot
-  be reached. One tap, the real task list, nothing watched to provide it.
-- The full test rig passes 535 checks, 0 failed.
+NEW IN THIS BUILD (v3.7.3)
+- SMALL THINGS, IN THE PLACES YOU POINTED AT. The recents icon now sits on
+  this mode's home right beside the pencil, top-right. The tile's battery is
+  the battery-saver shape - wide, twice as wide as tall, like the ROM's own -
+  and the colour you see while the mode is on is the system's own tile tint,
+  the same way Wi-Fi and Bluetooth are painted.
+- A NEW LAUNCHER ICON. The white square with the yellow battery is gone. The
+  app is now its own icon: a dark rounded square, a tall green battery - the
+  mode's own green - with the S on it, shaped by the phone into whatever
+  launcher mask you use, and it even follows the system's themed-icon setting.
+- ONE MORE TILE HARDENING, from the audit: if one state read ever fails (a
+  slow su, a busy second), the tile now leaves itself as it is instead of
+  repainting a mode that is ON as if it were off. You should never see the
+  tile lie.
+- The audit also removed the last dead line of the watcher era and re-asserted
+  the two orders that matter on the way in (blocking before the sweep, home
+  before navigation). The exit you measured at 16s is untouched.
+- The full test rig passes 539 checks, 0 failed.
 
 FROM v3.7.1
 - The tile arrived: a real switch (tap = enter/exit in place, long-press =
@@ -219,7 +211,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.2-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.3-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
