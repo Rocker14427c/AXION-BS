@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.1
-versionCode=59
+version=v3.7.2
+versionCode=60
 author=Axion SPSM
-description=v3.7.1 one speed for everything: the exit now reverts the deep phase side by side too and the apply runs the same way, so the door, the tile and the installer all revert at the installer's pace. The tile is "Super Battery Saver" - a proper system-style battery icon that colours with the state, work detached from the tile so it can never hang, a press during a transition waits. And this mode's recents has a button in the app, on any launcher. RMX3430.
+description=v3.7.2 the exit at the installer's pace for real: the deep phase and the session phase revert together now (his own log showed a third of a 33s exit spent waiting for the deep phase to finish first), and the navigation overlay is the only ordered step left. The tile is fixed - a stale working sign from a crash can never stick again - and the battery icon is wide, filled, with the S cut out of the fill. The recents icon lives on the SPSM launcher itself, and the app carries none. RMX3430.

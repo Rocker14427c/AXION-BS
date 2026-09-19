@@ -23,31 +23,37 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.7.1)
-- ONE SPEED FOR EVERYTHING. You measured three different times for the same
-  work: the installer's revert of a live session (~10s), the door (~40s), and
-  a tile apply (~1min). The difference was never the work - it was which steps
-  ran one after another. Now EVERYTHING runs the way the installer does: the
-  deep phase (the two slow per-app reverts) reverts side by side, and the
-  apply runs side by side too. The door, the tile and the installer all run
-  the very same scripts at the very same speed now. The ordered pair -
-  navigation before home on the way out, home before navigation on the way in
-  - is still ordered.
-- THE TILE IS FIXED AND RENAMED. It is "Super Battery Saver" now, with a
-  proper system-style icon: a flat battery with an S, drawn the way the
-  system's own tiles are drawn - so the system tints it itself: coloured
-  while the mode is on, plain while off, exactly like Wi-Fi and Bluetooth.
-- THE TILE CAN NEVER HANG AGAIN. The work is handed to root DETACHED from the
-  tile: even if the system unbinds the tile mid-transition, the scripts
-  finish, and the exit always completes. A press while a transition is
-  running does not stack a second one - the tile keeps watching and shows the
-  state the moment the phone is idle.
-- RECENTS FROM ANY LAUNCHER. With the SPSM home off you are on your own
-  launcher - so the app itself now carries this mode's recents: open Super
-  Power Saving from the drawer, press "Recents". One tap in the drawer, one
-  tap on the button. The list is the same real task list, and nothing in the
-  background watches anything to make it work.
-- The full test rig passes 531 checks, 0 failed.
+NEW IN THIS BUILD (v3.7.2)
+- THE EXIT, AT THE INSTALLER'S PACE - THE LAST WAIT IS GONE. Your own log
+  settled it: a 33s exit spent its first quarter just waiting for the deep
+  phase to finish before the session reverts even started. The two phases now
+  run TOGETHER - they are disjoint sets of values, each knob journalling only
+  itself - and the navigation overlay going back after the home role is now
+  the ONLY step that waits for another. Everything else is one parallel pool,
+  exactly what the installer's revert does when it rewrote your session in
+  8-10 seconds. The door runs the identical scripts, so it now runs at that
+  pace too.
+- THE TILE IS FIXED. What stuck it on "working": the working sign is a file
+  the engine writes during a transition - and a sign left over from a crash,
+  a power cut, or a reboot never came down, so the tile read "working"
+  forever and ignored every press. Now: the sign is taken down the moment the
+  mode settles, a boot clears any sign a crash left, and the tile reads what
+  the sign SAYS - only a real, running transition counts. A press during one
+  waits; the moment the phone is idle the tile is yours again.
+- THE ICON, REDRAWN AS YOU DESCRIBED: wide and filled, edge to edge, with the
+  S cut out of the fill - on the coloured tile the S shows white, and the
+  whole icon is tinted by the system exactly like Wi-Fi and Bluetooth.
+- RECENTS, IN ITS RIGHT PLACE. The button is OUT of the app - with the SPSM
+  home off you already have your launcher's recents. Instead, the RECENTS
+  ICON is now on the SPSM launcher's home screen itself, between the door and
+  the edit pencil: the one screen from which the phone's own recents cannot
+  be reached. One tap, the real task list, nothing watched to provide it.
+- The full test rig passes 535 checks, 0 failed.
+
+FROM v3.7.1
+- The tile arrived: a real switch (tap = enter/exit in place, long-press =
+  Options), named Super Battery Saver, with the work detached from the tile
+  so a transition always finishes even if the system unbinds the tile.
 
 FROM v3.6.5
 - The frame-rate cap used the command you verified, with the phone's frame-rate
@@ -213,7 +219,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.2-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

@@ -52,8 +52,14 @@ public class SpsmTileService extends TileService {
 
     private State readState() {
         State s = new State();
+        // Busy is what the progress file SAYS, not whether it exists: the
+        // engine writes "Applying…"/"Restoring…" while a transition runs and
+        // removes the file when the mode settles, and a boot clears it. A file
+        // that merely exists must never read as "working" - that is exactly
+        // the stuck tile this round is deleting.
         String out = Root.exec("[ -f " + Root.ACTIVE + " ] && echo on || echo off; "
-                + "[ -f " + Root.DIR + "/state/progress ] && echo busy", 10);
+                + "p=" + Root.DIR + "/state/progress; "
+                + "case $(cat $p 2>/dev/null) in Applying*|Restoring*|Starting*) echo busy ;; esac", 10);
         if (out == null) return s;
         if (out.contains("on")) s.on = true;
         if (out.contains("busy")) s.busy = true;

@@ -209,15 +209,15 @@ phase_session() { # apply|revert
 # side-by-side reverts cannot read each other's readings) - and the two knobs
 # that DO have an order stay ordered: the navigation overlay goes back before
 # the home role, or the phone spends the last seconds of the exit with no home.
-# Wall time on the owner's phone: the slowest knob, plus that ordered tail -
-# about what the installer's revert took, which is the point.
+# Wall time on the owner's phone: the slowest knob, plus the one ordered tail
+# (navigation) - about what the installer's revert took, which is the point.
 phase_session_revert() { # <knob list, deep already excluded>
   _list="$@"
   _tail=''
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
     case $_k in
-      nav_buttons|home_swap) _tail="$_tail $_k" ; continue ;;
+      nav_buttons) _tail="$_tail $_k" ; continue ;;
     esac
     ( KRV_TAG=$_k
       _kt0=$(date +%s)
@@ -300,6 +300,7 @@ do_activate() {
     fi
     start_daemon
     progress "On"
+  rm -f "$PROGRESS"
     lock_release
     return 0
   fi
@@ -335,6 +336,7 @@ do_activate() {
   start_daemon
   tmp_sweep
   progress "On"
+  rm -f "$PROGRESS"
   log "SPSM ON: $(applied_count) knobs applied in $(( $(date +%s) - _on_t0 ))s"
   lock_release
   return 0
@@ -389,9 +391,17 @@ do_deactivate() {
   # first. The call is idempotent, so the session pass that follows is a no-op.
   knob_revert mtk_low_power
 
-  # Deep phase first (it holds the system-wide switches), then the session.
-  phase_deep_revert
+  # The deep phase and the session phase run TOGETHER now. They are disjoint
+  # sets of values, each knob journalling only itself, so nothing can collide -
+  # and the owner's own log shows why this matters: his 33-second exit spent a
+  # quarter of it waiting for the deep phase to finish before the session even
+  # started, which is waiting the installer never does. The one knob with an
+  # order keeps it: nav_buttons comes back strictly after home_swap has handed
+  # the home role back, so it is the session's own tail.
+  phase_deep_revert &
+  _DPID=$!
   phase_session revert
+  wait "$_DPID"
 
   # Which safety net is right depends on whether anything was actually left
   # behind - not on whether a journal exists. A session where every knob was
@@ -420,9 +430,11 @@ do_deactivate() {
   if [ "${DRIFT:-0}" = "0" ]; then
     log "revert clean in ${_took}s: every change returned to its original value"
     progress "Off"
+  rm -f "$PROGRESS"
   else
     log "revert finished in ${_took}s with $DRIFT drifted knob(s) - see journal"
     progress "Off ($DRIFT kept)"
+  rm -f "$PROGRESS"
   fi
 
   # The owner's third report, and the last thing the exit does: the launcher's

@@ -2572,9 +2572,25 @@ grep -q "s.busy" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
 check "and a press during a transition waits instead of stacking a second one" $?
 # The recents list is reachable from the app itself, on any launcher - with the
 # SPSM home off, the drawer and this button are the way in.
-grep -q "btn_recents" "$REPO/app/res/layout/activity_setup.xml" && \
-  grep -q "SpsmRecentsActivity" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"
-check "the app itself carries the recents button, on any launcher" $?
+# The Recents entry lives on the SPSM launcher itself - the one place the
+# phone's own recents cannot be reached - and NOT in the app: with the SPSM
+# home off, the user already has their launcher's own recents.
+grep -q "btn_recents" "$REPO/app/res/layout/activity_home.xml" && \
+  grep -q 'openRecents("home-button")' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java"
+check "the SPSM launcher itself carries the recents icon" $?
+if grep -q "btn_recents" "$REPO/app/res/layout/activity_setup.xml" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"; then
+  bad "and the app carries no recents button (the user's launcher has its own)"
+else
+  ok "and the app carries no recents button (the user's launcher has its own)"
+fi
+# The tile reads busy from what the progress file SAYS, never from its
+# existence - a stale file must not read as "working" forever.
+grep -q "Applying" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "the tile says working only while a transition really runs" $?
+grep -q 'rm -f "\$PROGRESS"' "$REPO/module/scripts/engine.sh"
+check "and the engine takes the working sign down when the mode settles" $?
+grep -q 'state/progress' "$REPO/module/post-fs-data.sh"
+check "and a boot clears any sign left by a crash" $?
 grep -q 'engine.sh recents-opened' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'recents-opened)' "$REPO/module/scripts/engine.sh"
 check "and every open of the list is noted in the log, with what opened it" $?
@@ -2696,8 +2712,14 @@ for id in btn_exit btn_edit; do
   grep -q "R.id.$id" "$ACT" || bad "$id is bound in the home screen's code"
 done
 ok "Exit and Edit are on the screen and bound in code"
-if grep -q '@+id/btn_recents' "$HOME"; then bad "the recents button is gone"; else ok "the recents button is gone"; fi
-if grep -q 'R.id.btn_recents' "$ACT"; then bad "and nothing binds it"; else ok "and nothing binds it"; fi
+# The owner, later: the Recents ICON belongs on this launcher - it is the one
+# screen from which the phone's own recents cannot be reached. So the icon is
+# back on the home screen, wired to the real list, while the APP carries none
+# (his own launcher already has recents when the SPSM home is off).
+grep -q '@+id/btn_recents' "$HOME" && grep -q '@drawable/ic_recents' "$HOME"
+check "the home screen carries the recents icon" $?
+grep -q 'R.id.btn_recents' "$ACT" && grep -q 'openRecents("home-button")' "$ACT"
+check "and it opens this mode's list" $?
 grep -q "R.drawable.ic_edit" "$ACT" && grep -q "R.drawable.ic_check" "$ACT"
 check "the pencil turns into a tick while the slots are being edited" $?
 grep -q 'Prefs.setSlot(SpsmHomeActivity.this, idx, "")' "$ACT"

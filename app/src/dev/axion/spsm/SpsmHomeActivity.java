@@ -56,6 +56,14 @@ public class SpsmHomeActivity extends Activity {
         styleSystemBars();
         remaining = findViewById(R.id.remaining);
         View exit = findViewById(R.id.btn_exit);
+        // The Recents entry, on the home screen itself: with this launcher in
+        // front the phone's own recents belongs to another launcher, so this
+        // icon is where the task list is reached from. One tap, real tasks,
+        // nothing watched to provide it.
+        View recentsBtn = findViewById(R.id.btn_recents);
+        if (recentsBtn != null) {
+            recentsBtn.setOnClickListener(v -> openRecents("home-button"));
+        }
         if (exit != null) exit.setOnClickListener(v -> confirmExit());
         // Recents is a button now, not a gesture. The owner's report on v3.5.1
         // was that the swipe still did not work properly, and his log says why:

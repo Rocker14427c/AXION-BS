@@ -14,6 +14,12 @@ SPSM_DIR=${SPSM_DIR:-/data/adb/spsm}
 
 [ -d "$SPSM_DIR" ] || exit 0
 
+# A progress file is only valid while a transition is actually running. One
+# left over from a crash or a power cut would tell the Quick Settings tile
+# "working" forever, so it does not survive a boot.
+rm -f "$SPSM_DIR/state/progress" 2>/dev/null
+
+
 # shellcheck source=/dev/null
 . "$SPSM_DIR/scripts/lib.sh" 2>/dev/null || . "$MODDIR/scripts/lib.sh" 2>/dev/null || exit 0
 
