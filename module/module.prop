@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.6.5
-versionCode=57
+version=v3.7.0
+versionCode=58
 author=Axion SPSM
-description=v3.6.5 the frame-rate cap armed properly: the module's own system.prop turns the phone's frame-rate override on at boot - before the compositor starts - so the owner-verified 30 fps command (SurfaceFlinger 1035) can never crash it, and the option refuses honestly until that first reboot. The Recents button stays the phone's own. RMX3430.
+description=v3.7.0 the mode is usable from anywhere: the Quick Settings tile really toggles (tap enters or exits - the app never opens; long-press opens Options), the exit runs its reverts side by side so it is as fast as the installer's own revert, and the status bar is simply kept visible - the switch is gone. The Recents button stays the phone's own; this mode's list is one Home tap away, with its button on the home screen. RMX3430.

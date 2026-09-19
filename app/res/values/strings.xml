@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Super Power Saving</string>
-    <string name="tile_label">Super saving</string>
+    <string name="tile_label">Super power saving mode</string>
+    <string name="tile_busy">working…</string>
     <string name="setup_title">Super power saving mode</string>
     <string name="setup_desc">Runs the phone in a power-saving mode: a dark home screen with six apps, background limits while the screen is off, and every change put back when you switch it off.</string>
     <string name="enter">Turn on</string>

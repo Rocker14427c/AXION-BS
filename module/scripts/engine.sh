@@ -162,6 +162,10 @@ knobs_reversed() {
 phase_session() { # apply|revert
   _mode=$1
   [ "$_mode" = revert ] && _list=$(knobs_reversed) || _list=$(knobs_all)
+  if [ "$_mode" = revert ]; then
+    phase_session_revert "$_list"
+    return 0
+  fi
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
     _kt0=$(date +%s)
@@ -169,8 +173,6 @@ phase_session() { # apply|revert
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
       progress "Applying: $(knob_meta "$_k" | cut -d'|' -f2)"
       knob_apply "$_k"
-    else
-      knob_revert "$_k"
     fi
     _d=$(( $(date +%s) - _kt0 ))
     # A step that takes more than a couple of seconds is worth naming: this
@@ -179,6 +181,44 @@ phase_session() { # apply|revert
     # say which step is spending them. (v3.3.1's exit took 45s and nothing in the
     # log said where.)
     [ "$_d" -ge 2 ] && log "  slow: $_mode $_k took ${_d}s"
+  done
+}
+
+# The exit, side by side.
+#
+# The owner measured the module's own installer revert against this mode's exit
+# on the same phone and the same session: about 20s against about 60s - for the
+# same work. The difference was not the work, it was the waiting: this phone
+# spends most of a second on every settings/pm call while it is busy, the exit
+# asked its questions one knob at a time, and the knobs do not touch each
+# other's values. So the reverts now run together - each in its own subshell,
+# each journalling only its own knob (the scratch files are tagged per knob, so
+# side-by-side reverts cannot read each other's readings) - and the two knobs
+# that DO have an order stay ordered: the navigation overlay goes back before
+# the home role, or the phone spends the last seconds of the exit with no home.
+# Wall time on the owner's phone: the slowest knob, plus that ordered tail -
+# about what the installer's revert took, which is the point.
+phase_session_revert() { # <knob list, deep already excluded>
+  _list="$@"
+  _tail=''
+  for _k in $_list; do
+    [ "$(knob_scope "$_k")" = "deep" ] && continue
+    case $_k in
+      nav_buttons|home_swap) _tail="$_tail $_k" ; continue ;;
+    esac
+    ( KRV_TAG=$_k
+      _kt0=$(date +%s)
+      knob_revert "$_k"
+      _d=$(( $(date +%s) - _kt0 ))
+      [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
+    ) &
+  done
+  wait
+  for _k in $_tail; do
+    _kt0=$(date +%s)
+    knob_revert "$_k"
+    _d=$(( $(date +%s) - _kt0 ))
+    [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
   done
 }
 
@@ -575,6 +615,10 @@ do_status() {
 do_dump_knobs() {
   : > "$KNOBS_LIST"
   for _k in $(knobs_all); do
+    # Not every knob is a choice. The status bar is kept visible because the
+    # mode is on, not because anyone asked for it this time, so it is not
+    # offered - and its switch no longer exists to be found here.
+    case $_k in statusbar_on) continue ;; esac
     echo "$_k|$(knob_meta "$_k")" >> "$KNOBS_LIST"
   done
   echo "wrote $KNOBS_LIST"

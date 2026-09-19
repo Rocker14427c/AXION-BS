@@ -102,7 +102,7 @@ kv_read_many() { # kv_read_many <dir> <target>...
 kv_result() { cat "$1/$$.$2" 2>/dev/null; }
 
 snap_kv() {
-  _d=$SPSM_DIR/.tmp
+  _d=$SPSM_DIR/.tmp/s${KRV_TAG:-main}
   _n=0
   _list=''
   for _t in "$@"; do
@@ -162,7 +162,11 @@ restore_kv() {
   # at once (see kv_read_many - the comparison reads are half of a revert's
   # cost). Records with nothing to read are skipped here and below, and the
   # result index counts only the records that were actually read.
-  _ds=$SPSM_DIR/.tmp
+  # The scratch dir is per-invocation: reverts run side by side now (see the
+# exit), and every one of them used to share .tmp with files named by $$ - the
+# same pid in every subshell, so two knobs reverting at once read each other's
+# values. The tag comes from the parallel runner; serial callers share "main".
+  _ds=$SPSM_DIR/.tmp/w${KRV_TAG:-main}
   _idx=0
   _list=''
   while IFS=$TAB read -r _t _v || [ -n "$_t" ]; do
@@ -1007,8 +1011,29 @@ probe_blur_off() { printf 'blurs_disabled\t%s\n' "$(sget global disable_window_b
 meta_statusbar_on() {
   echo "Display|Keep the status bar visible|Some ROMs hide the status bar with an immersive-mode rule (policy_control). This clears that rule while the mode is on and puts it back on exit, so the clock, the battery and the way back stay where they belong.|1|session|core"
 }
+# The switch is gone. The owner removed the option: the status bar is simply
+# kept visible the whole time the mode is on - the clock, the battery and the
+# way back are part of a usable phone, not a preference. knob_enabled is
+# redefined after lib.sh, so even a stored "off" from the old option cannot
+# turn it off; the option no longer appears in the app's list (see dump-knobs).
+knob_enabled() { # knob_enabled id default
+  case "$1" in statusbar_on) return 0 ;; esac
+  _v=$(cfg "knob.$1" "$2")
+  case "$_v" in 1|true|on|yes) return 0 ;; *) return 1 ;; esac
+}
 snapshot_statusbar_on() { snap_kv @global:policy_control; }
-apply_statusbar_on() { apply_kv "@global:policy_control=null"; }
+apply_statusbar_on() {
+  # Nothing to clear is not a change: a phone that hides no bar with a policy
+  # rule gets no write at all - and the exit then has nothing of ours to undo,
+  # so a session that changed nothing also restarts nothing.
+  case "$(sget global policy_control)" in
+    ''|null) return 2 ;;
+  esac
+  apply_kv "@global:policy_control=null"
+}
+note_refused_statusbar_on() {
+  printf "this ROM hides no bar with a policy rule, so there was nothing to clear\n"
+}
 restore_statusbar_on() { restore_kv "$1" "$2"; }
 probe_statusbar_on() {
   _v=$(sget global policy_control 2>/dev/null)
@@ -1117,7 +1142,7 @@ apply_app_restrict() {
   # as before.
   _d=$SPSM_DIR/.tmp
   mkdir -p "$_d" 2>/dev/null
-  _r="$_d/restrict.$$"
+  _r="$_d/restrict.$$_${KRV_TAG:-main}"
   : > "$_r"
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   managed_packages > "$_d/restrict.pkgs.$$" 2>/dev/null
@@ -1334,10 +1359,11 @@ meta_block_other_apps() {
 # them all suspended on exit.)
 snapshot_block_other_apps() {
   _susp=''
-  if suspended_packages > "$SPSM_DIR/.tmp/susp.$$" 2>/dev/null; then
-    _susp=" $(tr '\n' ' ' < "$SPSM_DIR/.tmp/susp.$$") "
+  _suspf="$SPSM_DIR/.tmp/susp.$$_${KRV_TAG:-main}"
+  if suspended_packages > "$_suspf" 2>/dev/null; then
+    _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
-  rm -f "$SPSM_DIR/.tmp/susp.$$"
+  rm -f "$_suspf"
   blockable_packages | while read -r _p; do
     [ -n "$_p" ] || continue
     _s=0
@@ -1373,10 +1399,11 @@ apply_block_other_apps() {
   : > "$_r"
   # Who is already suspended, read once above rather than asked once per app.
   _susp=''
-  if suspended_packages > "$_d/susp.$$" 2>/dev/null; then
-    _susp=" $(tr '\n' ' ' < "$_d/susp.$$") "
+  _suspf="$_d/susp.$$_${KRV_TAG:-main}"
+  if suspended_packages > "$_suspf" 2>/dev/null; then
+    _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
-  rm -f "$_d/susp.$$"
+  rm -f "$_suspf"
   for _p in $(blockable_packages); do
     [ -n "$_p" ] || continue
     (
@@ -1408,10 +1435,11 @@ restore_block_other_apps() {
   # single slowest step of the exit (18 seconds in the v3.6.1 log) because every
   # app was asked about separately.
   _susp=''
-  if suspended_packages > "$SPSM_DIR/.tmp/susp.$$" 2>/dev/null; then
-    _susp=" $(tr '\n' ' ' < "$SPSM_DIR/.tmp/susp.$$") "
+  _suspf="$SPSM_DIR/.tmp/susp.$$_${KRV_TAG:-main}"
+  if suspended_packages > "$_suspf" 2>/dev/null; then
+    _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
-  rm -f "$SPSM_DIR/.tmp/susp.$$"
+  rm -f "$_suspf"
   # Together, like the apply: releasing a dozen apps one at a time is most of a
   # slow exit.
   while read -r _p; do

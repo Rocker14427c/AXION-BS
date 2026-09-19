@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.6.5**.
+Current module: **v3.7.0**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,38 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.0 — usable from anywhere, and an exit that keeps up
+
+**The Quick Settings tile is a real switch.** Tapping it now enters or leaves
+the mode in place — the tile runs the same journalled scripts the app's door
+does, and the app never opens (the old tile opened Setup on every press and
+never showed its state). The tile is coloured while the mode is on and plain
+while it is off, read from the phone's own marker so it cannot disagree with
+the log. **Long-press opens the Options screen**, via the system's own
+`QS_TILE_PREFERENCES` hook.
+
+**The mode works without its home screen.** With the home-screen switch off the
+user keeps their own launcher, and everything is reachable from anywhere: the
+tile, and the app from the drawer (six slots, Options, the exit door). Nothing
+in the mode requires the SPSM home.
+
+**The exit runs its reverts side by side.** The owner measured the installer's
+revert of a live session at ~20 s against the door's ~60 s for the same work —
+the difference was the phone answering one settings call at a time while the
+exit asked in single file. Independent reverts now run together (each in its
+own subshell, scratch files tagged per knob); the two ordered reverts — the
+navigation overlay before the home role — keep their order. The exit's
+honesty is untouched: same journal, same only-ours rule, same
+"revert clean in Ns".
+
+**The status-bar switch is gone.** The bar is kept visible the whole time the
+mode is on; the option no longer appears in the list, and even a stored "off"
+from an older build cannot hide it.
+
+The Recents button remains the phone's own (zero watchers, zero listeners);
+this mode's recents list stays one tap of the Recents button on the mode's home
+screen. Full harness: **526 checks, 0 failed.**
 
 ## What changed in 3.6.5 — the cap, armed properly
 

@@ -2539,6 +2539,21 @@ if grep -q "KEYCODE_APP_SWITCH" "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.j
 else
   ok "the app intercepts no APP_SWITCH key - Quickstep's pipeline is untouched"
 fi
+# The Quick Settings tile is a real toggle now: tap switches the mode on or
+# off in place - it never opens the app - and long-press opens the options.
+grep -q "Root.enter()" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java" && \
+  grep -q "Root.exit()" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "the tile toggles the mode itself, with the same scripts as the door" $?
+if grep -q "startActivityAndCollapse" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"; then
+  bad "tapping the tile opens no activity"
+else
+  ok "tapping the tile opens no activity"
+fi
+grep -q "android.service.quicksettings.action.QS_TILE_PREFERENCES" "$REPO/app/AndroidManifest.xml" && \
+  grep -q ".KnobsActivity" "$REPO/app/AndroidManifest.xml"
+check "and long-pressing the tile opens this mode's options" $?
+grep -q ">Super power saving mode<" "$REPO/app/res/values/strings.xml"
+check "and the tile says the mode's whole name" $?
 grep -q 'engine.sh recents-opened' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'recents-opened)' "$REPO/module/scripts/engine.sh"
 check "and every open of the list is noted in the log, with what opened it" $?
@@ -2566,10 +2581,17 @@ grep -q '@+id/btn_clear_all' "$REPO/app/res/layout/activity_recents.xml" && \
   grep -q 'engine.sh clear-all' "$REPO/app/src/dev/axion/spsm/SpsmRecentsActivity.java"
 check "the recents screen has a Clear all button, and it runs the real thing" $?
 
-# A ROM that really has an immersive rule: it is cleared while the mode is on,
-# and put back exactly as it was on the way out.
+# The switch is gone. The option is not offered in the app's list, and even a
+# stored "off" from the old build cannot turn the behaviour off: the status bar
+# is kept visible because the mode is on.
+run_engine dump-knobs >/dev/null 2>&1
+if grep -q "^statusbar_on|" "$WORK/spsm/knobs.list" 2>/dev/null; then
+  bad "the option list no longer offers the status bar switch"
+else
+  ok "the option list no longer offers the status bar switch"
+fi
 make_tree; make_stubs; seed_stub_state
-enable_knobs statusbar_on
+echo "knob.statusbar_on=0" >> "$WORK/spsm/config"
 printf '%s' 'immersive.full=*' > "$WORK/stub/settings/global.policy_control"
 screen_on
 run_engine activate >/dev/null 2>&1
@@ -2584,12 +2606,11 @@ check "with nothing left behind ($(cat "$WORK/out.v65"))" $?
 
 # A phone with no such rule: nothing is invented, and nothing is written.
 make_tree; make_stubs; seed_stub_state
-enable_knobs statusbar_on
 screen_on
 run_engine activate >/dev/null 2>&1
 [ ! -e "$WORK/stub/settings/global.policy_control" ]
 check "a phone with no immersive rule is not given one" $?
-grep -q "note statusbar_on: this ROM sets no policy_control" "$WORK/spsm/spsm.log"
+grep -q "note statusbar_on: this ROM hides no bar with a policy rule" "$WORK/spsm/spsm.log"
 check "and the log says plainly that there was nothing to clear" $?
 run_engine deactivate > "$WORK/out.d65" 2>&1
 grep -q "revert clean" "$WORK/spsm/spsm.log"
@@ -2872,6 +2893,15 @@ check "and the log says which app was restarted and why (got ${n:-0} line(s))" $
 # with nothing on screen.
 grep -q "^am start -a android.intent.action.MAIN -c android.intent.category.HOME$" "$WORK/stub/calls"
 check "and it is put back on screen straight away" $?
+# The reverts run side by side now - the owner measured this exit at about
+# three times the module installer's own revert for the same work, because the
+# phone answers one question at a time and the exit used to ask in single
+# file - but the two knobs that have an order keep it: the navigation overlay
+# goes back before the home role is handed over, never the other way round.
+_n=$(grep -n "the phone's own navigation is back" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
+_h=$(grep -n "launcher refreshed" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
+[ -n "$_n" ] && [ -n "$_h" ] && [ "$_n" -lt "$_h" ]
+check "and the ordered reverts kept their order on the way out" $?
 
 # An exit with every option switched off changed nothing, so there is nothing for
 # the launcher to rebuild and no reason to restart somebody's home screen.
