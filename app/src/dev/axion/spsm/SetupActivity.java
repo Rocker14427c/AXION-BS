@@ -45,6 +45,17 @@ public class SetupActivity extends Activity {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
         });
+        // This mode's recents, from the app: with the SPSM home switched off the
+        // phone shows the user's own launcher, and this button is the way to the
+        // task list from any launcher at all - one tap in the drawer, one tap
+        // here. The list reads the phone's real tasks; nothing is watched.
+        findViewById(R.id.btn_recents).setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(this, SpsmRecentsActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Throwable ignored) {
+            }
+        });
         if (getIntent() != null && getIntent().getBooleanExtra("toggle", false)) {
             getIntent().removeExtra("toggle");
             onToggle();

@@ -67,6 +67,17 @@
             android:textSize="16sp" />
 
         <Button
+            android:id="@+id/btn_recents"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_button_off"
+            android:text="@string/recents_button"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            android:textSize="15sp" />
+
+        <Button
             android:id="@+id/btn_options"
             android:layout_width="match_parent"
             android:layout_height="48dp"

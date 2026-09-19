@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.0**.
+Current module: **v3.7.1**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -682,6 +682,38 @@ package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
 
+## What changed in 3.7.1 — one speed for everything
+
+**The exit now reverts the deep phase side by side, and the apply runs the same
+way.** The owner measured three different times for the identical work: the
+installer's revert of a live session (~10 s), the app's door (~40 s), a tile
+apply (~1 min). The work was the same; what differed was which steps still ran
+in single file. The deep phase — holding the two slowest reverts on the phone,
+the per-app background work — reverts side by side now, and the session apply
+does too. Every path (door, tile, installer) runs the same scripts at the same
+pace; the ordered pair stays ordered (navigation before home out, home before
+navigation in).
+
+**The tile is "Super Battery Saver"** with a system-style icon: one flat,
+monochrome battery-with-an-S at 24dp — the shape of icon system tiles use, so
+the system tints it by state and it colours when the mode is on and goes plain
+when off, exactly like Wi-Fi and Bluetooth.
+
+**The tile cannot hang again.** The transition is handed to root *detached*
+(`nohup`): the tile service can be unbound at any moment without touching the
+work, the scripts always finish, a press during a running transition waits
+instead of stacking a second one, and the tile repaints from the phone's own
+state every couple of seconds until the phone is idle. (The old tile ran the
+transition inside the tile service with an unbounded read — the "working…"
+that never ended.)
+
+**Recents from any launcher.** With the SPSM home off, the app itself now
+carries the recents button — open Super Power Saving from any launcher's
+drawer, press Recents. Same real task list; still nothing watched in the
+background.
+
+Full harness: **531 checks, 0 failed.**
+
 ## What changed in 3.7.0 — usable from anywhere, and an exit that keeps up
 
 **The Quick Settings tile is a real switch.** Tapping it now enters or leaves
@@ -712,7 +744,7 @@ from an older build cannot hide it.
 
 The Recents button remains the phone's own (zero watchers, zero listeners);
 this mode's recents list stays one tap of the Recents button on the mode's home
-screen. Full harness: **526 checks, 0 failed.**
+screen. Full harness: **531 checks, 0 failed.**
 
 ## What changed in 3.6.5 — the cap, armed properly
 

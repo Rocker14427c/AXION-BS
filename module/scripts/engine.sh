@@ -166,21 +166,34 @@ phase_session() { # apply|revert
     phase_session_revert "$_list"
     return 0
   fi
+  # The apply, side by side - the owner waited a minute for what the phone can
+  # answer in a fifth of the time when the questions go out together. Four knobs
+  # keep an order, going in: the background sweep runs after the app blocking
+  # (it hands back the memory of exactly the apps that pass just made - the
+  # owner's phone showed the first sweep silently empty when the two ran
+  # together), then the home role, then the navigation mode (the phone is put
+  # on three buttons only once the mode's home is there to receive it).
+  progress "Applying"
+  _tail=''
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
-    _kt0=$(date +%s)
-    if [ "$_mode" = apply ]; then
-      knob_enabled "$_k" "$(knob_default "$_k")" || continue
-      progress "Applying: $(knob_meta "$_k" | cut -d'|' -f2)"
+    knob_enabled "$_k" "$(knob_default "$_k")" || continue
+    case $_k in
+      block_other_apps|sweep_bg|home_swap|nav_buttons) _tail="$_tail $_k" ; continue ;;
+    esac
+    ( KRV_TAG=$_k
+      _kt0=$(date +%s)
       knob_apply "$_k"
-    fi
+      _d=$(( $(date +%s) - _kt0 ))
+      [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
+    ) &
+  done
+  wait
+  for _k in $_tail; do
+    _kt0=$(date +%s)
+    knob_apply "$_k"
     _d=$(( $(date +%s) - _kt0 ))
-    # A step that takes more than a couple of seconds is worth naming: this
-    # phone spends about a fifth of a second on every settings read, so a whole
-    # exit is minutes of these added up, and the log is the only place that can
-    # say which step is spending them. (v3.3.1's exit took 45s and nothing in the
-    # log said where.)
-    [ "$_d" -ge 2 ] && log "  slow: $_mode $_k took ${_d}s"
+    [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
   done
 }
 
@@ -250,13 +263,23 @@ phase_deep() { # apply|revert
 # Reverting a deep phase must also undo knobs that are still applied, so it
 # walks the reverse of the order they were applied in.
 phase_deep_revert() {
+  # Side by side, for the same reason the session is: the owner's phone showed
+  # the installer's revert of a live session at 10s while the door took 40 - the
+  # difference was this phase, which holds the two slowest reverts on the phone
+  # (the per-app background work) and used to run them one after another. The
+  # knobs are independent values; each reverts in its own subshell with its own
+  # journal slice, and nothing here has an order (the CPU power mode, the one
+  # knob the governor's revert depends on, went back before this was called).
   for _k in $(knobs_reversed); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
-    _kt0=$(date +%s)
-    knob_revert "$_k"
-    _d=$(( $(date +%s) - _kt0 ))
-    [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
+    ( KRV_TAG=$_k
+      _kt0=$(date +%s)
+      knob_revert "$_k"
+      _d=$(( $(date +%s) - _kt0 ))
+      [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
+    ) &
   done
+  wait
 }
 
 # ------------------------------------------------------------------ commands

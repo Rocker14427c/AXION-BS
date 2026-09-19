@@ -2541,8 +2541,8 @@ else
 fi
 # The Quick Settings tile is a real toggle now: tap switches the mode on or
 # off in place - it never opens the app - and long-press opens the options.
-grep -q "Root.enter()" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java" && \
-  grep -q "Root.exit()" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+grep -q "Root.ENTER" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java" && \
+  grep -q "Root.EXIT" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
 check "the tile toggles the mode itself, with the same scripts as the door" $?
 if grep -q "startActivityAndCollapse" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"; then
   bad "tapping the tile opens no activity"
@@ -2552,8 +2552,29 @@ fi
 grep -q "android.service.quicksettings.action.QS_TILE_PREFERENCES" "$REPO/app/AndroidManifest.xml" && \
   grep -q ".KnobsActivity" "$REPO/app/AndroidManifest.xml"
 check "and long-pressing the tile opens this mode's options" $?
-grep -q ">Super power saving mode<" "$REPO/app/res/values/strings.xml"
-check "and the tile says the mode's whole name" $?
+grep -q ">Super Battery Saver<" "$REPO/app/res/values/strings.xml"
+check "and the tile is named Super Battery Saver" $?
+# The icon is a system-style tile icon - one flat monochrome shape the system
+# itself tints by state (that is how Wi-Fi and Bluetooth colour) - not the
+# launcher's coloured icon, which no system tile uses.
+grep -q "android:icon=\"@drawable/ic_tile_battery\"" "$REPO/app/AndroidManifest.xml"
+check "the tile wears the battery icon, the way system tiles are drawn" $?
+sed -n '/SpsmTileService/,/service>/p' "$REPO/app/AndroidManifest.xml" > "$WORK/tileblock"
+grep -q "ic_tile_battery" "$WORK/tileblock" && ! grep -q "@mipmap/ic_launcher" "$WORK/tileblock"
+check "and it is not the launcher icon pretending to be one" $?
+# The transition is detached from the tile service: the system may unbind the
+# service at any second, and the scripts must finish regardless - this is why
+# the tile can never again sit on "working" with the work half-done.
+grep -q "execDetached" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java" && \
+  grep -q "nohup" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "a tap hands the work to root and lets go of it" $?
+grep -q "s.busy" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "and a press during a transition waits instead of stacking a second one" $?
+# The recents list is reachable from the app itself, on any launcher - with the
+# SPSM home off, the drawer and this button are the way in.
+grep -q "btn_recents" "$REPO/app/res/layout/activity_setup.xml" && \
+  grep -q "SpsmRecentsActivity" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"
+check "the app itself carries the recents button, on any launcher" $?
 grep -q 'engine.sh recents-opened' "$REPO/app/src/dev/axion/spsm/SpsmHomeActivity.java" && \
   grep -q 'recents-opened)' "$REPO/module/scripts/engine.sh"
 check "and every open of the list is noted in the log, with what opened it" $?

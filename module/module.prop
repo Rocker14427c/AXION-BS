@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.0
-versionCode=58
+version=v3.7.1
+versionCode=59
 author=Axion SPSM
-description=v3.7.0 the mode is usable from anywhere: the Quick Settings tile really toggles (tap enters or exits - the app never opens; long-press opens Options), the exit runs its reverts side by side so it is as fast as the installer's own revert, and the status bar is simply kept visible - the switch is gone. The Recents button stays the phone's own; this mode's list is one Home tap away, with its button on the home screen. RMX3430.
+description=v3.7.1 one speed for everything: the exit now reverts the deep phase side by side too and the apply runs the same way, so the door, the tile and the installer all revert at the installer's pace. The tile is "Super Battery Saver" - a proper system-style battery icon that colours with the state, work detached from the tile so it can never hang, a press during a transition waits. And this mode's recents has a button in the app, on any launcher. RMX3430.

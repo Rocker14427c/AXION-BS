@@ -1,24 +1,27 @@
 package dev.axion.spsm;
 
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
 
 /**
- * The Quick Settings tile.
+ * The Quick Settings tile - "Super Battery Saver".
  *
- * <p>Tap = enter or leave the mode, right there - the tile runs the same
- * scripts the app's door does, and the app does not open. Long-press opens the
- * app's own options screen (declared in the manifest with the QS tile
- * preferences action, which is the system's own hook for long-press). The tile
- * shows what the mode actually is - coloured while it is on, plain while it is
- * off - read from the marker file on the phone, the same fact the door reads,
- * so it can never disagree with the log.
+ * <p>Tap = enter or leave the mode, right there; the app never opens. The long
+ * work is handed to root and DETACHED from this process (nohup), so even if
+ * the system unbinds this tile service mid-way, the scripts finish and the
+ * phone is fully restored - a tap during a transition is ignored until the
+ * mode is idle again, which is why the tile can never be pressing two
+ * transitions into each other. The tile repaints itself every couple of
+ * seconds while a transition runs, and shows what the phone itself says:
+ * coloured while the mode is on, plain while it is off, exactly like the
+ * system's own tiles. Long-press opens the options (the manifest points the
+ * system's QS tile-preferences action at KnobsActivity).
  */
 public class SpsmTileService extends TileService {
     private final Handler main = new Handler(Looper.getMainLooper());
+    private boolean watching = false;
 
     @Override
     public void onStartListening() {
@@ -26,13 +29,18 @@ public class SpsmTileService extends TileService {
         refresh();
     }
 
+    @Override
+    public void onTileRemoved() {
+        super.onTileRemoved();
+        watching = false;
+    }
+
     private void refresh() {
         new Thread(() -> {
             final State s = readState();
             main.post(() -> {
                 Tile t = getQsTile();
-                if (t == null) return;
-                paint(t, s);
+                if (t != null) paint(t, s);
             });
         }).start();
     }
@@ -45,7 +53,7 @@ public class SpsmTileService extends TileService {
     private State readState() {
         State s = new State();
         String out = Root.exec("[ -f " + Root.ACTIVE + " ] && echo on || echo off; "
-                + "[ -f " + Root.DIR + "/state/progress ] && echo busy");
+                + "[ -f " + Root.DIR + "/state/progress ] && echo busy", 10);
         if (out == null) return s;
         if (out.contains("on")) s.on = true;
         if (out.contains("busy")) s.busy = true;
@@ -55,39 +63,54 @@ public class SpsmTileService extends TileService {
     private void paint(Tile t, State s) {
         t.setLabel(getString(R.string.tile_label));
         t.setState(s.on ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
-        if (s.busy) {
-            t.setSubtitle(getString(R.string.tile_busy));
-        } else {
-            t.setSubtitle(null);
-        }
+        t.setSubtitle(s.busy ? getString(R.string.tile_busy) : null);
         t.updateTile();
     }
 
     @Override
     public void onClick() {
-        // Toggle in place. The work takes about half a minute (twenty knobs,
-        // every one of them journalled), so the tile says it is working and
-        // then paints the truth once the scripts have finished.
+        final State s = readState();
+        if (s.busy) {
+            // A transition is already running: pressing again must not start a
+            // second one on top of it. Say so, and keep watching until the
+            // phone is idle - then the tile shows the truth.
+            watch();
+            return;
+        }
+        final boolean turnOn = !s.on;
+        // Detached from this process on purpose: su forks the script with
+        // nohup and returns at once, so the work survives this service being
+        // unbound, and nothing here can sit "waiting" on a pipe for a minute.
+        if (turnOn) {
+            Root.execDetached("nohup sh " + Root.ENTER + " >/dev/null 2>&1 &");
+        } else {
+            Root.execDetached("nohup sh " + Root.EXIT + " >/dev/null 2>&1 &");
+        }
         final Tile t = getQsTile();
         if (t != null) {
             t.setSubtitle(getString(R.string.tile_busy));
             t.updateTile();
         }
-        new Thread(() -> {
-            boolean on = false;
-            String out = Root.exec("[ -f " + Root.ACTIVE + " ] && echo on || echo off");
-            if (out != null && out.contains("on")) on = true;
-            if (on) {
-                Root.exit();
-            } else {
-                Root.enter();
-            }
+        watch();
+    }
+
+    /** Repaint the tile every couple of seconds until the phone is idle. */
+    private void watch() {
+        if (watching) return;
+        watching = true;
+        watchTick(0);
+    }
+
+    private void watchTick(final int n) {
+        main.postDelayed(() -> {
             final State s = readState();
-            main.post(() -> {
-                Tile t2 = getQsTile();
-                if (t2 == null) return;
-                paint(t2, s);
-            });
-        }).start();
+            Tile t = getQsTile();
+            if (t != null) paint(t, s);
+            if (s.busy && n < 100) {
+                watchTick(n + 1);
+            } else {
+                watching = false;
+            }
+        }, 2500);
     }
 }

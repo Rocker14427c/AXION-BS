@@ -23,32 +23,31 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.7.0)
-- THE TILE IS A REAL SWITCH NOW. Tap it and the mode starts; tap it again and
-  it exits - right there, the app never opens (the old tile opened the app on
-  every press). While the mode is on the tile is coloured like every other
-  tile that is on, and plain when it is off, read from the phone itself so it
-  cannot disagree with the log. LONG-PRESS opens the Options screen, exactly
-  as you asked: that is where you choose what the mode may change.
-- THE MODE WORKS WITHOUT ITS HOME SCREEN. With "Switch the home screen" off,
-  your own launcher stays, and you now have everything from anywhere: the tile
-  (enter / exit), and the app itself from the drawer - six slots, Options, and
-  the exit door in it. Nothing in the mode needs the SPSM home to be on.
-- A FASTER EXIT - THE INSTALLER'S METHOD. You measured it: flashing the module
-  reverted a running session in about 20s while the door took about 60s for
-  the same work. The difference was waiting - the phone answers one question
-  at a time, and the exit asked its questions in single file. The exit now
-  runs the independent reverts side by side (the two that must keep their
-  order - navigation before home - still run in order), and it ends exactly
-  as honestly as before: "revert clean in Ns" is the same promise.
-- THE STATUS BAR SWITCH IS GONE. The status bar is kept visible the whole time
-  the mode is on - it is not a preference any more, so the option is out of
-  the list, and even an old stored "off" cannot hide it.
-- THE RECENTS BUTTON IS STILL THE PHONE'S OWN - and this mode's recents list
-  is still one tap of the Recents button ON THIS MODE'S HOME SCREEN. There is
-  no watcher of any kind in the background: nothing listens to the touchscreen
-  or the event log, so the button costs the mode nothing.
-- The full test rig passes 526 checks, 0 failed.
+NEW IN THIS BUILD (v3.7.1)
+- ONE SPEED FOR EVERYTHING. You measured three different times for the same
+  work: the installer's revert of a live session (~10s), the door (~40s), and
+  a tile apply (~1min). The difference was never the work - it was which steps
+  ran one after another. Now EVERYTHING runs the way the installer does: the
+  deep phase (the two slow per-app reverts) reverts side by side, and the
+  apply runs side by side too. The door, the tile and the installer all run
+  the very same scripts at the very same speed now. The ordered pair -
+  navigation before home on the way out, home before navigation on the way in
+  - is still ordered.
+- THE TILE IS FIXED AND RENAMED. It is "Super Battery Saver" now, with a
+  proper system-style icon: a flat battery with an S, drawn the way the
+  system's own tiles are drawn - so the system tints it itself: coloured
+  while the mode is on, plain while off, exactly like Wi-Fi and Bluetooth.
+- THE TILE CAN NEVER HANG AGAIN. The work is handed to root DETACHED from the
+  tile: even if the system unbinds the tile mid-transition, the scripts
+  finish, and the exit always completes. A press while a transition is
+  running does not stack a second one - the tile keeps watching and shows the
+  state the moment the phone is idle.
+- RECENTS FROM ANY LAUNCHER. With the SPSM home off you are on your own
+  launcher - so the app itself now carries this mode's recents: open Super
+  Power Saving from the drawer, press "Recents". One tap in the drawer, one
+  tap on the button. The list is the same real task list, and nothing in the
+  background watches anything to make it work.
+- The full test rig passes 531 checks, 0 failed.
 
 FROM v3.6.5
 - The frame-rate cap used the command you verified, with the phone's frame-rate
@@ -214,7 +213,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.0-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.1-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
