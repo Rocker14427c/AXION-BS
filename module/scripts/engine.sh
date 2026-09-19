@@ -243,6 +243,10 @@ phase_deep() { # apply|revert
     _kt0=$(date +%s)
     if [ "$_mode" = apply ]; then
       knob_enabled "$_k" "$(knob_default "$_k")" || continue
+      # The core sleep is NOT applied here. Its whole point is the minute of
+      # continuous sleep, and the deep phase runs at the transition; the
+      # daemon's timer fires engine.sh core-sleep when the minute is up.
+      [ "$_k" = cores_sleep ] && continue
       if [ -f "$STATE/deep_report" ]; then
         case " $DEEP_ONCE " in
           *" $_k "*)
@@ -284,10 +288,29 @@ phase_deep_revert() {
 
 # ------------------------------------------------------------------ commands
 
+# The daemon's one-minute timer fired: put cores 2-7 to sleep. Everything is
+# re-checked under the lock, because the world may have moved on in the minute
+# since the timer was armed: the mode may be off, the screen may be on (the
+# whole point of the option is that it never takes a core while somebody is
+# looking), or the cores may already be asleep from an earlier firing.
+do_core_sleep() {
+  knob_enabled cores_sleep "$(knob_default cores_sleep)" || return 0
+  lock_acquire || return 0
+  [ -f "$ACTIVE" ] || { lock_release; return 0; }
+  [ "$(screen_state)" = "off" ] || { lock_release; return 0; }
+  case "$(j_state cores_sleep)" in
+    applied) lock_release; return 0 ;;
+  esac
+  progress "Idle: $(knob_meta cores_sleep | cut -d'|' -f2)"
+  knob_apply cores_sleep
+  lock_release
+}
+
 do_activate() {
   lock_acquire || { log "activate: busy"; return 1; }
   progress "Starting"
   rm -f "$STATE/doze_forced"
+  rm -f "$STATE/cores_asleep"
 
   if [ -f "$ACTIVE" ]; then
     # Already on. Re-applying every knob here costs the phone a whole pass - 25
@@ -323,15 +346,10 @@ do_activate() {
     phase_deep apply
   fi
 
-  # The performance limits, kept from the start when the user asked for them.
-  if cap_always_on; then
-    for _k in $PERF_KNOBS; do
-      knob_enabled "$_k" "$(knob_default "$_k")" || continue
-      progress "Applying: $(knob_meta "$_k" | cut -d'|' -f2)"
-      knob_apply "$_k"
-    done
-    log "cap_always: performance limits applied now, with the screen on"
-  fi
+  # The limits the owner asked to be held are session knobs now (the governor
+  # and the GPU floor): phase_session applied them above, with the screen on,
+  # because that is what "always" means. There is no separate switch for it
+  # any more - v3.7.5 removed cap_always together with the frequency ceiling.
 
   start_daemon
   tmp_sweep
@@ -381,15 +399,16 @@ do_deactivate() {
   # (held by pid ...)" waiting for a loop that was about to be stopped anyway.
   stop_daemon
 
-  # The CPU power mode goes back first, ahead of everything else.
-  #
-  # While it is engaged the kernel owns the governor: the deep revert writes
-  # schedutil back into the CPUs, and if Low Power mode is still on the kernel
-  # puts powersave straight back - which is exactly the "want [schedutil] got
-  # [powersave]" phantom that has followed this module since v3.0.9, and the
-  # 41-second exit it caused. knobs_reversed would reach it last; it has to be
-  # first. The call is idempotent, so the session pass that follows is a no-op.
-  knob_revert mtk_low_power
+  # The one-minute core timer is disarmed with the session.
+  rm -f "$STATE/cores_asleep"
+
+  # The CPU power mode is NOT touched on the way out - and not on the way in
+  # either. v3.7.5 removed the Low Power mode option at the owner's direction
+  # (the governor is the only hand on CPU speed now), so this module never
+  # writes /proc/cpufreq/cpufreq_power_mode at all: a power mode something else
+  # set is somebody else's state, and leaving it exactly as found is the honest
+  # behaviour. If a state we did write ever needs clearing, the version that
+  # wrote it owns that.
 
   # The deep phase and the session phase run TOGETHER now. They are disjoint
   # sets of values, each knob journalling only itself, so nothing can collide -
@@ -469,10 +488,12 @@ do_screen_off() {
   lock_release
 }
 
-# Fast knobs first on wake: CPU/GPU state is what you feel in the first
-# second. The slow ones (per-package appops) can finish after the phone is
-# already responsive.
-DEEP_FAST="cpu_offline_big gov_powersave cpu_cap gpu_cap ged_boost_off deep_doze"
+# Fast knobs first on wake: core and speed state is what you feel in the first
+# second - six sleeping cores most of all - so the cores come back before
+# anything else is touched. The slow ones (per-package appops) can finish after
+# the phone is already responsive. The governor and the GPU floor are session
+# knobs now and are not on this list: a wake does not lift them any more.
+DEEP_FAST="cores_sleep ged_boost_off deep_doze"
 
 # The deep knobs that are expensive, cannot revert by themselves, and are already
 # in place from an earlier screen-off in the same idle period: the per-app
@@ -483,14 +504,6 @@ DEEP_FAST="cpu_offline_big gov_powersave cpu_cap gpu_cap ged_boost_off deep_doze
 # the report that this list is judged by, so a real wake always re-applies them.
 DEEP_ONCE="app_restrict rom_bg_off deep_doze"
 
-# The deep knobs that are about speed and heat rather than about sleeping: the
-# CPU and GPU ceilings, the offline big cores, the boost switches. These are the
-# ones someone may want held while the phone is in use (cap_always), and the ones
-# a kernel manager looks at - so when cap_always is on they are applied as soon
-# as the mode is switched on, instead of only when the screen goes off.
-PERF_KNOBS="cpu_cap gpu_cap cpu_offline_big ged_boost_off"
-cap_always_on() { knob_enabled cap_always "$(knob_default cap_always)"; }
-
 do_screen_on() {
   still_on || return 0
   lock_acquire || return 0
@@ -499,23 +512,18 @@ do_screen_on() {
   # after the mode is already off.
   [ -f "$ACTIVE" ] || { lock_release; return 0; }
   log "screen on -> release deep phase"
+  # The cores come back before anything else (first in DEEP_FAST), and the
+  # one-minute timer is disarmed so the next sleep starts fresh. The governor
+  # and the GPU floor are session knobs: a wake does not lift them any more -
+  # "all the time is good enough", as the owner put it.
+  rm -f "$STATE/cores_asleep"
   for _k in $DEEP_FAST; do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
-    # With cap_always the speed limits stay: that is the point of the option.
-    # Doze and the background restriction never stay - those are about sleeping,
-    # and holding them while the phone is in use would break the apps the user
-    # allowed.
-    if cap_always_on; then
-      case " $PERF_KNOBS " in *" $_k "*) continue ;; esac
-    fi
     knob_revert "$_k"
   done
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     case " $DEEP_FAST " in *" $_k "*) continue ;; esac
-    if cap_always_on; then
-      case " $PERF_KNOBS " in *" $_k "*) continue ;; esac
-    fi
     knob_revert "$_k"
   done
   # Only after every comparison is done, in case a knob did not come back.
@@ -769,8 +777,8 @@ probe_one() { # probe_one <knob> -> "verdict<TAB>detail"
   # phone itself, so there is nothing on the device to try. Saying "could not
   # check" about it would be a false alarm.
   # knob_meta is category|label|description|default|scope|tags - six fields, so
-  # the tags are the sixth. (Reading the seventh is how cap_always was reported
-  # as "could not check" when it is a plain preference.)
+  # the tags are the sixth. (Reading the seventh is how a plain preference was
+  # once reported as "could not check".)
   case "$(knob_meta "$_k" | cut -d'|' -f6)" in
     *control*) printf 'preference\tthis is a setting, not a change to the phone'; return 0 ;;
   esac
@@ -910,6 +918,8 @@ case "$CMD" in
   deactivate) do_deactivate ;;
   screen-off) do_screen_off ;;
   screen-on)  do_screen_on ;;
+  # The daemon's one-minute timer (see daemon.sh): cores 2-7 go to sleep.
+  core-sleep) do_core_sleep ;;
   set)        do_set "$2" "$3" ;;
   verify)     do_verify ;;
   probe)      do_probe "$2" ;;

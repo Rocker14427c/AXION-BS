@@ -1,47 +1,51 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.6.4.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.5.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
 - A value you change yourself after us is never overwritten.
-- Nothing you cannot see is held while you are using the phone: deep sleep, the
-  background app limits and the CPU/GPU ceilings apply while the screen is off
-  and are released the moment you wake it. The processor's own Low Power mode is
-  the exception - it is meant to be on while you use the phone, and it is on by
-  default (Options -> "Keep the processor in Low Power mode" to switch it off).
-  The CPU/GPU ceilings can be held while you use it too, with the switch
-  "Keep power limits while using the phone" - that one is off unless you ask.
-- While the screen is off the frequency is the kernel's business: the power-save
-  governor is set and no frequency ceiling is written on top of it (Options ->
-  "Power-save governor while idle", on by default). The ceilings still do all the
-  work while you are using the phone.
-- A crash or reboot cannot leave the phone capped or dark.
+- CPU speed has ONE manager in this mode: the kernel's power-save governor
+  (Options -> "Power-save governor, always"). It holds every core at its lowest
+  speed for as long as the mode is on - screen on and off - and no frequency
+  ceiling is ever written by hand. The old ceiling options ("Limit the
+  processor while asleep", "Keep power limits while using the phone") and the
+  Low Power mode switch are gone; they all wrote speed limits, and you asked
+  for the governor to be the only hand on the CPU.
+- The graphics chip is the same story: "Graphics at minimum, always" holds it
+  at its floor the whole time the mode is on - screen on and off.
+- New: "Sleep cores 2 to 7 after a minute" (on by default). When the screen has
+  been off for a whole minute, cores 2-7 switch off and only cores 0 and 1 stay
+  awake. The moment you turn the screen on, every core comes back.
+- Deep sleep and the per-app background limits still apply only while the
+  screen is off, and are released the moment you wake it.
+- A crash or reboot cannot leave the phone dark or the cores asleep.
 
 INSTALLING OVER AN OLDER VERSION
 - Switch the mode off first (door -> Exit), then install, then reboot. Installing
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.7.4)
-- YOUR ICONS ARE BACK, as you asked. The app icon is the previous one - the
-  yellow battery - with the WHOLE background black now, not white (and no
-  square behind it). The Quick Settings tile is the previous battery too,
-  stretched wider: it now spans the full width of the tile. A true 10 percent
-  wider would have pushed the battery tip off the tile's canvas and clipped
-  it, so it is everything the tile can hold - about 9 percent.
-- FIXED: the six-slot swap. Taking an app out of the slots now blocks it
-  again immediately - screen on or off, exactly like the mode's other
-  changes. The removed app and the added app can never both be usable at the
-  same time again. (You caught the old code waiting for the screen to go
-  dark before re-blocking - while you were holding the phone.)
-- FIXED: the "something crashed" message when you tap a suspended app's
-  dialog. Android records WHO suspended an app; we suspended as root, and
-  the dialog crashed reporting the interaction for a "package" called root -
-  the crash your Logfox shows as Android:ui. Apps are now suspended as the
-  shell identity, which Android accepts as a real package. Same
-  suspensions, same speed - the crash is gone at the source.
-- The full test rig passes 543 checks, 0 failed.
+NEW IN THIS BUILD (v3.7.5)
+- THE OPTIONS, REBUILT AROUND WHAT YOU ASKED. The GPU now stays at minimum
+  frequency the whole time the mode is on - screen on and off ("Graphics at
+  minimum, always"). The powersave governor now manages the CPU the whole time
+  the mode is on - screen on and off ("Power-save governor, always") - and it
+  is the ONLY thing that manages CPU speed: the 1100 MHz-style frequency
+  ceilings are removed, and so is the "Keep power limits while using the
+  phone" switch (it only existed to keep ceilings on; there are none now), and
+  the Low Power mode switch (it wrote a speed limit of its own, and it could
+  pin the governor).
+- NEW OPTION: "Sleep cores 2 to 7 after a minute" (on by default). One minute
+  after the screen goes off, cores 2-7 switch off; cores 0 and 1 stay awake.
+  Turn the screen on and every core is back before you can touch anything.
+  You asked for exactly this, and it is its own switch.
+- "Stop performance boosts" is unchanged: it stops the touch/scroll speed
+  spikes, while the screen is off.
+- Each option now says in one line what it holds down and WHEN - so the
+  Processor options read as: governor = the CPU, always; graphics = the GPU,
+  always; boosts = the touch reflex, while asleep; core sleep = six cores,
+  after a minute asleep.
 
 FROM v3.7.1
 - The tile arrived: a real switch (tap = enter/exit in place, long-press =
@@ -212,7 +216,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.4-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.5-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow
@@ -226,11 +230,13 @@ TURN ON
 
 WHILE ON
 - The six apps you chose work normally. Nothing else is held open.
-- Power button wakes instantly (deep sleep and the background limits are
-  released on wake; the speed limits and the processor's Low Power mode stay,
+- Power button wakes instantly (deep sleep, the background limits and the
+  sleeping cores are released on wake; the governor and the GPU floor stay,
   because that is what this mode is for).
-- The phone is slower than usual on purpose: the processor is in Low Power mode
-  for as long as the mode is on. Switch that option off if you want it back.
+- The phone is slower than usual on purpose: the power-save governor holds the
+  CPU at its lowest speeds for as long as the mode is on. Switch "Power-save
+  governor, always" off if you want the phone's own speed back while you use
+  it; the asleep saving keeps its own switches.
 - Calls, SMS and mobile data keep working, unless you ticked "Turn off mobile
   data". Wi-Fi, Bluetooth, NFC and location are switched off only if you left
   those options ticked, and come back on exit if they were on before.

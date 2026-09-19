@@ -35,6 +35,15 @@ printf '%s\n' "$$" > "$SPSM_DIR/daemon.pid" 2>/dev/null
 
 last_state=""
 
+# The core-sleep timer: how long the screen must stay off before cores 2-7
+# sleep (the owner asked for a minute), and how long one asleep tick lasts.
+# Both are ordinary config, so the test rig can run this same code in seconds.
+_CORES_AFTER=$(cfg cores_sleep_after_secs 60)
+_ASLEEP_NAP=$(cfg asleep_nap_secs 3)
+_CORES_EVERY=$((_CORES_AFTER / _ASLEEP_NAP))
+[ "$_CORES_EVERY" -lt 1 ] 2>/dev/null && _CORES_EVERY=1
+off_since=0
+
 # A plain `sleep` cannot be cut short, and waiting out a poll after the user
 # presses the power button is the difference between "instant" and "why is my
 # phone stuttering". Two things cut the wait short: the APK signals this process
@@ -140,11 +149,15 @@ while true; do
       log "screen $last_state -> $now (panel=${PANEL:--} via $SCREEN_SRC)"
     fi
     if [ "$now" = "off" ]; then
+      off_since=$(date +%s)
       sh "$SCRIPT_DIR/engine.sh" screen-off >>"$LOG" 2>&1
       drain_note
     else
       # Waking up is the moment that has to feel instant, so this runs before
-      # anything else can delay it.
+      # anything else can delay it - six sleeping cores most of all, which is
+      # why the marker is cleared before the engine is called.
+      off_since=0
+      rm -f "$STATE/cores_asleep"
       sh "$SCRIPT_DIR/engine.sh" screen-on >>"$LOG" 2>&1
       drain_report
     fi
@@ -165,7 +178,23 @@ while true; do
   # held for even a moment while somebody is using the phone is the difference
   # between this mode and treacle. Asleep: 3s, which still catches a wake long
   # before the phone is in anyone's hand.
-  if [ "$now" = "on" ]; then nap 1; else nap 3; fi
+  if [ "$now" = "on" ]; then nap 1; else nap "$_ASLEEP_NAP"; fi
+
+  # The owner's minute timer: once the screen has been off for a whole minute
+  # of continuous sleep, cores 2-7 go to sleep until the next wake (the
+  # cores_sleep option). The firing lives here rather than in the deep phase
+  # because the whole point is the wait - and engine.sh core-sleep re-checks
+  # the mode, the screen and the journal under the lock before it takes a
+  # core, so a wake that lands during the firing simply wins. The date fork
+  # below runs once a minute of sleep, not once a tick.
+  if [ "$now" = "off" ] && [ "$off_since" != 0 ] \
+     && [ $((ticks % _CORES_EVERY)) -eq 0 ] \
+     && [ ! -f "$STATE/cores_asleep" ] \
+     && [ "$(date +%s)" -ge "$((off_since + _CORES_AFTER))" ] \
+     && knob_enabled cores_sleep "$(knob_default cores_sleep)"; then
+    : > "$STATE/cores_asleep" 2>/dev/null
+    sh "$SCRIPT_DIR/engine.sh" core-sleep >>"$LOG" 2>&1 &
+  fi
 
   # The heartbeat. While asleep it is the proof that the mode is awake and
   # watching even though nothing is happening - three minutes of silence and the

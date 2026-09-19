@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.4**.
+Current module: **v3.7.5**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,46 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.5 — the options, rebuilt around what was asked
+
+The owner looked at the Processor options and could not tell which one did
+what — and he was right, because three of them were the same lever wearing
+different names. His asks, verbatim: the GPU at minimum **no matter the
+screen**; **no** hand-written CPU cap ("remove that option, or that part of
+the option"); the powersave governor managing the CPU **all the time**; and a
+new option that sleeps cores 2–7 after a minute of screen-off.
+
+* **Power-save governor, always** (`gov_powersave`, deep → **session**) — the
+  one hand on CPU speed. Engaged when the mode starts, never lifted by a wake,
+  lifted by the exit. A vendor power mode could pin a cluster against it; that
+  option is gone, so the governor now takes every cluster.
+* **Graphics at minimum, always** (`gpu_cap`, deep → **session**) — the GPU
+  floor is held the whole time the mode is on, screen on and off, and released
+  by the exit (the OPP lock explicitly, as always).
+* **Removed: `cpu_cap`** — it wrote `scaling_max_freq` = 1100000/1300000, and
+  with `cap_always` it held that **while the screen was on**. No frequency
+  ceiling is ever written now; the suite asserts the max stays where the phone
+  had it.
+* **Removed: `mtk_low_power`** — "Low Power mode" was a platform speed limit,
+  i.e. the same cap by another name, and the code itself documented that it
+  could pin a cluster's governor. The module no longer writes
+  `cpufreq_power_mode` at all — a power mode something else set is somebody
+  else's state, and a full session now provably leaves it untouched.
+* **Removed: `cap_always`** — "Keep power limits while using the phone" only
+  existed to keep ceilings on. There are no ceilings; "always" is what the
+  remaining options mean by themselves.
+* **New: `cores_sleep`** (replaces the old experimental `cpu_offline_big`) —
+  when the screen has been off **one minute**, cores 2–7 go offline and cores
+  0–1 stay awake; the wake brings every core back **first**, before anything
+  else runs. The delay is owned by the daemon's tick (`engine.sh core-sleep`
+  fires it; the engine re-checks mode, screen and journal under the lock), the
+  deep phase deliberately skips it, and the marker file disarms it between
+  sleeps. On by default, per the battery-first standing pattern.
+* **Slot-swap regression test added**: an app taken out of the six slots while
+  the phone is *in use* is re-blocked at once (the v3.7.4 fix, now pinned).
+
+Harness: **547 checks, 0 failed.**
 
 ## What changed in 3.7.4 — your icons back; the slot-swap bug; the dialog crash
 

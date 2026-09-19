@@ -697,9 +697,6 @@ restore_location_off() {
 
 # ============================================================ Processor / GPU
 
-meta_cpu_cap() {
-  echo "Processor|Limit the processor while asleep|Lowers the processor's top speed while the screen is off. Nothing is switched off, so the phone still wakes instantly.|1|deep|battery"
-}
 # /proc/cpufreq/cpufreq_power_mode is written with a number and answers with a
 # sentence: write 1 and it reads "Low Power mode", write 0 and it reads
 # "Default(Normal) mode". The journal used to record the sentence, so the exit
@@ -759,12 +756,14 @@ release_power_mode() { set_power_mode 0; }
 #   echo powersave > /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 #   echo schedutil > /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 # `powersave` holds every core at the lowest frequency there is, continuously and
-# inside the kernel; a ceiling written by hand says the same thing once, from
-# outside, and costs a blocking write per cluster while the screen is off. So
-# while the screen is off the governor is the lever, and the ceiling is left to
-# it (see apply_cpu_cap).
+# inside the kernel. And it is the ONLY lever this mode now has on CPU speed:
+# v3.7.5 removed the hand-written frequency ceiling at the owner's direction -
+# "apply just powersave governor, manage cpu frequencies itself, no need to
+# worry, all the time is good enough whether screen is on or off" - so the
+# governor is a session option: engaged when the mode comes on, lifted only
+# when the mode goes off, never touched by a screen change.
 meta_gov_powersave() {
-  echo "Processor|Power-save governor while idle|While the screen is off, the kernel's own power-save governor runs the processor at its lowest frequency, instead of this module writing a frequency ceiling by hand. The same saving, held continuously by the kernel, and several fewer writes while the screen is off. Confirmed on this phone: both the switch to power-save and the switch back take effect on every cluster.|1|deep|battery"
+  echo "Processor|Power-save governor, always|While the mode is on, the kernel's own power-save governor holds every processor core at its lowest speed - screen on and off. This is the only thing that manages CPU speed in this mode: no frequency ceiling is ever written by hand.|1|session|battery"
 }
 # One governor path per cluster, by the path the owner's own command used:
 #   for cpu in /sys/devices/system/cpu/cpu[0-9]*; do echo powersave > "$cpu/cpufreq/scaling_governor"; done
@@ -860,126 +859,7 @@ note_gov_powersave() {
   esac
 }
 
-# Only the frequency ceilings. The governor is its own option (gov_powersave):
-# two knobs recording the same file is how a revert ends up writing the wrong
-# value back, because the second snapshot records the first knob's change as if
-# it were the user's.
-snapshot_cpu_cap() {
-  snap_kv /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq \
-          /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
-}
-apply_cpu_cap() {
-  # Per cluster, not per phone. A cluster whose governor is power-save is already
-  # held at the lowest frequency there is by the kernel, so no ceiling is written
-  # for it - but a cluster that did NOT take the governor is exactly the cluster
-  # the ceiling is for. v3.5.0 asked only the little cluster: on this phone that
-  # read "powersave" (the phone's own Low Power mode had already set it), so the
-  # ceiling was skipped for the whole phone and the big cluster, which had kept
-  # schedutil, was left with no idle limit at all.
-  _skipped=0
-  _wrote=0
-  for _p in 0 6; do
-    _d=/sys/devices/system/cpu/cpufreq/policy$_p
-    [ -d "$(rp "$_d")" ] || continue
-    if [ "$(rd "$_d/scaling_governor")" = powersave ]; then
-      _skipped=$((_skipped + 1))
-      continue
-    fi
-    _max=$(rd "$_d/cpuinfo_max_freq")
-    [ -n "$_max" ] || _max=$(rd "$_d/scaling_max_freq")
-    case "$_p" in
-      0) _target=$(cfg cpu_little_cap_khz 1100000) ;;
-      6) _target=$(cfg cpu_big_cap_khz 1300000) ;;
-    esac
-    # Only ever lower the ceiling, never raise it.
-    if [ -n "$_max" ] && [ "$_target" -gt "$_max" ] 2>/dev/null; then
-      _target=$_max
-    fi
-    w "$_target" "$_d/scaling_max_freq"
-    _wrote=$((_wrote + 1))
-  done
-  if [ "$_skipped" != 0 ] && [ "$_wrote" = 0 ]; then
-    log "cpu_cap: the power-save governor holds the frequency - no ceiling written"
-  elif [ "$_skipped" != 0 ]; then
-    log "cpu_cap: ceiling written for the $_wrote cluster(s) the governor did not take"
-  fi
 
-  # MediaTek's Low Power mode is deliberately NOT set here any more.
-  #
-  # v3.1.0 recorded the value in the form the node is written with, which fixed
-  # the journal - the exit then wrote 0 in the right form, and the node still
-  # read 1 afterwards:
-  #   WARN cpu_cap did not return: /proc/cpufreq/cpufreq_power_mode: want [0] got [1]
-  # Entering a state this phone has not accepted leaving is exactly the kind of
-  # change that must never be made: the phone comes out of the mode slower than
-  # it went in. So we do not enter it, and instead put the phone back to its
-  # normal power mode if an earlier version left it in Low Power mode.
-  # The CPU power mode is not touched here any more. It has its own option
-  # (mtk_low_power): it is a lever in its own right for saving power WHILE the
-  # screen is on, and a state this important deserves its own switch rather than
-  # riding along with a frequency ceiling.
-}
-restore_cpu_cap() { restore_kv "$1" "$2"; }
-
-# Extra evidence for the probe: the snapshot records the token the node is
-# written with, and this records the sentence it answers with, so the report
-# shows both sides of the same knob. Read-only - a probe must not change the
-# phone to find out what it does.
-probe_cpu_cap() {
-  printf 'power_mode\t%s\n' "$(rd "$PWRMODE")"
-}
-
-# The MediaTek power mode, as its own option.
-#
-# This is the in-use lever on this chip: engaged, the kernel runs the phone in
-# its low-power state for as long as the mode is on, not only while the screen is
-# off. It is also the state the exit used to fail to leave, so the whole path is
-# written carefully: the value is recorded as the token the node is written with,
-# entering it is verified, leaving it is verified and retried, and a state we
-# cannot read is never written at all.
-meta_mtk_low_power() {
-  echo "Power|Keep the processor in Low Power mode|Runs the phone in its own low-power processor state for as long as the mode is on, not only while the screen is off. The biggest saving while you are actually using the phone. It feels slower, and it can be switched off on its own without affecting anything else.|1|session|perf,battery"
-}
-snapshot_mtk_low_power() {
-  _m=$(pwr_mode_now)
-  # A state we cannot read is a state we must not change: (MISSING) makes
-  # apply_kv refuse to write it, here and on exit.
-  [ -n "$_m" ] || _m='(MISSING)'
-  printf '%s\t%s\n' "$PWRMODE" "$(enc_val "$_m")"
-}
-apply_mtk_low_power() {
-  [ -e "$(rp "$PWRMODE")" ] || return 0
-  case "$(pwr_mode_now)" in
-    1) return 0 ;;                # already there: nothing to change, nothing to claim
-    0) ;;
-    *) log "skip $PWRMODE: it does not read as a state we can put back"; return 0 ;;
-  esac
-  if set_power_mode 1; then
-    log "cpu low power mode engaged"
-  else
-    log "NOTE this phone did not accept Low Power mode; leaving it as it is"
-  fi
-  return 0
-}
-restore_mtk_low_power() {
-  _want=$(snap_file_val "$1" "$PWRMODE")
-  restore_kv "$1" "$2"
-  # Then confirm it settled: the read-back is the only proof on this kernel.
-  case "$_want" in
-    0|1)
-      if set_power_mode "$_want"; then
-        # A line in the log, not silence: this is the state the whole exit used
-        # to get stuck on, and "the power mode really is back where it started"
-        # is the first thing to look for in a log from the phone.
-        log "cpu low power mode released to its original state ($_want)"
-      else
-        log "NOTE this phone did not accept leaving Low Power mode; a reboot clears it"
-      fi
-      ;;
-  esac
-  return 0
-}
-probe_mtk_low_power() { printf 'power_mode\t%s\n' "$(rd "$PWRMODE")"; }
 
 # Window blur is drawn by the graphics chip every frame, behind panels and the
 # notification shade. Removing it costs nothing on a black, plain interface and
@@ -1043,36 +923,66 @@ probe_statusbar_on() {
   esac
 }
 
-meta_cpu_offline_big() {
-  echo "Processor|Switch off the big cores|Two of the eight processor cores are switched off completely. Saves the most, but the phone feels slower if something wakes it.|0|deep|experimental"
+# Sleep cores, but only after the screen has been off a minute.
+#
+# The owner's design, verbatim: "when the screen goes off and user didn't turn
+# the screen on within 1 minute then core from 2-7 get disabled, only core 0
+# and 1 left on, until the user turn the screen back on - after the user turn
+# the screen on all cores get back". The delay is the usability: the first
+# minute of sleep still has things finishing (the sweep, notifications in
+# flight), and only when a whole minute has passed with nothing happening does
+# the phone give up the cores.
+#
+# The timing does NOT live in the deep phase - the deep phase runs at the
+# transition, and this knob's whole point is to wait. The daemon fires it
+# (engine.sh core-sleep) once its tick sees a minute of continuous sleep; the
+# engine re-checks the mode, the screen and the journal under the lock before
+# a single core is touched, so a wake that arrives during the firing wins.
+meta_cores_sleep() {
+  echo "Processor|Sleep cores 2 to 7 after a minute|When the screen has been off for one minute, cores 2 to 7 switch off and only cores 0 and 1 stay on - the deepest saving there is while nothing is happening. The moment the screen comes back on, every core returns.|1|deep|battery"
 }
-snapshot_cpu_offline_big() {
-  snap_kv /sys/devices/system/cpu/cpu6/online /sys/devices/system/cpu/cpu7/online
+snapshot_cores_sleep() {
+  # Exactly the cores this option may take down; cores 0 and 1 are never
+  # touched, so they are never recorded either.
+  snap_kv /sys/devices/system/cpu/cpu2/online \
+          /sys/devices/system/cpu/cpu3/online \
+          /sys/devices/system/cpu/cpu4/online \
+          /sys/devices/system/cpu/cpu5/online \
+          /sys/devices/system/cpu/cpu6/online \
+          /sys/devices/system/cpu/cpu7/online
 }
-apply_cpu_offline_big() {
+apply_cores_sleep() {
   # Only write to a core that is on. Offlining is a blocking request the kernel
-  # finishes when it can, and the v3.4.1 log shows it taking 23s and then 52s on a
-  # phone that was busy at the time - while a core that is already off needs no
-  # request at all. The deep phase runs again on every screen-off, so re-asking
-  # for something that is already true was most of that wait.
+  # finishes when it can, and the v3.4.1 log shows it taking 23s and then 52s on
+  # a phone that was busy at the time - a core already off needs no request at
+  # all. A minute asleep, the phone here is not busy.
   _did=0
-  for _c in 7 6; do
+  for _c in 7 6 5 4 3 2; do
     _f=/sys/devices/system/cpu/cpu$_c/online
     [ -e "$(rp "$_f")" ] || continue
     [ "$(rd "$_f")" = 0 ] && continue
     w 0 "$_f" && _did=$((_did + 1))
   done
-  [ "$_did" = 0 ] && log "cpu_offline_big: the big cores are already off"
+  [ "$_did" = 0 ] && log "cores_sleep: cores 2-7 are already asleep"
+  [ "$_did" != 0 ] && log "cores_sleep: $_did core(s) asleep - cores 0 and 1 stay awake"
   return 0
 }
-restore_cpu_offline_big() {
-  # Faithful restore: whatever the cores were doing before SPSM is what they
-  # should be doing after. engine.sh's verify catches it if that fails.
+restore_cores_sleep() {
+  # Faithful restore: whatever the cores were doing before is what they should
+  # be doing after - on the wake path this runs FIRST (first in DEEP_FAST),
+  # because six offline cores are the one change the user would feel.
   restore_kv "$1" "$2"
+}
+probe_cores_sleep() {
+  _c=2
+  while [ "$_c" -le 7 ]; do
+    printf 'cpu%s\t%s\n' "$_c" "$(rd /sys/devices/system/cpu/cpu$_c/online 2>/dev/null || echo '?')"
+    _c=$((_c + 1))
+  done
 }
 
 meta_gpu_cap() {
-  echo "Processor|Limit graphics while asleep|Keeps the graphics chip at its lowest speed while the screen is off.|1|deep|battery"
+  echo "Processor|Graphics at minimum, always|The graphics chip stays at its lowest speed for the whole time the mode is on - screen on and off. The owner asked for exactly this: the GPU at minimum, no matter the screen.|1|session|battery"
 }
 # The GPU step ceiling is set two ways on this kernel: the two MediaTek tuning
 # nodes, which read back what was written, and /proc/gpufreq/gpufreq_opp_freq,
@@ -1483,12 +1393,11 @@ deep_report() {
   _g=$(rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)
   _d=no
   [ -f "$STATE/doze_forced" ] && _d=forced
-  # Who is holding the frequency down: the kernel's governor (gov_powersave) or a
-  # ceiling we wrote. Both are the idle limit being in force, and naming which one
-  # it is stops this line reading like a missing cap. It says governor only when
-  # every cluster this phone has is running power-save; a cluster that kept
-  # schedutil is held by the ceiling written for it.
-  _by=ceiling
+  # Who is holding the frequency down. There are no ceilings any more (v3.7.5
+  # removed them at the owner's direction), so the honest answers are: governor
+  # when every cluster this phone has took power-save, and mixed when one kept
+  # its own governor - which is the phone's shape on one cluster, not a fault.
+  _by=mixed
   _n=0
   _ps=0
   for _f in $(gov_paths); do
@@ -1581,13 +1490,6 @@ restore_data_off() {
 # mode whose whole point is to stretch the battery, and the biggest in-use saving
 # available is to keep the speed and graphics limits applied instead of lifting
 # them every time the phone is woken. It is this mode's own switch: with it off,
-# the limits apply only while the screen is off, exactly as before.
-meta_cap_always() {
-  echo "Performance|Keep power limits while using the phone|The processor and graphics limits stay applied the whole time, not only while the screen is off - the phone runs cooler and slower while you use it, and the battery lasts longer. Switch this off to have the limits lifted the moment you wake the phone.|1|session|perf,breaks-features,control"
-}
-snapshot_cap_always() { :; }
-apply_cap_always() { :; }
-restore_cap_always() { :; }
 
 # The restriction shows in the standby bucket and the background app-op of the
 # apps it manages, not in a snapshot of its own - so the probe asks those.
@@ -2035,7 +1937,6 @@ timeout_short
 animations_off
 haptic_off
 rotate_lock
-cap_always
 block_other_apps
 sweep_bg
 wifi_off
@@ -2047,15 +1948,13 @@ location_off
 ged_boost_off
 gpu_cap
 gov_powersave
-cpu_cap
-cpu_offline_big
+cores_sleep
 app_restrict
 rom_bg_off
 freeze_google
 deep_doze
 sync_off
 battery_saver
-mtk_low_power
 blur_off
 fps_cap
 statusbar_on
