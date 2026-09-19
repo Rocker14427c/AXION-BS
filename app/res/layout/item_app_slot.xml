@@ -1,37 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+    One of the six apps: a large rounded dark-grey container with the icon in it
+    and the name centred underneath. An empty slot shows a thin plus and the word
+    "Add"; while the slots are being edited, a filled one carries a small badge
+    that says "tap me to take this app out".
+
+    The ids here (icon, label, badge) are read by Apps.bindSlot and by
+    SpsmHomeActivity, and this layout is included six times over - so its shape is
+    the shape of the grid.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="center_horizontal"
-    android:orientation="vertical"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp"
-    android:paddingStart="4dp"
-    android:paddingEnd="4dp">
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp"
+    android:paddingStart="6dp"
+    android:paddingEnd="6dp">
 
-    <FrameLayout
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:background="@drawable/bg_slot">
-
-        <ImageView
-            android:id="@+id/icon"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_gravity="center"
-            android:src="@drawable/ic_plus"
-            android:scaleType="fitCenter" />
-    </FrameLayout>
-
-    <TextView
-        android:id="@+id/label"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:ellipsize="end"
-        android:gravity="center"
-        android:maxLines="1"
-        android:text="@string/empty_slot"
-        android:textColor="@color/text_secondary"
-        android:textSize="11sp" />
-</LinearLayout>
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:layout_width="68dp"
+            android:layout_height="68dp"
+            android:background="@drawable/bg_slot">
+
+            <ImageView
+                android:id="@+id/icon"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:layout_gravity="center"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_plus_thin" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="@string/empty_slot"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Only visible while editing, and only on a slot that holds an app. -->
+    <ImageView
+        android:id="@+id/badge"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="4dp"
+        android:background="@drawable/bg_slot_badge"
+        android:contentDescription="@string/edit_remove"
+        android:padding="5dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_minus"
+        android:visibility="gone" />
+</FrameLayout>

@@ -16,9 +16,15 @@
 
     <style name="Theme.Spsm.Home" parent="Theme.Spsm">
         <item name="android:windowShowWallpaper">false</item>
-        <item name="android:windowFullscreen">true</item>
+        <!--
+            The full-screen window item was set here and it hid the status bar:
+            the bar goes away, a swipe from the top brings it back for a second
+            or two, and then it hides again - which is exactly what the phone
+            kept doing. The bar is part of the mode's own interface (clock,
+            battery, the way back), so it stays. Nothing here may ask for it to
+            be hidden.
+        -->
         <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:statusBarColor">@color/black</item>
         <item name="android:navigationBarColor">@color/black</item>
         <item name="android:windowTranslucentStatus">false</item>

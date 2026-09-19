@@ -1,92 +1,119 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The power-saving home screen, laid out the way a phone's own super power
+    saving mode lays one out: a nearly black screen, one small row of controls at
+    the top, a large centred clock, a 3x2 grid of apps, and the battery reading
+    near the bottom.
+
+    What is deliberately NOT here any more: the yellow "On - Super power saving"
+    pill (state is obvious from the screen you are looking at), and any colour
+    other than white and grey.
+
+    Two controls, both icon buttons rather than words: Exit on the left, Edit on
+    the right. Every one of them is bound in SpsmHomeActivity - nothing in this
+    file is decoration without a job.
+
+    The swipe up for recents is gone, by the owner's instruction: the phone itself
+    is switched to three-button navigation while the mode is on (the system's own
+    bar - this app draws no buttons of its own), so Recents is a button on every
+    screen, including inside other apps.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/home_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/black"
     android:orientation="vertical"
-    android:fitsSystemWindows="false"
-    android:paddingTop="28dp">
+    android:fitsSystemWindows="true"
+    android:paddingTop="6dp">
 
-    <RelativeLayout
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:paddingStart="4dp"
-        android:paddingEnd="16dp">
+        android:layout_height="52dp"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp">
 
         <ImageButton
             android:id="@+id/btn_exit"
             android:layout_width="48dp"
             android:layout_height="48dp"
-            android:layout_alignParentStart="true"
-            android:layout_centerVertical="true"
-            android:background="@android:color/transparent"
+            android:layout_gravity="start|center_vertical"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/exit"
             android:padding="12dp"
-            android:src="@drawable/ic_exit" />
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_power"
+            android:tint="@color/text_secondary" />
 
-        <TextView
-            android:id="@+id/chip_mode"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_alignParentEnd="true"
-            android:layout_centerVertical="true"
-            android:background="@drawable/bg_chip"
-            android:paddingStart="12dp"
-            android:paddingTop="4dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="4dp"
-            android:text="@string/active"
-            android:textColor="@color/accent"
-            android:textSize="11sp" />
-    </RelativeLayout>
+        <ImageButton
+            android:id="@+id/btn_recents"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="58dp"
+            android:layout_gravity="end|center_vertical"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/recents_button"
+            android:padding="12dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_recents"
+            android:tint="@color/text_secondary" />
 
+        <ImageButton
+            android:id="@+id/btn_edit"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end|center_vertical"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/edit"
+            android:padding="13dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_edit"
+            android:tint="@color/text_secondary" />
+
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center"
+        android:letterSpacing="0.18"
+        android:text="@string/super_power_saving"
+        android:textAllCaps="true"
+        android:textColor="@color/text_hint"
+        android:textSize="10sp" />
+
+    <!-- The large centred clock, kept exactly as it was: it is the one thing on
+         this screen that reads at a glance from across a room. -->
+    <TextClock
+        android:id="@+id/clock"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:format12Hour="h:mm"
+        android:format24Hour="HH:mm"
+        android:fontFamily="sans-serif-light"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:textColor="@color/white"
+        android:textSize="76sp" />
+
+    <!-- Everything under the clock is pushed to the bottom of the screen: the
+         six apps sit just above the time they have left, exactly as the owner
+         asked, and the clock keeps the quiet black space above it. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
-
-        <TextClock
-            android:id="@+id/clock"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:format12Hour="h:mm"
-            android:format24Hour="HH:mm"
-            android:textColor="@color/white"
-            android:textSize="64sp"
-            android:fontFamily="sans-serif-light"
-            android:includeFontPadding="false" />
-
-        <TextClock
-            android:id="@+id/date"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:format12Hour="EEE, d MMM"
-            android:format24Hour="EEE, d MMM"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp" />
-
-        <TextView
-            android:id="@+id/battery"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:textColor="@color/accent"
-            android:textSize="14sp"
-            android:gravity="center" />
-    </LinearLayout>
+        android:orientation="vertical" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="8dp">
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -113,12 +140,29 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- The time left, directly under the apps. The percentage that used to sit
+         above it in 40sp is gone: "27% -> 2 h 10 m" says the same thing twice,
+         and the estimate is the half of it that is worth reading. -->
     <TextView
+        android:id="@+id/remaining"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
         android:gravity="center"
+        android:textColor="@color/text_secondary"
+        android:textSize="17sp" />
+
+    <TextView
+        android:id="@+id/home_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:gravity="center"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         android:paddingBottom="16dp"
-        android:text="@string/hold_to_change"
+        android:text="@string/home_hint_hold"
         android:textColor="@color/text_hint"
-        android:textSize="11sp" />
+        android:textSize="10sp" />
+
 </LinearLayout>

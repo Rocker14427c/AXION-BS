@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$1 $2" in
+  "activity recents")
+    if [ -n "$RECENTS_FIXTURE" ] && [ -f "$RECENTS_FIXTURE" ]; then cat "$RECENTS_FIXTURE"; else echo "no fixture"; fi ;;
+  *) echo "" ;;
+esac

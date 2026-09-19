@@ -1,0 +1,10 @@
+# The 30 fps cap is one command to SurfaceFlinger (transaction 1035), but the
+# phone only accepts that command while its frame-rate override is armed. With
+# the override off the same command crashes the compositor and soft-reboots the
+# phone - which is exactly what the owner saw after a reboot without this file.
+#
+# The module manager applies this at boot, BEFORE SurfaceFlinger starts, so one
+# normal reboot after installing is all it takes: SurfaceFlinger then reports
+# enableFrameRateOverride=true and the cap commands are safe. SPSM's own scripts
+# never write this property and never restart SurfaceFlinger.
+ro.surface_flinger.enable_frame_rate_override=true

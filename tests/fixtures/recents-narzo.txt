@@ -1,0 +1,60 @@
+ACTIVITY MANAGER RECENT TASKS (dumpsys activity recents)
+mRecentsUid=10160
+mRecentsComponent=ComponentInfo{com.android.launcher3/com.android.quickstep.RecentsActivity}
+mFreezeTaskListReordering=false
+mFreezeTaskListReorderingPendingTimeout=false
+  Recent tasks:
+  * Recent #0: Task{4a57d49 #1455 type=standard A=10252:com.termux}
+    userId=0 effectiveUid=u0a252 mCallingUid=u0a225 mUserSetupComplete=true mCallingPackage=dev.axion.spsm mCallingFeatureId=null
+    affinity=10252:com.termux
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 xflg=0x4 cmp=com.termux/.app.TermuxActivity}
+    mActivityComponent=com.termux/.app.TermuxActivity
+    autoRemoveRecents=false isPersistable=true activityType=1
+    rootWasReset=true mNeverRelinquishIdentity=true mReuseTask=false mLockTaskAuth=LOCK_TASK_AUTH_PINNABLE
+    Activities=[ActivityRecord{264789622 u0 com.termux/.app.TermuxActivity t1455}]
+    mRootProcess=ProcessRecord{c675167 15111:com.termux/u0a252}
+    taskId=1455 rootTaskId=1455
+    hasChildPipActivity=false
+    mHasBeenVisible=true
+    mResizeMode=RESIZE_MODE_RESIZEABLE mSupportsPictureInPicture=false isResizeable=true
+    isPerceptible=false
+    lastActiveTime=725551 (inactive for 6s)
+    isTrimmable=true isForceHidden=false isForceExcludedFromRecents=false
+    mSelfMovable=0
+  * Recent #1: Task{d57f515 #1446 type=home A=10225:dev.axion.spsm nonResizable}
+    userId=0 effectiveUid=u0a225 mCallingUid=0 mUserSetupComplete=true mCallingPackage=com.android.shell mCallingFeatureId=null
+    affinity=10225:dev.axion.spsm
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.HOME] flg=0x10800000 xflg=0x4 cmp=dev.axion.spsm/.SpsmHomeActivity}
+    mActivityComponent=dev.axion.spsm/.SpsmHomeActivity
+    autoRemoveRecents=false isPersistable=false activityType=2
+    rootWasReset=false mNeverRelinquishIdentity=true mReuseTask=false mLockTaskAuth=LOCK_TASK_AUTH_PINNABLE
+    Activities=[ActivityRecord{112652318 u0 dev.axion.spsm/.SpsmHomeActivity t1446}]
+    taskId=1446 rootTaskId=1
+    hasChildPipActivity=false
+    mHasBeenVisible=true
+    mResizeMode=RESIZE_MODE_UNRESIZEABLE mSupportsPictureInPicture=false isResizeable=false
+    isPerceptible=false
+    lastActiveTime=725062 (inactive for 6s)
+    isTrimmable=true isForceHidden=false isForceExcludedFromRecents=false
+    mSelfMovable=0
+  * Recent #2: Task{42c4826 #1447 type=recents I=com.android.launcher3/com.android.quickstep.RecentsActivity}
+    userId=0 effectiveUid=u0a160 mCallingUid=u0a160 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.DEFAULT] flg=0x10800000 xflg=0x4 pkg=com.android.launcher3 cmp=com.android.launcher3/com.android.quickstep.RecentsActivity}
+    mActivityComponent=com.android.launcher3/com.android.quickstep.RecentsActivity
+    autoRemoveRecents=false isPersistable=false activityType=3
+    rootWasReset=false mNeverRelinquishIdentity=true mReuseTask=false mLockTaskAuth=LOCK_TASK_AUTH_PINNABLE
+    Activities=[ActivityRecord{114049675 u0 com.android.launcher3/com.android.quickstep.RecentsActivity t1447}]
+    taskId=1447 rootTaskId=1447
+    hasChildPipActivity=false
+    mHasBeenVisible=true
+    mResizeMode=RESIZE_MODE_RESIZEABLE mSupportsPictureInPicture=false isResizeable=true
+    isPerceptible=false
+    lastActiveTime=724267 (inactive for 7s)
+    isTrimmable=true isForceHidden=false isForceExcludedFromRecents=false
+    mSelfMovable=0
+  * Recent #3: Task{3c7bd2a #1454 type=standard A=10199:com.openai.chatgpt}
+    userId=0 effectiveUid=u0a199 mCallingUid=u0a225 mUserSetupComplete=true mCallingPackage=dev.axion.spsm mCallingFeatureId=null
+    affinity=10199:com.openai.chatgpt
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 xflg=0x4 cmp=com.openai.chatgpt/.MainActivity}
+    mActivityComponent=com.openai.chatgpt/.MainActivity
+    autoRemoveRecents=false isPersistable=true activityType=1

@@ -8,6 +8,7 @@ final class Root {
     static final String EXIT = "/data/adb/spsm/exit.sh";
     static final String ACTIVE = "/data/adb/spsm/active";
     static final String WHITELIST = "/data/adb/spsm/whitelist.txt";
+    static final String DIR = "/data/adb/spsm";
 
     private Root() {}
 
@@ -35,6 +36,36 @@ final class Root {
         return exec("sh " + EXIT);
     }
 
+    /**
+     * Publishes the new screen state and wakes the daemon immediately.
+     *
+     * The file alone would only be read when the daemon's poll came round - up
+     * to 8 seconds of capped CPU after the user presses the power button.
+     * SIGUSR1 cuts its sleep short, so leaving the screen-off state is instant.
+     */
+    static void writeScreenState(String state) {
+        // One writer whenever possible: if the daemon is alive it does the work,
+        // and the signal means it starts now instead of at the next poll. If it
+        // is not running, do the work here - the screen change must never leave
+        // a CPU cap behind for even a few seconds.
+        exec("mkdir -p " + DIR + "/state && echo " + state + " > " + DIR + "/state/screen; "
+           + "p=$(cat " + DIR + "/daemon.pid 2>/dev/null); "
+           + "if [ -n \"$p\" ] && [ -d \"/proc/$p\" ]; then "
+           + "  kill -USR1 \"$p\" 2>/dev/null; "
+           + "else sh " + DIR + "/scripts/engine.sh screen-" + state + " >/dev/null 2>&1; fi; "
+           + "exit 0");
+    }
+
+    /** Progress text the engine publishes while it is applying or reverting. */
+    static String progress() {
+        return exec("cat " + DIR + "/state/progress 2>/dev/null");
+    }
+
+    /** Human readable summary of what is currently applied. */
+    static String status() {
+        return exec("sh " + DIR + "/scripts/engine.sh status 2>/dev/null");
+    }
+
     static void writeWhitelist(String[] pkgs) {
         StringBuilder sb = new StringBuilder();
         for (String p : pkgs) {
@@ -45,23 +76,70 @@ final class Root {
     }
 
     static String exec(String cmd) {
-        Process p = null;
-        try {
-            // Merge stderr so we cannot deadlock on a full error pipe.
-            p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd + " 2>&1"});
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            StringBuilder out = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) {
-                out.append(line).append('\n');
+        return exec(cmd, 0);
+    }
+
+    /**
+     * Run a command as root and read its output.
+     *
+     * The watchdog is not decoration: a read with no end let the tile sit on
+     * "working" for five minutes when a su stream never came back after a
+     * transition was pressed twice. `timeoutSec` bounds the wait - 0 means no
+     * bound, for the few callers that legitimately stream.
+     */
+    static String exec(String cmd, int timeoutSec) {
+        final Process[] holder = new Process[1];
+        final StringBuilder[] out = new StringBuilder[1];
+        Thread reader = new Thread(() -> {
+            Process p = null;
+            try {
+                // Merge stderr so we cannot deadlock on a full error pipe.
+                p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd + " 2>&1"});
+                holder[0] = p;
+                BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                StringBuilder b = new StringBuilder();
+                String line;
+                while ((line = r.readLine()) != null) {
+                    b.append(line).append('\n');
+                }
+                p.waitFor();
+                out[0] = b;
+            } catch (Exception ignored) {
+            } finally {
+                if (p != null) p.destroy();
             }
-            p.waitFor();
-            return out.toString();
-        } catch (Exception ex) {
-            return null;
-        } finally {
-            if (p != null) p.destroy();
+        });
+        reader.setDaemon(true);
+        reader.start();
+        if (timeoutSec <= 0) {
+            try {
+                reader.join();
+            } catch (InterruptedException ignored) {
+            }
+        } else {
+            try {
+                reader.join(timeoutSec * 1000L);
+            } catch (InterruptedException ignored) {
+            }
+            if (reader.isAlive() && holder[0] != null) {
+                holder[0].destroy();
+            }
         }
+        return out[0] == null ? null : out[0].toString();
+    }
+
+    /**
+     * Run a command as root WITHOUT waiting for it: the shell forks the work
+     * and returns at once, so the caller - a tile service the system may unbind
+     * at any moment - is never the thing keeping a transition alive.
+     */
+    static void execDetached(String cmd) {
+        new Thread(() -> {
+            try {
+                Runtime.getRuntime().exec(new String[]{"su", "-c", cmd + " 2>&1"}).waitFor();
+            } catch (Exception ignored) {
+            }
+        }).start();
     }
 
     private static String shellQuote(String s) {

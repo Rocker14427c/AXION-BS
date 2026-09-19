@@ -1,45 +1,129 @@
 package dev.axion.spsm;
 
-import android.annotation.SuppressLint;
-import android.app.PendingIntent;
-import android.content.Intent;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
 
+/**
+ * The Quick Settings tile - "Super Battery Saver".
+ *
+ * <p>Tap = enter or leave the mode, right there; the app never opens. The long
+ * work is handed to root and DETACHED from this process (nohup), so even if
+ * the system unbinds this tile service mid-way, the scripts finish and the
+ * phone is fully restored - a tap during a transition is ignored until the
+ * mode is idle again, which is why the tile can never be pressing two
+ * transitions into each other. The tile repaints itself every couple of
+ * seconds while a transition runs, and shows what the phone itself says:
+ * coloured while the mode is on, plain while it is off, exactly like the
+ * system's own tiles. Long-press opens the options (the manifest points the
+ * system's QS tile-preferences action at KnobsActivity).
+ */
 public class SpsmTileService extends TileService {
     private final Handler main = new Handler(Looper.getMainLooper());
+    private boolean watching = false;
 
     @Override
     public void onStartListening() {
         super.onStartListening();
+        refresh();
+    }
+
+    @Override
+    public void onTileRemoved() {
+        super.onTileRemoved();
+        watching = false;
+    }
+
+    private void refresh() {
         new Thread(() -> {
-            final boolean on = Root.available() && Root.isActive();
+            final State s = readStateOrNull();
+            if (s == null) return;
             main.post(() -> {
                 Tile t = getQsTile();
-                if (t == null) return;
-                t.setLabel(getString(R.string.tile_label));
-                t.setContentDescription(getString(R.string.setup_title));
-                t.setState(on ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
-                t.updateTile();
+                if (t != null) paint(t, s);
             });
         }).start();
     }
 
-    @SuppressLint("StartActivityAndCollapseDeprecated")
+    private static final class State {
+        boolean on;
+        boolean busy;
+    }
+
+    private State readStateOrNull() {
+        State s = new State();
+        // Busy is what the progress file SAYS, not whether it exists: the
+        // engine writes "Applying…"/"Restoring…" while a transition runs and
+        // removes the file when the mode settles, and a boot clears it. A file
+        // that merely exists must never read as "working" - that is exactly
+        // the stuck tile this round is deleting.
+        String out = Root.exec("[ -f " + Root.ACTIVE + " ] && echo on || echo off; "
+                + "p=" + Root.DIR + "/state/progress; "
+                + "case $(cat $p 2>/dev/null) in Applying*|Restoring*|Starting*) echo busy ;; esac", 10);
+        // A failed read says nothing about the mode. Returning nothing makes the
+        // callers leave the tile exactly as it is, instead of repainting a mode
+        // that is on as if it were off because su was slow once.
+        if (out == null) return null;
+        if (out.contains("on")) s.on = true;
+        if (out.contains("busy")) s.busy = true;
+        return s;
+    }
+
+    private void paint(Tile t, State s) {
+        t.setLabel(getString(R.string.tile_label));
+        t.setState(s.on ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
+        t.setSubtitle(s.busy ? getString(R.string.tile_busy) : null);
+        t.updateTile();
+    }
+
     @Override
     public void onClick() {
-        Intent i = new Intent(this, SetupActivity.class);
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        i.putExtra("toggle", true);
-        if (Build.VERSION.SDK_INT >= 34) {
-            PendingIntent pi = PendingIntent.getActivity(
-                    this, 0, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-            startActivityAndCollapse(pi);
-        } else {
-            startActivityAndCollapse(i);
+        final State s = readStateOrNull();
+        if (s == null) return;
+        if (s.busy) {
+            // A transition is already running: pressing again must not start a
+            // second one on top of it. Say so, and keep watching until the
+            // phone is idle - then the tile shows the truth.
+            watch();
+            return;
         }
+        final boolean turnOn = !s.on;
+        // Detached from this process on purpose: su forks the script with
+        // nohup and returns at once, so the work survives this service being
+        // unbound, and nothing here can sit "waiting" on a pipe for a minute.
+        if (turnOn) {
+            Root.execDetached("nohup sh " + Root.ENTER + " >/dev/null 2>&1 &");
+        } else {
+            Root.execDetached("nohup sh " + Root.EXIT + " >/dev/null 2>&1 &");
+        }
+        final Tile t = getQsTile();
+        if (t != null) {
+            t.setSubtitle(getString(R.string.tile_busy));
+            t.updateTile();
+        }
+        watch();
+    }
+
+    /** Repaint the tile every couple of seconds until the phone is idle. */
+    private void watch() {
+        if (watching) return;
+        watching = true;
+        watchTick(0);
+    }
+
+    private void watchTick(final int n) {
+        main.postDelayed(() -> {
+            final State s = readStateOrNull();
+            Tile t = getQsTile();
+            if (t != null && s != null) paint(t, s);
+            if (s != null && !s.busy) {
+                watching = false;
+            } else if (n < 100) {
+                watchTick(n + 1);
+            } else {
+                watching = false;
+            }
+        }, 2500);
     }
 }

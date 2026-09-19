@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The icon container of one of the six slots: a large, rounded, dark-grey
+     square, the way a phone's own power-saving screen draws them. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/slot_bg" />
-    <corners android:radius="18dp" />
+    <solid android:color="#FF1F1F1F" />
+    <corners android:radius="22dp" />
 </shape>

@@ -1,38 +1,287 @@
-HOW TO USE — Axion Super Power Saving v2.1
-==========================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7.
+HOW TO USE - Axion Super Power Saving
+=====================================
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.5.
 
-v2 difference vs 1.8:
-- Snapshot of every node/prop/setting BEFORE any write
-- Exit restores from those files (sysfs first, not settings-only)
-- Does NOT freeze every app (that took 1–2 min and cooked the phone)
-- Does NOT kill logd / persist.log.tag (Logfox keeps working)
-- Does NOT deep-doze (that made the power button miss and 4–5s reboot)
-- DT2W off only while SPSM is on; restored from snapshot on exit
-- A55 cores stay online; A75 offline only while SPSM is on
+HOW IT WORKS
+- Every change is written down before it is made, and put back on exit.
+- A value you change yourself after us is never overwritten.
+- CPU speed has ONE manager in this mode: the kernel's power-save governor
+  (Options -> "Power-save governor, always"). It holds every core at its lowest
+  speed for as long as the mode is on - screen on and off - and no frequency
+  ceiling is ever written by hand. The old ceiling options ("Limit the
+  processor while asleep", "Keep power limits while using the phone") and the
+  Low Power mode switch are gone; they all wrote speed limits, and you asked
+  for the governor to be the only hand on the CPU.
+- The graphics chip is the same story: "Graphics at minimum, always" holds it
+  at its floor the whole time the mode is on - screen on and off.
+- New: "Sleep cores 2 to 7 after a minute" (on by default). When the screen has
+  been off for a whole minute, cores 2-7 switch off and only cores 0 and 1 stay
+  awake. The moment you turn the screen on, every core comes back.
+- Deep sleep and the per-app background limits still apply only while the
+  screen is off, and are released the moment you wake it.
+- A crash or reboot cannot leave the phone dark or the cores asleep.
+
+INSTALLING OVER AN OLDER VERSION
+- Switch the mode off first (door -> Exit), then install, then reboot. Installing
+  a different version while the mode is on leaves one version's journal for
+  another version to restore, which is what makes the exit log complain.
+
+NEW IN THIS BUILD (v3.7.5)
+- THE OPTIONS, REBUILT AROUND WHAT YOU ASKED. The GPU now stays at minimum
+  frequency the whole time the mode is on - screen on and off ("Graphics at
+  minimum, always"). The powersave governor now manages the CPU the whole time
+  the mode is on - screen on and off ("Power-save governor, always") - and it
+  is the ONLY thing that manages CPU speed: the 1100 MHz-style frequency
+  ceilings are removed, and so is the "Keep power limits while using the
+  phone" switch (it only existed to keep ceilings on; there are none now), and
+  the Low Power mode switch (it wrote a speed limit of its own, and it could
+  pin the governor).
+- NEW OPTION: "Sleep cores 2 to 7 after a minute" (on by default). One minute
+  after the screen goes off, cores 2-7 switch off; cores 0 and 1 stay awake.
+  Turn the screen on and every core is back before you can touch anything.
+  You asked for exactly this, and it is its own switch.
+- "Stop performance boosts" is unchanged: it stops the touch/scroll speed
+  spikes, while the screen is off.
+- Each option now says in one line what it holds down and WHEN - so the
+  Processor options read as: governor = the CPU, always; graphics = the GPU,
+  always; boosts = the touch reflex, while asleep; core sleep = six cores,
+  after a minute asleep.
+
+FROM v3.7.1
+- The tile arrived: a real switch (tap = enter/exit in place, long-press =
+  Options), named Super Battery Saver, with the work detached from the tile
+  so a transition always finishes even if the system unbinds the tile.
+
+FROM v3.6.5
+- The frame-rate cap used the command you verified, with the phone's frame-rate
+  override armed by this module's system.prop at boot, and refused honestly
+  until that first reboot.
+
+FROM v3.6.3
+- The tap watcher was rewritten in plain shell (the awk underneath it buffered
+  every tap forever - a phone's event stream never ends), and the frame-rate
+  option asked the panel's own modes first. Your device showed the tap still
+  never arriving and the panel answering nothing, so all of it was removed in
+  v3.6.4.
+
+FROM v3.6.2
+- The Recents tap watcher itself arrived here: the launcher's recents animation
+  line is matched ("recents_animation_input_consumer" is all your log says for a
+  press), the touchscreen is read in the phone's own units around a region taken
+  from your navigation-bar insets and density, and the list is started and the
+  screen read back up to three times, with what "am start" answered written to
+  spsm.log. The daemon also stopped acting on the past (logcat is followed from
+  now, not replayed) and the exit time is the real one (three stopwatches, not
+  one shared). The frame-rate option was introduced here, off by default.
+- Nothing was taken from DeepDoze-Enforcer - it does what this module already
+  does.
+
+FROM v3.6.1
+- THE BAR IS THE PHONE'S OWN. The three buttons this app drew for itself in v3.6.0
+  are gone - no layout, no code, no icons. What puts the phone on three-button
+  navigation is the system's own command, the same one you ran by hand:
+    cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.threebutton
+  and the setting the ROM keeps in step with it. Back is Back, Home comes to this
+  mode's home, and Recents opens this mode's own list.
+  On the way out BOTH are put back: the setting, and the overlay that draws your
+  own bar (gestural, on this phone - read before anything is touched). A phone
+  that takes the command and ignores it is put back explicitly and the log says
+  so; a phone that will not say which navigation it uses is left alone.
+- The Recents button is synced to this mode's list, on a phone in three-button
+  navigation whether this mode put it there or you did. From inside an app the
+  launcher's recents screen is caught as it opens, this mode's list is put up,
+  the screen is read back, and if the launcher's screen came up instead it is
+  stopped and the list is asked for again (up to three tries). A press that does
+  not work writes what `am start` answered into the log, so it can be fixed from
+  the log instead of guessed at.
+FROM v3.6.0
+- Clear all, in the recents list: every task on the list is closed at once, and
+  the frozen background is stopped with it. The message counts what is left -
+  "Cleared 2 · 0 still open" - because the phone's task list is read back rather
+  than assumed, and the log line has the memory freed with it.
+- New option: "Hand back background memory" (Options -> Memory, on by default).
+  Suspending an app stops it starting; it does not give back the memory it is
+  holding. Every app outside your six is stopped outright and made idle when the
+  mode goes on and every time the screen goes off, so the memory keeps coming
+  back. Nothing is changed here, so there is nothing to undo.
+- New option: "Restrict the ROM's background work" (Options -> Apps, deep, on by
+  default). While the screen is off, the phone's own packages that are actually
+  running are put into the restricted standby bucket with background running
+  denied - the same switch Settings offers per app - and are put back on wake.
+  Nothing is disabled or suspended, the phone's core (System UI, the phone,
+  Settings, the providers, Wi-Fi/Bluetooth/NFC, the launcher, WebView) is never
+  touched, nor is anything already exempt from battery optimisation, nor your six.
+  The ROM's components live inside system_server, which is Android itself and is
+  not touched; what is taken away is the work that keeps it busy.
+- A cluster that refuses the power-save governor now has the governors it does
+  offer written to the log, with a note when MTK Low Power mode may be pinning it.
+- Every open of the recents list is logged with what opened it:
+  recents-button, back-button, or home.
+
+FROM v3.5.1
+FROM v3.5.0
+- (The top bar holds the door on the left and the pencil on the right. How recents
+  is opened has changed since - see the top of this file.)
+- The recents list has a home icon in the corner to go back to the six apps.
+- The power-saving home is tidier: the battery percentage is gone (the estimate
+  stays), so is the date under the clock, and the 3x2 grid of apps sits at the
+  bottom of the screen, just above the time remaining. A small line under the
+  apps says what a press-and-hold there does: "Hold an app to change it".
+- New option: "Power-save governor while idle" (Options -> Processor, on by
+  default). While the screen is off it sets the kernel's own power-save governor
+  on every cluster and writes no frequency ceiling, which is the same saving held
+  continuously by the kernel and several fewer writes per screen-off. The
+  ceilings still apply while you are using the phone, and the idle report says
+  which of the two is holding the frequency: held_by=governor or held_by=ceiling.
+- The idle sequence no longer spends minutes on work the phone had already done.
+  The deep-sleep request was issued in a way that waited for the phone to fall
+  asleep (245s and 619s in one real log) - it is issued in the background now and
+  read back. The per-app background limits run together instead of one by one.
+  Cores that are already offline are left alone. And the background limits and
+  the deep-sleep request are applied once per idle period instead of on every
+  screen-off; a real wake clears that record, so the next one applies them again.
+- The lines that looked like faults say what they mean now: "no visible change"
+  is used when the setting was already the way you wanted it, and the status bar
+  option says this ROM has no policy_control at all (so there was nothing to
+  clear) rather than sounding like it failed.
+- "Switch the launcher's recents off" is off by default now. This ROM refuses
+  that switch - the module said so and put it back every time the mode was turned
+  on - so it no longer spends seconds on it. It is still in Options for a ROM
+  that accepts it.
+
+FROM v3.4.1
+- Fixed: v3.4.0 closed itself the moment it was opened. The row of app containers
+  on the setup and home screens had changed from one kind of container to another
+  (it had to, for the small badge that edit mode uses), and two screens were still
+  asking the system for the old kind. Android refuses that at the moment the
+  screen appears, which is why the app died instantly and left no chance to reach
+  a switch. Both screens now ask for the plain kind, which is what they actually
+  use - the badge, the tap and the hold all work exactly as in v3.4.0.
+  The build now checks this class of mistake three times over: against the source,
+  against the built app, and against the row of containers themselves.
+- A problem with one of those containers can no longer take a screen down with it.
+  On the power-saving home screen - which is your phone's home while the mode is
+  on - the six slots are bound one at a time, and a slot that cannot be bound is
+  skipped: five icons and a working Exit are better than a home that will not draw.
+- Faster, and honest about it: switching off used to take about 45 seconds. Most
+  of that was the long list of apps being suspended and released one at a time;
+  those now run together, so the same work finishes in a fraction of it. Nothing
+  about what is changed has changed - only how long the phone spends doing it.
+- The log now names any step that takes more than two seconds, so a slow exit can
+  be pointed at rather than guessed at.
+- The build can no longer fail at random on the last step (a tool being closed off
+  mid-sentence used to abort the release build once in a while).
+
+NEW IN v3.4.0 (already in this build)
+- New home screen, in the spirit of a phone's own super power saving mode: a
+  nearly black screen, the large centred clock kept exactly as it was with the
+  date under it, a 3x2 grid of large rounded app containers, the battery reading
+  and its estimate near the bottom, and a lot of empty black space. The yellow
+  "On - Super power saving" pill is gone, and so is every other colour: white and
+  grey only.
+- Three plain icons at the top: power (exit) on the left; recents and a pencil on
+  the right.
+- Edit mode: tap the pencil and every slot with an app in it shows a small badge.
+  Tap an app and it is taken out of its slot - the slot is empty, with the "+"
+  ready for another app. Tap the tick (the pencil changes into one) to finish, or
+  hold any app at any time to pick a different one for that slot.
+- The exit confirmation is a large dark sheet from the bottom of the screen with
+  Cancel and a red Exit. Same question, same behaviour as before.
+- Closing a recent app now really closes it. The old code trusted the exit code
+  of the command, and on this ROM that command reports success and leaves the task
+  where it is - which is why nothing happened however many times you tried. It is
+  verified against the phone's own task list now, other forms of the command are
+  tried, and if the task still will not go the app itself is stopped, which does
+  close it. When even that fails the log says so instead of pretending.
+- Switching to a recent app is verified the same way, and falls back to starting
+  its activity if the first way does nothing.
+- New option: "Switch the launcher's recents off" (Options -> Display, on by
+  default). Swiping up, or going home from an app, was starting the launcher and
+  drawing its screen over everything - that screen is the launcher's own recents
+  component, and this switches it off for as long as the mode is on, then puts its
+  setting back on exit. SPSM's Recents button is where you switch apps instead.
+  Switch it off in Options if you would rather keep the phone's own recents.
+
+NEXT
+- The phone's own recents can still be reached if you want it: Options -> Display
+  -> "Switch the launcher's recents off" -> off.
+
+FROM v3.3.1
+- The status bar stays visible (the home screen's theme was asking for full
+  screen), and a system-wide immersive rule is cleared if your ROM has one
+  (Options -> Display -> "Keep the status bar visible").
+- Power limits, the processor's Low Power mode and blur off are held while you use
+  the phone; each is one switch in Options.
+- SPSM's own recents arrived in v3.2.0: read from the phone's task list, so the
+  launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU → Modules → Install from storage → Axion-SPSM-v2.1-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.5-RMX3430.zip
 2. Reboot.
-3. App drawer → Super Power Saving
-4. ResukiSU Superuser → Allow
+3. App drawer -> Super Power Saving
+4. ResukiSU Superuser -> Allow
 
 TURN ON
-1. Pick 6 apps. Turn on → confirm.
-2. Should take a few seconds, not minutes.
-3. Black 6-app home. Door top-left to exit.
-4. Log: /data/adb/spsm/spsm.log  and  /data/adb/spsm/snap/MANIFEST
+1. Options -> untick anything you do not want changed. Press Check if you want to
+   know first which options do anything on this phone.
+2. Pick six apps.
+3. Turn on. The black home appears in about a second; the rest finishes behind it.
+4. /data/adb/spsm/spsm.log and /data/adb/spsm/journal/ hold the details.
 
 WHILE ON
-- Power button wakes. DT2W is off (same as realme SPSM).
-- Incoming calls / Jio VoLTE stay up. Mobile data stays on.
-- Wi-Fi off while the screen is off.
-- Google Play services sleep.
-- logd stays running so you can record a log.
+- The six apps you chose work normally. Nothing else is held open.
+- Power button wakes instantly (deep sleep, the background limits and the
+  sleeping cores are released on wake; the governor and the GPU floor stay,
+  because that is what this mode is for).
+- The phone is slower than usual on purpose: the power-save governor holds the
+  CPU at its lowest speeds for as long as the mode is on. Switch "Power-save
+  governor, always" off if you want the phone's own speed back while you use
+  it; the asleep saving keeps its own switches.
+- Calls, SMS and mobile data keep working, unless you ticked "Turn off mobile
+  data". Wi-Fi, Bluetooth, NFC and location are switched off only if you left
+  those options ticked, and come back on exit if they were on before.
+- Anything that saves nothing on this phone says so under the option: press
+  Check to have each option tried and measured.
+- Recents is the phone's own Recents button. Press it anywhere, including inside
+  an app: this mode's list comes up, with Clear all in its header.
+- All three buttons of the bottom bar are the phone's: Back and Home were never
+  taken away, and Home now means this mode's home.
+- The ROM-background step that used to take four minutes (measured on the phone)
+  now takes a couple of seconds, and the exit stops the daemon before the revert
+  instead of after it, releases the app list in one go, and writes independent
+  values together. Both are in this build.
+- Logging stays on, so you can record a log while the mode runs.
 
 TURN OFF
-- Door → Exit. Snapshot is restored. DT2W comes back if it was on.
+- Door -> Exit. Everything is put back from the journal.
+- Or: su -c 'sh /data/adb/spsm/exit.sh'
+
+HOW MUCH IT SAVED
+- /data/adb/spsm/drain.log - one line per sleep, e.g.
+  2026-09-10 23:41:02 screen off 84% -> 82% in 421 min (0.28%/h)
+- /data/adb/spsm/spsm.log - what was applied, what was put back.
+
+CHECKING THAT IT REVERTED
+- su -c 'sh /data/adb/spsm/scripts/engine.sh verify'
+  Small drift count = all good. "left-alone" means you changed that value
+  yourself while the mode was on, so it was deliberately not overwritten.
 
 STUCK
-- ResukiSU → Modules → remove Axion Super Power Saving → reboot
-- or: su -c 'sh /data/adb/spsm/exit.sh'
+- ResukiSU -> Modules -> remove Axion Super Power Saving -> reboot
+  (removal reverts first, then uninstalls itself)
+- Read-only diagnostic, writes nothing: su -c 'sh /sdcard/DIAG.sh'
+
+IF SOMETHING LOOKS WRONG
+------------------------
+You do not need this app to get out of the mode. In the KernelSU / ResukiSU
+manager, open this module and press its Action button: that toggles the mode off
+and puts everything back, including your normal launcher.
+
+If your home screen ever looks wrong (no launcher, or it keeps restarting),
+these three commands restore it:
+  su -c 'cmd role add-role-holder android.app.role.HOME com.android.launcher3'
+  su -c 'cmd package set-home-activity com.android.launcher3/.Launcher'
+  su -c 'am start -a android.intent.action.MAIN -c android.intent.category.HOME'
+
+A reboot also reverts an unfinished session: nothing this module changes
+survives a boot.

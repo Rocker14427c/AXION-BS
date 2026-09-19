@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v2.1
-versionCode=21
+version=v3.7.5
+versionCode=63
 author=Axion SPSM
-description=v2.1 snapshot-restore, no data saver, even 6-app home. ResukiSU.
+description=v3.7.3 polish from the owner's report: the recents icon sits beside the pencil on this mode's home, the tile battery is the battery-saver shape (wide, 2:1) and its colour is the system's own tint, the launcher icon is a proper adaptive icon (dark, green battery, S), and a failed tile read can never repaint the mode as off. Full audit round: a dead watcher-cleanup function removed, sweep/monitor ordering asserted.
