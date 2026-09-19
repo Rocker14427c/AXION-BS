@@ -2562,6 +2562,24 @@ check "the tile wears the battery icon, the way system tiles are drawn" $?
 sed -n '/SpsmTileService/,/service>/p' "$REPO/app/AndroidManifest.xml" > "$WORK/tileblock"
 grep -q "ic_tile_battery" "$WORK/tileblock" && ! grep -q "@mipmap/ic_launcher" "$WORK/tileblock"
 check "and it is not the launcher icon pretending to be one" $?
+# And it is the PREVIOUS tile icon, stretched wider at the owner's ask. The
+# old shape ran x 1.5..23.6 of the 24 canvas; the stretched one spans the
+# FULL width - 0 to 24 - which is +8.6%, everything the tile can hold (a true
+# +10% would have clipped the battery terminal off the canvas).
+python3 - "$REPO/app/res/drawable/ic_tile_battery.xml" <<'PYSTRETCH'
+import sys, re
+pd = ' '.join(re.findall(r'android:pathData="([^"]+)"', open(sys.argv[1]).read(), re.S)[0].split())
+toks = re.findall(r'[MLAHVZ]|-?\d+\.?\d*', pd)
+xs = []; i = 0
+while i < len(toks):
+    c = toks[i]; i += 1
+    if c in 'ML': xs.append(float(toks[i])); i += 2
+    elif c == 'H': xs.append(float(toks[i])); i += 1
+    elif c == 'V': i += 1
+    elif c == 'A': xs.append(float(toks[i+5])); i += 7
+assert min(xs) <= 0.05 and max(xs) >= 23.95, 'not full width: %s..%s' % (min(xs), max(xs))
+PYSTRETCH
+check "the tile battery is the old one, stretched to the full width" $?
 # The transition is detached from the tile service: the system may unbind the
 # service at any second, and the scripts must finish regardless - this is why
 # the tile can never again sit on "working" with the work half-done.
@@ -2570,6 +2588,21 @@ grep -q "execDetached" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java" && \
 check "a tap hands the work to root and lets go of it" $?
 grep -q "s.busy" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
 check "and a press during a transition waits instead of stacking a second one" $?
+# The suspension is done as a package Android can name, not as root:
+# PackageManager records the suspender, and the system's suspended-app dialog
+# reports the interaction against that name - "root" is not a package, and the
+# dialog crashed system_server on it (the owner's Logfox "Android:ui" crash).
+grep -q "su 2000 -c" "$REPO/module/scripts/lib.sh" && \
+  grep -c "suspend_app" "$REPO/module/scripts/knobs.sh" >/dev/null 2>&1 && \
+  [ "$(grep -c "suspend_app" "$REPO/module/scripts/knobs.sh")" -ge 2 ]
+check "apps are suspended as com.android.shell, not as root - no dialog crash" $?
+# Taking an app out of the six slots re-blocks it AT ONCE, screen on or off:
+# the owner caught the old screen-off gate live - the removed app stayed
+# usable next to the added one.
+sed -n '/^do_allow()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/allowfn"
+grep -q "apply_block_other_apps" "$WORK/allowfn" && \
+  ! grep -q "screen_state" "$WORK/allowfn"
+check "a slot swap re-blocks the removed app immediately" $?
 # The recents list is reachable from the app itself, on any launcher - with the
 # SPSM home off, the drawer and this button are the way in.
 # The Recents entry lives on the SPSM launcher itself - the one place the
@@ -2582,14 +2615,52 @@ check "the SPSM launcher itself carries the recents icon" $?
 grep -q 'layout_marginEnd="58dp"' "$REPO/app/res/layout/activity_home.xml" && \
   grep -q 'btn_recents' "$REPO/app/res/layout/activity_home.xml"
 check "and it sits next to the pencil" $?
-# The launcher icon is the mode's own: an adaptive icon (dark, green battery,
-# S) - the old white-and-yellow square PNG is gone.
-[ -f "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" ] && \
-  grep -q "adaptive-icon" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" && \
-  grep -q "ic_launcher_fg" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml"
-check "the launcher icon is a proper adaptive icon of its own" $?
-[ ! -e "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png" ]
-check "and the old white-and-yellow square is gone" $?
+# The launcher icon is the owner's chosen one, back at his ask - RECOLOURED,
+# not redrawn: the previous icon with the whole background black (not white),
+# the battery exactly as it was. The PNG is read back and the recolour is
+# demanded: no white or grey pixel may survive (the old icon had a white
+# element), the yellow battery must be there, black must dominate. The
+# adaptive layers of v3.7.3 are gone with it - the PNG is the icon again.
+[ -f "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png" ] && \
+  [ "$(wc -c < "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png")" -lt 20000 ] && \
+  python3 - "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png" <<'PYICON'
+import sys, zlib, struct
+d = open(sys.argv[1], 'rb').read()
+pos = 8; idat = b''; w = h = None
+while pos < len(d):
+    ln = struct.unpack('>I', d[pos:pos+4])[0]; typ = d[pos+4:pos+8]
+    if typ == b'IHDR': w, h = struct.unpack('>II', d[pos+8:pos+16])
+    elif typ == b'IDAT': idat += d[pos+8:pos+8+ln]
+    pos += 12 + ln
+raw = zlib.decompress(idat); stride = w * 3
+def paeth(a, b, c):
+    p = a+b-c; pa, pb, pc = abs(p-a), abs(p-b), abs(p-c)
+    return a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+prev = bytearray(stride); yellow = black = other = 0
+for y in range(h):
+    f = raw[y*(stride+1)]
+    line = bytearray(raw[y*(stride+1)+1:y*(stride+1)+1+stride])
+    if f == 1:
+        for i in range(3, stride): line[i] = (line[i]+line[i-3]) & 255
+    elif f == 2:
+        for i in range(stride): line[i] = (line[i]+prev[i]) & 255
+    elif f == 3:
+        for i in range(stride): line[i] = (line[i]+((line[i-3] if i >= 3 else 0)+prev[i])//2) & 255
+    elif f == 4:
+        for i in range(stride): line[i] = (line[i]+paeth(line[i-3] if i >= 3 else 0, prev[i], prev[i-3] if i >= 3 else 0)) & 255
+    prev = line
+    for x in range(w):
+        r, g, b = line[x*3], line[x*3+1], line[x*3+2]
+        if r - b > 40: yellow += 1        # the battery and its edge blends
+        elif r + g + b <= 150: black += 1 # the black background (and its blends)
+        else: other += 1                  # white/grey must not survive
+assert yellow > 1000 and black > yellow and other == 0, \
+    'yellow=%d black=%d other=%d' % (yellow, black, other)
+PYICON
+check "the launcher icon is the old one, whole background black" $?
+[ ! -e "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" ] && \
+  [ ! -e "$REPO/app/res/drawable/ic_launcher_fg.xml" ]
+check "and the v3.7.3 redraw is gone - the PNG is the icon again" $?
 if grep -q "btn_recents" "$REPO/app/res/layout/activity_setup.xml" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"; then
   bad "and the app carries no recents button (the user's launcher has its own)"
 else

@@ -734,8 +734,13 @@ do_allow() {
       && mv -f "$STATE/blocked_by_us.tsv.tmp" "$STATE/blocked_by_us.tsv" 2>/dev/null
     log "allow $_p: it is in the six slots, so it is no longer blocked"
   done
-  # Block what was taken out of the slots, if the phone is idle right now.
-  if [ -f "$ACTIVE" ] && [ "$(screen_state)" = "off" ]; then
+  # Block what was taken out of the slots, right now - screen on or off. The
+  # old gate waited for the screen to go dark, and the owner caught the gap
+  # live: swapping an app while using the phone left the removed one usable
+  # next to the added one, which is exactly backwards for a mode that is on.
+  # An app outside the six slots is subject to the mode the moment it leaves
+  # them; blocking what is outside the slots is what the mode IS.
+  if [ -f "$ACTIVE" ]; then
     apply_block_other_apps
     _blocked=1
   fi

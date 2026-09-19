@@ -724,6 +724,37 @@ screen_state() { # screen_state - prints on|off
   printf '%s' "$SCREEN_STATE"
 }
 
+# ------------------------------------------------------- suspend, without root
+# Suspends an app through the shell uid (2000), not as root.
+#
+# PackageManager records WHICH package suspended an app, and for a root caller
+# that name is literally "root" - which is not a package. Android's own
+# suspended-app dialog reports the interaction against that name the moment any
+# of its buttons is pressed, and system_server dies with
+# "IllegalArgumentException: Package root does not exist!" - the crash the
+# owner's Logfox shows as "Android:ui" every time he taps through the dialog.
+# The shell uid may suspend (com.android.shell holds android.permission.
+# SUSPEND_APPS) and is a real package, so the dialog has something real to
+# point at and no crash.
+#
+# `su 2000 -c` is probed once, and the answer is kept in a state file: the
+# callers run one subshell per app, and the probe costs a su round trip. If
+# the demotion ever fails, the plain root suspend still runs - the mode must
+# never lose the suspension itself over the nicer name.
+suspend_app() { # suspend_app <package>
+  _d="$SPSM_DIR/.tmp"
+  mkdir -p "$_d" 2>/dev/null
+  _sf="$_d/su2000"
+  [ -f "$_sf" ] || {
+    if su 2000 -c true >/dev/null 2>&1; then printf '1\n' > "$_sf"; else printf '0\n' > "$_sf"; fi
+  }
+  if [ "$(cat "$_sf" 2>/dev/null)" = 1 ] \
+     && su 2000 -c "pm suspend --user 0 $1" >/dev/null 2>&1; then
+    return 0
+  fi
+  pm suspend --user 0 "$1" >/dev/null 2>&1 || pm suspend "$1" >/dev/null 2>&1
+}
+
 # ------------------------------------------------------------------ home role
 home_holder() {
   h=$(cmd role get-role-holders android.app.role.HOME 2>/dev/null | head -1)

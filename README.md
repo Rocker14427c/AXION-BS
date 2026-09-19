@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.3**.
+Current module: **v3.7.4**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,31 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.4 — your icons back; the slot-swap bug; the dialog crash
+
+* **The app icon is the previous one, recoloured** — the same yellow battery,
+  with the whole background black instead of white. Not redrawn: the original
+  art, one background colour changed.
+* **The tile is the previous battery, stretched** — the cut-out S battery now
+  spans the full width of the tile canvas (+8.6%; the asked-for +10% would
+  have clipped the terminal off the canvas). The system still tints it while
+  the mode is on, exactly like Wi-Fi and Bluetooth.
+* **Six-slot swap fixed.** `do_allow` re-blocked a removed app only when the
+  screen was **off** — so swapping an app while using the phone left the
+  removed one usable alongside the added one. The re-block now runs as soon
+  as the slot changes, whatever the screen is doing.
+* **The suspended-app dialog crash fixed at the source.** Android records the
+  suspending package; we suspended as root, so the record said `root` — and
+  `SuspendedAppActivity` reports the interaction against that name, which
+  threw `IllegalArgumentException: Package root does not exist!` inside
+  `system_server` (the `android:ui` crash in the owner's Logfox). Apps are
+  now suspended through the shell uid (which holds `SUSPEND_APPS`), so the
+  record says `com.android.shell`. Verified against AOSP
+  `UsageStatsService.reportUserInteractionInnerHelper` and
+  `packages/Shell/AndroidManifest.xml`.
+
+Full harness: **543 checks, 0 failed.**
 
 ## What changed in 3.7.3 — polish, in the places pointed at
 

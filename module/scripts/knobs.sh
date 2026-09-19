@@ -1258,8 +1258,10 @@ snapshot_freeze_google() {
 }
 apply_freeze_google() {
   # Together: these are the slowest single calls on the phone.
+  # suspend_app, not a bare pm suspend: as root the suspender is recorded as
+  # "root", and the system's suspended-app dialog crashes on that name.
   for _p in $(google_packages); do
-    ( pm suspend "$_p" >/dev/null 2>&1
+    ( suspend_app "$_p"
       am force-stop "$_p" >/dev/null 2>&1 ) &
   done
   wait
@@ -1414,7 +1416,7 @@ apply_block_other_apps() {
       else
         dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && exit 0
       fi
-      if pm suspend --user 0 "$_p" >/dev/null 2>&1 || pm suspend "$_p" >/dev/null 2>&1; then
+      if suspend_app "$_p"; then
         am force-stop "$_p" >/dev/null 2>&1
         printf '%s\n' "$_p" >> "$_r"
       fi

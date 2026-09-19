@@ -23,24 +23,25 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.7.3)
-- SMALL THINGS, IN THE PLACES YOU POINTED AT. The recents icon now sits on
-  this mode's home right beside the pencil, top-right. The tile's battery is
-  the battery-saver shape - wide, twice as wide as tall, like the ROM's own -
-  and the colour you see while the mode is on is the system's own tile tint,
-  the same way Wi-Fi and Bluetooth are painted.
-- A NEW LAUNCHER ICON. The white square with the yellow battery is gone. The
-  app is now its own icon: a dark rounded square, a tall green battery - the
-  mode's own green - with the S on it, shaped by the phone into whatever
-  launcher mask you use, and it even follows the system's themed-icon setting.
-- ONE MORE TILE HARDENING, from the audit: if one state read ever fails (a
-  slow su, a busy second), the tile now leaves itself as it is instead of
-  repainting a mode that is ON as if it were off. You should never see the
-  tile lie.
-- The audit also removed the last dead line of the watcher era and re-asserted
-  the two orders that matter on the way in (blocking before the sweep, home
-  before navigation). The exit you measured at 16s is untouched.
-- The full test rig passes 539 checks, 0 failed.
+NEW IN THIS BUILD (v3.7.4)
+- YOUR ICONS ARE BACK, as you asked. The app icon is the previous one - the
+  yellow battery - with the WHOLE background black now, not white (and no
+  square behind it). The Quick Settings tile is the previous battery too,
+  stretched wider: it now spans the full width of the tile. A true 10 percent
+  wider would have pushed the battery tip off the tile's canvas and clipped
+  it, so it is everything the tile can hold - about 9 percent.
+- FIXED: the six-slot swap. Taking an app out of the slots now blocks it
+  again immediately - screen on or off, exactly like the mode's other
+  changes. The removed app and the added app can never both be usable at the
+  same time again. (You caught the old code waiting for the screen to go
+  dark before re-blocking - while you were holding the phone.)
+- FIXED: the "something crashed" message when you tap a suspended app's
+  dialog. Android records WHO suspended an app; we suspended as root, and
+  the dialog crashed reporting the interaction for a "package" called root -
+  the crash your Logfox shows as Android:ui. Apps are now suspended as the
+  shell identity, which Android accepts as a real package. Same
+  suspensions, same speed - the crash is gone at the source.
+- The full test rig passes 543 checks, 0 failed.
 
 FROM v3.7.1
 - The tile arrived: a real switch (tap = enter/exit in place, long-press =
@@ -211,7 +212,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.3-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.4-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

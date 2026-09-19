@@ -179,7 +179,7 @@ cp -f "$OUT/AxionSPSM.apk" "$ROOT/module/system/app/AxionSPSM/AxionSPSM.apk"
 # So the STAGED file is read back and every resource file in app/res must be
 # in it - layouts, drawables, everything. One missing file fails the build.
 python3 - "$OUT/AxionSPSM.apk" "$APP/res" <<'PYGUARD'
-import os, sys, zipfile
+import os, re, sys, zipfile
 apk, res = sys.argv[1], sys.argv[2]
 z = zipfile.ZipFile(apk)
 names = set(z.namelist())
@@ -194,7 +194,10 @@ for root, _dirs, files in os.walk(res):
         p = os.path.join(root, f)
         rel = os.path.relpath(p, res)
         arc = "res/" + rel
-        if arc not in names:
+        # aapt2 auto-versions bitmap configs (-v4) so they can sit beside an
+        # anydpi-v26 XML; accept either name.
+        alt = re.sub(r"^res/([^/]+)/", r"res/\1-v4/", arc)
+        if arc not in names and alt not in names:
             missing.append(arc)
 if missing:
     print("STALE APK: %d resource file(s) missing:" % len(missing), file=sys.stderr)
