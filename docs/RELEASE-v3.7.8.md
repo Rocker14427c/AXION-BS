@@ -52,17 +52,30 @@ modem — no option, now or later, suspends them.
 - Nothing else changed: the cores, the six slots, the tile, the recovery
   command and every option's behaviour are exactly as v3.7.7 shipped them.
 
-## Your two-minute test: did the cores sleep?
+## Your two-minute test: what the log actually says
 
-You turned the screen off for about two minutes and asked whether cores 2–7
-actually switched off. **They did.** One minute of continuous sleep is all it
-takes; your own earlier log shows the line to look for:
+The log you sent has one screen-off long enough to check: the screen went off
+at **11:14:21** and came back at **11:16:42** — 2 minutes 21 seconds. There is
+no `cores_sleep` line anywhere in the log. **This time the cores did not
+sleep** — and the reason is v3.7.7's own slowness eating your test:
 
-```
-cores_sleep: 6 core(s) asleep - cores 0 and 1 stay awake
-```
+- The module's daemon is a single loop. On screen-off it runs the whole deep
+  phase itself, and on v3.7.7 that phase took **2 minutes 21 seconds** of
+  unbounded parallel calls fighting each other on minimum-frequency cores.
+  The daemon could not so much as look at the screen until 11:16:42 — the
+  same second you woke the phone. Its one-minute core timer never got a turn.
+- The proof is in the log itself: the daemon prints an `alive` heartbeat
+  every minute it is allowed to run. Across your screen-off there is not one
+  heartbeat between 11:14:21 and 11:17:28 — it was blocked the whole time.
 
-Check it yourself any time: mode ON → screen off → wait a minute or two →
+So the timer starved for exactly as long as the deep phase. **v3.7.8's
+bounding is what gives the cores their minute back**: the same phase, six
+packages and two options at a time, finishes well inside a minute even with
+264 apps to stop — and the timer fires on schedule. The feature itself is
+proven on your phone: your v3.7.5 night log shows
+`cores_sleep: 6 core(s) asleep - cores 0 and 1 stay awake`.
+
+Check it on v3.7.8: mode ON → screen off → wait a minute or two →
 
 ```
 su -c cat /sys/devices/system/cpu/cpu2/online

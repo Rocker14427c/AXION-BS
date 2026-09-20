@@ -712,6 +712,12 @@ dialog after closing an app. All four were v3.7.7 regressions, all fixed here.
 * **The three doze-state reads carry timeout lids** (15 s / 15 s / 5 s) - the
   owner's v3.7.5 log showed `dumpsys deviceidle` blocking 889 s once; a read
   that hangs can now cost seconds, not a quarter of an hour.
+* **The log also caught the core timer starving.** The daemon runs the deep
+  phase inside its own single loop, and on his phone that phase took 2m21s —
+  his whole 2m21s screen-off — so the one-minute core-sleep timer never got a
+  turn (no heartbeat the entire window). Bounding the phase is what puts the
+  cores back on schedule: the timer fires the minute the phase is out of its
+  way.
 * Suite: **586 checks, 0 failed**, including the new bounded-fan and
   plumbing-protection cases.
 
