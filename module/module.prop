@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.9
-versionCode=67
+version=v3.7.10
+versionCode=68
 author=Axion SPSM
-description=v3.7.9: a bug-hunt and polish round. The background memory sweep runs its full pass once per session instead of re-stopping every suspended app on each screen-off; runtime resource overlays are never suspended or restricted by the system-app widening; the exit log says what it actually releases. Every option's title and description is rewritten in plain language, and the launcher icon is redrawn at launcher size instead of filling its tile. Suite: 594 checks, 0 failed.
+description=v3.7.10: the second bug-hunt round. The recovery command (six-restore) unsuspends six packages at a time instead of one by one - 264 packages were minutes of waiting in the worst moment - runs under the lock so it can never fight a running transition, and says plainly what recovery means while the mode is still on. The options screen now toasts each option's name, never its internal id. Suite: 600 checks, 0 failed.

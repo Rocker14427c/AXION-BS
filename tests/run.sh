@@ -3763,6 +3763,34 @@ run_engine deactivate >/dev/null 2>&1
 [ ! -e "$WORK/stub/pkg/android.axion_auto_generated_rro_product__.suspended" ]
 check "and the exit has nothing of theirs to free" $?
 
+say "85. recovery: bounded, under the lock, and honest while the mode is on"
+# The recovery command unsuspended the record ONE package at a time - 264 of
+# them on the owner's phone, minutes of pm calls in the exact moment recovery
+# is needed (and the boot heal in service.sh waited on the same queue). It
+# also ran with no lock and no warning while the mode was on, quietly
+# fighting the session's own journal.
+sed -n '/^do_six_restore()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/sr85"
+grep -q "lock_acquire" "$WORK/sr85"
+check "the recovery command runs under the lock" $?
+grep -q "wait; _c=0" "$WORK/sr85"
+check "and unsuspends six packages at a time, not 264 one by one" $?
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "the session has something suspended to recover from" $?
+run_engine six-restore > "$WORK/out.s85" 2>&1
+grep -q "^released=" "$WORK/out.s85"
+check "it still answers with what it freed" $?
+grep -q "the mode is on - its next transition will re-apply its choices" "$WORK/spsm/spsm.log"
+check "and says what recovery means while the mode is on" $?
+[ ! -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "and the suspended app really is freed" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "the exit after a recovery leaves the phone clean" $?
+
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" = "0" ] || exit 1

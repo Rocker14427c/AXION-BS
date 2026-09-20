@@ -1,7 +1,7 @@
 # Release artifacts
 
 The file to flash is the one matching the newest release:
-**`Axion-SPSM-v3.7.9-RMX3430.zip`**
+**`Axion-SPSM-v3.7.10-RMX3430.zip`**
 
 `tools/makezip.sh` writes it here, taking the version from `module/module.prop`,
 so the file name, the zip's `module.prop` and the app's version stamp cannot
@@ -9,7 +9,8 @@ disagree.
 
 | file | release |
 |---|---|
-| `Axion-SPSM-v3.7.9-RMX3430.zip` | [v3.7.9](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.7.9) — current |
+| `Axion-SPSM-v3.7.10-RMX3430.zip` | [v3.7.10](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.7.10) — current |
+| `Axion-SPSM-v3.7.9-RMX3430.zip` | [v3.7.9](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.7.9) — superseded |
 | `Axion-SPSM-v3.7.8-RMX3430.zip` | [v3.7.8](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.7.8) — superseded |
 | `Axion-SPSM-v3.7.7-RMX3430.zip` | [v3.7.7](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.7.7) — unbounded parallel load spike; superseded |
 | `Axion-SPSM-v3.7.6-RMX3430.zip` | [v3.7.6](https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.7.6) — superseded |

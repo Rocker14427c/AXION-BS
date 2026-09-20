@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.9**.
+Current module: **v3.7.10**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,30 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.10 — the second hunt: recovery that drags, recovery that fights, toasts in code
+
+The second full bug-hunt pass, over the surfaces the first round did not
+open: the recovery command, the boot heal and the app.
+
+* **Recovery dragged.** `engine.sh six-restore` - the command every doc
+  tells you to run when something looks wrong - unsuspended the record ONE
+  package at a time. On his phone that record held 264 packages: minutes of
+  sequential `pm` calls in the exact moment things are already wrong (and
+  the boot heal in `service.sh` sat on the same queue). It now unsuspends
+  **six packages at a time**, like every other per-package fan.
+* **Recovery could fight a live transition.** It took no lock: run while a
+  screen-off was mid-flight, it mutated the same suspensions the transition
+  was writing, and the journal and the phone disagreed afterwards. It now
+  runs under the lock (twenty seconds of waiting built in), says `busy`
+  rather than lying if a transition holds the lock, and - when the mode is
+  still on - logs plainly that the next transition will re-apply the mode's
+  choices. Recovery always works; now it also tells the truth.
+* **The options screen spoke in code.** Toggling an option toasted its
+  internal id ("wifi_off enabled"). It now toasts the option's own name
+  ("Wi-Fi off enabled"), straight from the same list the scripts publish.
+* Suite: **600 checks, 0 failed**, including the recovery case: bounded,
+  locked, answers with what it freed, and honest while the mode is on.
 
 ## What changed in 3.7.9 — the bug hunt; the option list rewritten like a stock mode
 

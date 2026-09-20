@@ -31,6 +31,8 @@ public class KnobsActivity extends Activity {
     private TextView status;
     private final Map<String, Switch> switches = new LinkedHashMap<>();
     private final Map<String, Boolean> original = new HashMap<>();
+    /** knob id -> the human label from knobs.list, so toasts speak the option's name. */
+    private final Map<String, String> labels = new HashMap<>();
     /** knob id -> "works"/"inert"/"partial"/"unknown", from the last probe. */
     private final Map<String, String> verdicts = new HashMap<>();
 
@@ -51,6 +53,7 @@ public class KnobsActivity extends Activity {
         list.removeAllViews();
         switches.clear();
         original.clear();
+        labels.clear();
 
         new Thread(() -> {
             // Regenerate from the scripts first, so the list always matches the
@@ -134,6 +137,7 @@ public class KnobsActivity extends Activity {
 
                 label.setText(f[2]);
                 desc.setText(f[3]);
+                labels.put(id, f[2]);
 
                 StringBuilder b = new StringBuilder();
                 // What this option did the last time it was tried on this phone -
@@ -287,7 +291,11 @@ public class KnobsActivity extends Activity {
                 sw.setEnabled(true);
                 original.put(id, on);
                 boolean live = Root.isActive();
-                String msg = getString(on ? R.string.knob_on : R.string.knob_off, id);
+                // The option's own name, never the internal id: "Wi-Fi off
+                // enabled", not "wifi_off enabled".
+                String name = labels.get(id);
+                if (name == null) name = id;
+                String msg = getString(on ? R.string.knob_on : R.string.knob_off, name);
                 if (!live && !on) msg = getString(R.string.knob_saved_off);
                 Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
                 if (res != null && res.toLowerCase().contains("unknown knob")) {

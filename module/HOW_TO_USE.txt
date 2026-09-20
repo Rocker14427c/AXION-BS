@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.9.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.10.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -47,6 +47,15 @@ NEW IN THIS BUILD (v3.7.7)
   clean ROM leave it off. "Restrict the ROM's background services" was already
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
+
+FROM v3.7.10
+- RECOVERY IS FAST NOW. su -c sh /data/adb/spsm/scripts/engine.sh six-restore
+  used to free 264 apps one by one - minutes. It now frees six at a time,
+  waits its turn if a change is mid-flight, and says so in the log if the
+  mode is still on (its next change would re-apply its choices).
+- The options screen names what you toggled ("Wi-Fi off enabled"), not the
+  option's internal id.
+- The full test rig passes 600 checks, 0 failed.
 
 FROM v3.7.9
 - BUG-HUNT FIXES. The memory sweep stops every suspended app once per

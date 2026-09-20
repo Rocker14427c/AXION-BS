@@ -847,15 +847,44 @@ do_allow() {
 # Releases everything in the six slots and everything our record still names,
 # however the session that suspended them ended.
 do_six_restore() {
+  # Under the lock: recovery mutates the same suspensions a transition may be
+  # writing at this moment. If a transition is in flight, say so instead of
+  # fighting it - twenty seconds of waiting is built in, and a recovery that
+  # lost the race would report freedom the session is about to take back.
+  if ! lock_acquire; then
+    echo "busy"
+    log "six-restore: a transition is running - try again once it settles"
+    return 1
+  fi
+  # Six at a time, like every other per-package fan: the owner's record held
+  # 264 packages, and one-by-one that was minutes of pm calls in the exact
+  # moment recovery is needed - the boot heal in service.sh waited on it too.
   _n=0
+  _c=0
+  _r="$SPSM_DIR/.tmp/restore.$$"
+  mkdir -p "$SPSM_DIR/.tmp" 2>/dev/null
+  : > "$_r"
   for _p in $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null) \
             $(cat "$STATE/blocked_by_us.tsv" 2>/dev/null); do
     [ -n "$_p" ] || continue
-    unsuspend_app "$_p" && _n=$((_n + 1))
+    ( unsuspend_app "$_p" >/dev/null 2>&1 && echo x >> "$_r" ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
+  wait
+  _n=$(wc -l < "$_r" 2>/dev/null | tr -d ' ')
+  [ -n "$_n" ] || _n=0
+  rm -f "$_r"
   rm -f "$STATE/blocked_by_us.tsv" 2>/dev/null
+  # The one honest caveat: with the mode still on, its next transition will
+  # re-apply its own choices. Recovery still works - it must - but the log
+  # says what comes next instead of leaving a mystery.
+  if [ -f "$ACTIVE" ]; then
+    log "six-restore: the mode is on - its next transition will re-apply its choices; switch the mode off to keep them freed"
+  fi
   echo "released=$_n"
   log "six-restore: $_n package(s) unsuspended (the six slots + our record)"
+  lock_release
 }
 
 # ------------------------------------------------------------------ probe
