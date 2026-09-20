@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.7
-versionCode=65
+version=v3.7.8
+versionCode=66
 author=Axion SPSM
-description=v3.7.3 polish from the owner's report: the recents icon sits beside the pencil on this mode's home, the tile battery is the battery-saver shape (wide, 2:1) and its colour is the system's own tint, the launcher icon is a proper adaptive icon (dark, green battery, S), and a failed tile read can never repaint the mode as off. Full audit round: a dead watcher-cleanup function removed, sweep/monitor ordering asserted.
+description=v3.7.8 fixes from the owner's v3.7.7 report: the parallel work is bounded (six packages at a time, two knobs at a time) so the load spike, the general slowness and the vanishing navigation bar are gone; Android's IPC plumbing (share resolver, permission controller, document picker, media provider) joined the never-suspend set, so "Restrict system apps too" can no longer break Share; the three doze state reads carry timeout lids. Suite: 586 checks, 0 failed.

@@ -249,6 +249,7 @@ phase_deep() { # apply|revert
   # knob, not the sum. The core sleep is NOT applied here at all: its delay
   # is the feature, and the daemon's timer fires it (engine.sh core-sleep).
   progress "Idle: applying the asleep options"
+  _c=0
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     knob_enabled "$_k" "$(knob_default "$_k")" || continue
@@ -266,6 +267,8 @@ phase_deep() { # apply|revert
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 2 ] && { wait; _c=0; }
   done
   wait
 }
@@ -280,6 +283,7 @@ phase_deep_revert() {
   # knobs are independent values; each reverts in its own subshell with its own
   # journal slice, and nothing here has an order (the CPU power mode, the one
   # knob the governor's revert depends on, went back before this was called).
+  _c=0
   for _k in $(knobs_reversed); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     ( KRV_TAG=$_k
@@ -288,6 +292,8 @@ phase_deep_revert() {
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 2 ] && { wait; _c=0; }
   done
   wait
 }
@@ -431,10 +437,13 @@ do_deactivate() {
   # parallel, every single time.
   if [ -s "$STATE/blocked_by_us.tsv" ]; then
     _freed=0
+    _c=0
     while read -r _p; do
       [ -n "$_p" ] || continue
       ( unsuspend_app "$_p" ) &
       _freed=$((_freed + 1))
+      _c=$((_c + 1))
+      [ "$_c" -ge 6 ] && { wait; _c=0; }
     done < "$STATE/blocked_by_us.tsv"
     wait
     rm -f "$STATE/blocked_by_us.tsv"
@@ -558,6 +567,12 @@ do_screen_on() {
   # them - "all the time is good enough", as the owner put it.
   rm -f "$STATE/cores_asleep"
   knob_revert cores_sleep
+  # The rest, TWO AT A TIME. Wide open, the wake once asked the phone for
+  # every pm/appops call it owed at the same instant - on CPUs the governor
+  # holds at minimum - and the owner watched the load average climb and the
+  # navigation bar disappear for seconds while SystemUI starved. Two at a
+  # time keeps the wake brisk and the phone alive.
+  _c=0
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     [ "$_k" = cores_sleep ] && continue
@@ -567,6 +582,8 @@ do_screen_on() {
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 2 ] && { wait; _c=0; }
   done
   wait
   # Only after every comparison is done, in case a knob did not come back.

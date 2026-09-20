@@ -370,6 +370,27 @@ governor_is_powersave() {
 }
 screen_on()  { echo 900 > "$ROOT/sys/class/leds/lcd-backlight/brightness"; echo on  > "$WORK/stub/screen"; }
 
+# Cases 7 and 9 drive the engine directly, one call after another - which is
+# also how the phone experiences it: the daemon is single-threaded, so its
+# minute timer can never fire while one of the daemon's own wake children is
+# still in flight. A daemon left running from activate WOULD manufacture that
+# race here: its first tick (screen still on, panel at the dim) spawns a wake
+# child that sits blocked on the lock for as long as the screen-off call
+# holds it, and then reverts the cores the instant the lock frees - an
+# interleaving no phone can produce. So the scenario runs without a live
+# daemon; the wake itself is still exercised, through the same do_screen_on
+# the daemon would have called.
+quiesce_daemon() {
+  [ -f "$WORK/spsm/daemon.pid" ] && kill "$(cat "$WORK/spsm/daemon.pid")" 2>/dev/null
+  pkill -f "$WORK/spsm/scripts/daemon.sh" 2>/dev/null
+  pkill -f "$WORK/spsm/scripts/engine.sh screen-" 2>/dev/null
+  i=0
+  while pgrep -f "$WORK/spsm/scripts/(daemon|engine)\.sh" >/dev/null 2>&1 && [ "$i" -lt 40 ]; do
+    sleep 0.25; i=$((i + 1))
+  done
+  rm -f "$WORK/spsm/daemon.pid"
+}
+
 enable_knobs() { # enable_knobs id...
   for k in "$@"; do echo "knob.$k=1" >> "$WORK/spsm/config"; done
 }
@@ -476,6 +497,7 @@ say "7. cores_sleep: cores 2-7 sleep when fired, 0-1 never do, wake brings all b
 make_tree; make_stubs; seed_stub_state
 enable_knobs cores_sleep
 run_engine activate >/dev/null 2>&1
+quiesce_daemon
 screen_off
 run_engine screen-off >/dev/null 2>&1
 for c in 2 3 4 5 6 7; do
@@ -484,8 +506,16 @@ done
 [ "$c" = 7 ]
 check "the screen-off transition does NOT sleep the cores - that is the timer's job" $?
 run_engine core-sleep >/dev/null 2>&1
-for c in 2 3 4 5 6 7; do
-  [ "$(cat "$ROOT/sys/devices/system/cpu/cpu$c/online")" = "0" ] || break
+# Bounded wait: on a loaded box the engine process can return a breath before
+# the last write is visible to the next read; the state itself is what is
+# being asserted, and five seconds is generous.
+i=0
+while [ $i -lt 20 ]; do
+  for c in 2 3 4 5 6 7; do
+    [ "$(cat "$ROOT/sys/devices/system/cpu/cpu$c/online")" = "0" ] || break
+  done
+  [ "$c" = 7 ] && break
+  sleep 0.25; i=$((i + 1))
 done
 [ "$c" = 7 ]
 check "after the minute: cores 2-7 are asleep" $?
@@ -516,9 +546,14 @@ say "9. a crash/reboot cannot leave the phone crippled"
 make_tree; make_stubs; seed_stub_state
 enable_knobs cores_sleep
 run_engine activate >/dev/null 2>&1
+quiesce_daemon
 screen_off
 run_engine screen-off >/dev/null 2>&1
 run_engine core-sleep >/dev/null 2>&1
+i=0
+while [ $i -lt 20 ] && [ "$(cat "$ROOT/sys/devices/system/cpu/cpu6/online")" != "0" ]; do
+  sleep 0.25; i=$((i + 1))
+done
 [ "$(cat "$ROOT/sys/devices/system/cpu/cpu6/online")" = "0" ]; check "a core is asleep before the crash" $?
 # Simulate a power loss with SPSM on: journal present, marker present.
 run_shell "$WORK/spsm/scripts/lib.sh" >/dev/null 2>&1
@@ -3645,6 +3680,47 @@ check "and the exit frees it again" $?
 #     out per knob with the per-knob journal tag, exactly like the session.
 grep -q "Idle: applying the asleep options" "$REPO/module/scripts/engine.sh"
 check "the deep apply says what it is while the fan runs" $?
+
+say "83. the phone breathes: bounded fans, and the plumbing is sacred"
+# The owner's v3.7.7 report: everything slow, the load average climbing, the
+# navigation bar gone for 7-8 seconds at a time, and "intent resolver isn't
+# available - suspended". Two causes, both fixed here.
+# 1 - unbounded fans: the deep phase, the wake, the exit and every per-package
+#     loop once asked the phone for ALL of its pm/appops calls in the same
+#     instant, on CPUs the governor holds at minimum. Everything is bounded
+#     now: six packages at a time in the loops, two knobs at a time in the
+#     phase fans.
+[ "$(grep -c "wait; _c=0" "$REPO/module/scripts/knobs.sh")" -ge 6 ]
+check "every per-package loop runs six at a time, not a hundred" $?
+[ "$(grep -c "wait; _c=0" "$REPO/module/scripts/engine.sh")" -ge 4 ]
+check "and the phase fans and exit sweep are bounded too" $?
+grep -q "timeout 15 dumpsys deviceidle" "$REPO/module/scripts/knobs.sh"
+check "the doze snapshot can never again block for 889 seconds" $?
+# 2 - the widening suspended Android's own plumbing. The share/intent
+#     resolver, the permission controller, the documents UI and the media
+#     provider are in ESSENTIALS now, ahead of any switch.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps app_restrict block_system_apps
+printf 'com.oem.junk\ncom.android.intentresolver\ncom.android.permissioncontroller\n' >> "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.oem.junk.suspended" ]
+check "with the widening on, the OEM junk is still stopped" $?
+[ ! -e "$WORK/stub/pkg/com.android.intentresolver.suspended" ]
+check "but the intent resolver is never suspended (the v3.7.7 dialog bug)" $?
+[ ! -e "$WORK/stub/pkg/com.android.permissioncontroller.suspended" ]
+check "nor the permission controller" $?
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(cat "$WORK/stub/bucket/com.oem.junk" 2>/dev/null)" = "restricted" ]
+check "the junk\'s background work is restricted while asleep" $?
+[ "$(cat "$WORK/stub/bucket/com.android.intentresolver" 2>/dev/null)" != "restricted" ]
+check "and the resolver\'s is not touched" $?
+screen_on
+run_engine screen-on >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.oem.junk.suspended" ]
+check "and the exit still frees everything it stopped" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

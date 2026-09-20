@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.7**.
+Current module: **v3.7.8**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,39 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.8 — the parallelism bounded; the phone's plumbing untouchable
+
+The owner's v3.7.7 report: everything slow, apply and exit slower than before,
+Franco showing a high average load, the three-button navigation bar vanishing
+for 7-8 seconds at a time, and a "intent resolver isn't available / suspended"
+dialog after closing an app. All four were v3.7.7 regressions, all fixed here.
+
+* **Unbounded parallelism was the load spike.** v3.7.7 made the per-package
+  loops and the phase fans parallel and left them wide open: on the wake, on
+  every screen-off and on exit, dozens of `pm`/`cmd` subshells ran at the same
+  instant - on CPUs the power-save governor holds at minimum frequency. The
+  run queue spiked, SystemUI starved (the navigation bar is SystemUI drawing;
+  7-8 s without it is SystemUI not scheduled), and every call in the crowd
+  finished later than it would have alone. Now every fan is bounded:
+  **six packages at a time** in the per-app loops (apply, restore, ROM
+  background, block-others both ways, the sweep) and **two knobs at a time**
+  in the engine phase fans (wake, deep apply, deep release), the wake still
+  restoring the cores first. Concurrency with a ceiling, not a stampede.
+* **The intentresolver dialog could not have happened to a more central
+  app.** With "Restrict system apps too" on, the widening path
+  (`pm list packages -s`) suspended `com.android.intentresolver` - the share
+  resolver every "Share" button in every app routes through - and Android
+  answered with the suspended-app dialog. The resolver, the permission
+  controller, the document picker and the media provider now sit in the
+  never-touch ESSENTIALS set beside the dialer, SMS, emergency, keyboard,
+  launcher and modem, and no option can suspend them. The option is safe to
+  leave on; on a clean ROM it is still fine to leave off.
+* **The three doze-state reads carry timeout lids** (15 s / 15 s / 5 s) - the
+  owner's v3.7.5 log showed `dumpsys deviceidle` blocking 889 s once; a read
+  that hangs can now cost seconds, not a quarter of an hour.
+* Suite: **586 checks, 0 failed**, including the new bounded-fan and
+  plumbing-protection cases.
 
 ## What changed in 3.7.7 — the timer that cannot be made to wait; universal by construction
 

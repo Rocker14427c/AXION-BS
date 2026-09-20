@@ -1062,6 +1062,7 @@ apply_app_restrict() {
   : > "$_r"
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   managed_packages > "$_d/restrict.pkgs.$$" 2>/dev/null
+  _c=0
   while read -r _pkg; do
     [ -n "$_pkg" ] || continue
     case "$_known" in
@@ -1085,6 +1086,14 @@ apply_app_restrict() {
           [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
         ) & ;;
     esac
+    # Bounded, six at a time. Unbounded, this loop once put a hundred pm/cmd
+    # calls on the phone IN THE SAME INSTANT - on CPUs the power-save governor
+    # holds at minimum - and the load average went through the roof: the
+    # owner's v3.7.7 report (everything slow, SystemUI starving, the
+    # navigation bar gone for seconds at a time). Six at a time is nearly as
+    # fast in wall time and lets the phone breathe.
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_d/restrict.pkgs.$$"
   wait
   rm -f "$_d/restrict.pkgs.$$"
@@ -1107,6 +1116,7 @@ restore_app_restrict() {
   # dozen apps, and it is the same work the apply already does together. The
   # reads and the writes for one app stay in order; the apps themselves do not
   # wait for each other.
+  _c=0
   while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
     (
@@ -1122,6 +1132,8 @@ restore_app_restrict() {
         [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
       fi
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_list"
   wait
   # The idle period is over: the next one starts from whatever the phone looks
@@ -1213,7 +1225,10 @@ snapshot_deep_doze() {
   # look broken: as soon as we let go, the state machine steps and the old value
   # never matches again. If a dump has no force flag, say so rather than record
   # something that will not hold.
-  _f=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+  # timeout, not faith: this exact read once blocked for 889 SECONDS while
+  # the phone was forced idle (the v3.7.5 log) - a snapshot must never wait
+  # on the state it is measuring.
+  _f=$(timeout 15 dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
   printf 'deviceidle-force\t%s\n' "${_f:-unknown}"
 }
 apply_deep_doze() {
@@ -1227,7 +1242,7 @@ apply_deep_doze() {
   ( has dumpsys && timeout 30 dumpsys deviceidle force-idle deep >/dev/null 2>&1 ) &
   _i=0
   while [ "$_i" -lt 6 ]; do
-    _f=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+    _f=$(timeout 5 dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
     [ "$_f" = true ] && { log "deep sleep: the phone has been told to go idle now"; return 0; }
     _i=$((_i + 1))
     sleep 0.5 2>/dev/null || sleep 1
@@ -1236,7 +1251,7 @@ apply_deep_doze() {
   return 0
 }
 note_deep_doze() {
-  _f=$(dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+  _f=$(timeout 15 dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
   case "$_f" in
     true) printf 'the phone is going idle now\n' ;;
     false) printf 'the phone was asked to go idle; it has not gone yet (it goes when it can)\n' ;;
@@ -1322,6 +1337,7 @@ apply_block_other_apps() {
     _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
   rm -f "$_suspf"
+  _c=0
   for _p in $(blockable_packages); do
     [ -n "$_p" ] || continue
     (
@@ -1337,6 +1353,8 @@ apply_block_other_apps() {
         printf '%s\n' "$_p" >> "$_r"
       fi
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
   # One writer, in a stable order, as before.
@@ -1355,9 +1373,12 @@ restore_block_other_apps() {
   # the v3.7.5 log shows what that cost - an exit that skipped every release
   # and left the apps suspended through a re-flash and a reboot. Our record
   # is the authorisation; unsuspend_app is idempotent.
+  _c=0
   while read -r _p; do
     [ -n "$_p" ] || continue
     ( unsuspend_app "$_p" ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$BLOCKED_BY_US"
   wait
   rm -f "$BLOCKED_BY_US"
@@ -1660,6 +1681,7 @@ sweep_background() { # sweep_background <why>
     :
   fi
   if [ -f "$BLOCKED_BY_US" ]; then
+    _c=0
     while read -r _p; do
       [ -n "$_p" ] || continue
       _n=$((_n + 1))
@@ -1669,6 +1691,8 @@ sweep_background() { # sweep_background <why>
         # phone it is idle is a statement of fact.
         am make-uid-idle "$_p" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_p" >/dev/null 2>&1
       ) &
+      _c=$((_c + 1))
+      [ "$_c" -ge 6 ] && { wait; _c=0; }
     done < "$BLOCKED_BY_US"
     wait
   fi
@@ -1762,6 +1786,7 @@ apply_rom_bg_off() {
   _names=$(tr '\n' ' ' < "$_pkgfile" 2>/dev/null)
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   _n=0
+  _c=0
   while read -r _pkg; do
     [ -n "$_pkg" ] || continue
     _n=$((_n + 1))
@@ -1788,6 +1813,8 @@ apply_rom_bg_off() {
           am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
         ) & ;;
     esac
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_pkgfile"
   wait
   rm -f "$_pkgfile"
@@ -1806,6 +1833,7 @@ apply_rom_bg_off() {
 restore_rom_bg_off() {
   _list="$ORIG_DIR/rom_bg.tsv"
   [ -f "$_list" ] || return 0
+  _c=0
   while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
     (
@@ -1821,6 +1849,8 @@ restore_rom_bg_off() {
         [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
       fi
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_list"
   wait
   rm -f "$_list"
@@ -2015,7 +2045,13 @@ suspended_packages() {
   [ "$_found" = 1 ]
 }
 
-ESSENTIALS="com.android.dialer com.android.server.telecom com.android.mms com.android.messaging com.google.android.apps.messaging com.android.providers.telephony com.android.phone com.android.deskclock com.android.systemui com.android.settings dev.axion.spsm"
+# The last four are Android's own plumbing: the intent resolver (share and
+# "open with" dialogs - suspended, the phone answers every share with "intent
+# resolver isn't available"), the permission controller, the documents UI
+# (file picker) and the media provider. The owner's v3.7.7 report caught the
+# first of these: with "Restrict system apps too" on, suspending any of these
+# breaks EVERY app, not the junk. Never options, never suspendable here.
+ESSENTIALS="com.android.dialer com.android.server.telecom com.android.mms com.android.messaging com.google.android.apps.messaging com.android.providers.telephony com.android.phone com.android.deskclock com.android.systemui com.android.settings com.android.intentresolver com.android.permissioncontroller com.android.documentsui com.android.providers.media.module dev.axion.spsm"
 ROOT_APPS="com.topjohnwu.magisk me.weishu.kernelsu com.rifsxd.ksunext com.sukisu.ultra com.resukisu.resukisu me.resukisu.resukisu com.resukisu.manager com.dergoogler.mmrl com.franco.kernel eu.chainfire.supersu com.koushikdutta.superuser com.noshufou.android.su"
 
 # The packages that must keep working whatever the mode does: the essentials
@@ -2073,7 +2109,7 @@ blockable_packages() {
 # the suspension widening - one switch, one story: the phone's own apps are
 # left to their own work unless the owner asks otherwise.
 meta_block_system_apps() {
-  echo "Apps|Restrict system apps too|Also stops and restricts the phone's OWN preinstalled apps, not just installed ones - on a stock-OEM phone the preinstalled junk is usually a system app, so this is where the real saving is. On a clean ROM leave it off. Calls, SMS, the dialer, the keyboard, the launcher and the modem are never touched.|0|session|breaks-features,control"
+  echo "Apps|Restrict system apps too|Also stops and restricts the phone's OWN preinstalled apps, not just installed ones - on a stock-OEM phone the preinstalled junk is usually a system app, so this is where the real saving is. On a clean ROM leave it off. The phone's own plumbing is never touched: calls, SMS, the dialer, the keyboard, the launcher, the modem, the share/intent resolver, the permission controller, the file picker and the media provider.|0|session|breaks-features,control"
 }
 snapshot_block_system_apps() { :; }
 apply_block_system_apps() { :; }

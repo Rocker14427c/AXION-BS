@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.7.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.8.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -47,7 +47,24 @@ NEW IN THIS BUILD (v3.7.7)
   clean ROM leave it off. "Restrict the ROM's background work" was already
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
-- The full test rig passes 578 checks, 0 failed.
+
+FROM v3.7.8
+- THE PARALLEL WORK NOW HAS A CEILING. v3.7.7 ran the per-app work and the
+  wake/deep fans wide open - dozens of package-manager calls at the same
+  instant on cores held at minimum speed - and that was the load spike, the
+  general slowness and the navigation bar disappearing for whole seconds.
+  Now: six packages at a time, two options at a time, cores still first on
+  wake. Same speed in wall time, a fraction of the peak load.
+- ANDROID'S OWN PLUMBING CAN NO LONGER BE SUSPENDED. With "Restrict system
+  apps too" on, v3.7.7 could suspend the share resolver - the app every
+  "Share" button goes through - which is where the "intent resolver isn't
+  available" dialog came from. The resolver, the permission controller, the
+  document picker and the media provider are now in the never-touch set with
+  the dialer, SMS, emergency, keyboard, launcher and modem. The option is
+  safe to leave on; on a clean ROM it is still fine to leave off.
+- The doze-state reads carry timeout lids (15s/15s/5s), so a read that hangs
+  costs seconds, not the 889s one cost once in your log.
+- The full test rig passes 586 checks, 0 failed.
 
 FROM v3.7.1
 - The tile arrived: a real switch (tap = enter/exit in place, long-press =
