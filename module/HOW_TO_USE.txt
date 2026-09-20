@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.5.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.6.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -26,26 +26,34 @@ INSTALLING OVER AN OLDER VERSION
   a different version while the mode is on leaves one version's journal for
   another version to restore, which is what makes the exit log complain.
 
-NEW IN THIS BUILD (v3.7.5)
-- THE OPTIONS, REBUILT AROUND WHAT YOU ASKED. The GPU now stays at minimum
-  frequency the whole time the mode is on - screen on and off ("Graphics at
-  minimum, always"). The powersave governor now manages the CPU the whole time
-  the mode is on - screen on and off ("Power-save governor, always") - and it
-  is the ONLY thing that manages CPU speed: the 1100 MHz-style frequency
-  ceilings are removed, and so is the "Keep power limits while using the
-  phone" switch (it only existed to keep ceilings on; there are none now), and
-  the Low Power mode switch (it wrote a speed limit of its own, and it could
-  pin the governor).
-- NEW OPTION: "Sleep cores 2 to 7 after a minute" (on by default). One minute
-  after the screen goes off, cores 2-7 switch off; cores 0 and 1 stay awake.
-  Turn the screen on and every core is back before you can touch anything.
-  You asked for exactly this, and it is its own switch.
-- "Stop performance boosts" is unchanged: it stops the touch/scroll speed
-  spikes, while the screen is off.
-- Each option now says in one line what it holds down and WHEN - so the
-  Processor options read as: governor = the CPU, always; graphics = the GPU,
-  always; boosts = the touch reflex, while asleep; core sleep = six cores,
-  after a minute asleep.
+NEW IN THIS BUILD (v3.7.6)
+- THE SIX SLOTS, FIXED FOR GOOD - and this one was my fault, found in YOUR
+  log. v3.7.5 asked the phone "is this app really suspended?" before every
+  release, and your phone does not answer that question in the words the code
+  expected - so the app you ADDED stayed suspended, the app you REMOVED was
+  re-blocked, and the exit then said "changed externally" and skipped every
+  release it still owed you. That is also why nothing unsuspended them: the
+  re-flash and the reboot could not help, because Android KEEPS suspensions
+  across reboots and only an explicit unsuspend clears them.
+  Now: an app added to a slot is freed AT ONCE (no questions asked), an app
+  removed is blocked AT ONCE, and the exit releases the whole record FIRST,
+  before anything can skip it.
+- THE RECOVERY COMMAND, so you have it again: in Termux run
+      su -c sh /data/adb/spsm/scripts/engine.sh six-restore
+  It releases everything in the six slots and everything the record names,
+  at any time, on or off. It also runs by itself at boot if a dead session
+  ever leaves apps suspended (and the exit runs it every time now).
+- ONE APP, ONE SLOT: the picker refuses an app that is already in another
+  slot, and names the slot it is in.
+- THE CHECK BUTTON: it now shows which option it is on and how far it has
+  got, and every option is checked under a timeout - one slow option can
+  never again make the button look dead for 15 minutes (deep sleep once took
+  889 seconds).
+- THE ICON: the battery is still your original art - it now sits on TRUE
+  BLACK on every launcher, because it is an adaptive icon: your battery as
+  the foreground, pure black as the background. The white plate is gone for
+  good. Old launchers still get the black square.
+- The full test rig passes 565 checks, 0 failed.
 
 FROM v3.7.1
 - The tile arrived: a real switch (tap = enter/exit in place, long-press =
@@ -216,7 +224,7 @@ FROM v3.3.1
   launcher is never started to switch apps.
 
 INSTALL
-1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.5-RMX3430.zip
+1. ResukiSU -> Modules -> Install from storage -> Axion-SPSM-v3.7.6-RMX3430.zip
 2. Reboot.
 3. App drawer -> Super Power Saving
 4. ResukiSU Superuser -> Allow

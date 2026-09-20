@@ -44,16 +44,24 @@ if [ ! -f "$AJAR" ]; then
   fi
 fi
 if [ ! -f "$AJAR" ]; then
-  say "android.jar <- Sable/android-platforms (android-36)"
-  rm -rf "$WORK/plat"
-  git clone --depth 1 -q https://github.com/Sable/android-platforms "$WORK/plat"
-  if [ -f "$WORK/plat/android-36/android.jar" ]; then
-    cp "$WORK/plat/android-36/android.jar" "$AJAR"
-  elif [ -f "$WORK/plat/android-35/android.jar" ]; then
-    warn "android-36 unavailable, falling back to android-35"
-    cp "$WORK/plat/android-35/android.jar" "$AJAR"
+  # Sable/android-platforms, the old source, is gone from GitHub. The same
+  # npm package that supplies d8/apksigner/ecj ships the platform jar.
+  say "android.jar <- npm @drxiaozhi/minapk (platform stubs)"
+  rm -rf "$WORK/minapk"
+  mkdir -p "$WORK/minapk"
+  _try=0
+  while [ "$_try" -lt 3 ]; do
+    ( cd "$WORK" && npm pack --silent @drxiaozhi/minapk >/dev/null 2>&1 ) && break
+    _try=$((_try + 1))
+    sleep 3
+  done
+  PKG="$(ls -t "$WORK"/drxiaozhi-minapk-*.tgz 2>/dev/null | head -1)"
+  [ -n "$PKG" ] || { warn "npm pack @drxiaozhi/minapk failed"; exit 1; }
+  tar xzf "$PKG" -C "$WORK/minapk"
+  if [ -f "$WORK/minapk/package/tools/android.jar" ]; then
+    cp "$WORK/minapk/package/tools/android.jar" "$AJAR"
   else
-    warn "no android.jar found in Sable/android-platforms"; exit 1
+    warn "android.jar missing from @drxiaozhi/minapk"; exit 1
   fi
 fi
 say "android.jar: $(du -h "$AJAR" | cut -f1)"

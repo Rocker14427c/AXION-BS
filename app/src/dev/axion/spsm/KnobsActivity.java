@@ -210,15 +210,40 @@ public class KnobsActivity extends Activity {
                 .show();
     }
 
+    private volatile boolean probing = false;
+
     private void doProbe() {
         runOnUiThread(() -> {
             findViewById(R.id.btn_check).setEnabled(false);
             status.setTextColor(0xFFFFC915);
             status.setText(R.string.knobs_probing);
         });
-        // One option per engine call would take minutes at this phone's speed;
-        // the whole set is one call, and each verdict is logged as it is found.
+        // A heartbeat for the wait. The whole check is ONE engine call that
+        // takes minutes at this phone's speed, and a static line for five
+        // minutes is what "the button does nothing" looks like from a chair.
+        // The engine names each option in its progress file as it starts it;
+        // this side thread reads that name through su and puts it up, with a
+        // running count of the verdicts already written.
+        probing = true;
+        final int[] lastCount = {0};
+        new Thread(() -> {
+            while (probing) {
+                String n = Root.exec("wc -l < " + Root.DIR + "/state/probe.tsv 2>/dev/null");
+                String p = Root.exec("cat " + Root.DIR + "/state/progress 2>/dev/null");
+                final int count = (n == null) ? 0 : parseIntOr(n.trim(), -1);
+                if (count > lastCount[0]) {
+                    lastCount[0] = count;
+                    runOnUiThread(() -> status.setText(
+                            getString(R.string.knobs_probing_n, String.valueOf(count))));
+                } else if (p != null && p.trim().startsWith("Checking:")) {
+                    final String label = p.trim();
+                    runOnUiThread(() -> status.setText(label));
+                }
+                try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
+            }
+        }).start();
         String out = Root.exec("sh " + Root.DIR + "/scripts/engine.sh probe 2>&1");
+        probing = false;
         runOnUiThread(() -> {
             findViewById(R.id.btn_check).setEnabled(true);
             if (out == null) {
@@ -228,6 +253,10 @@ public class KnobsActivity extends Activity {
             }
             load();
         });
+    }
+
+    private static int parseIntOr(String s, int def) {
+        try { return Integer.parseInt(s); } catch (NumberFormatException e) { return def; }
     }
 
     /** The totals line, turned into something readable. */

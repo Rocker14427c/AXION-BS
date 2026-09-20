@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.5**.
+Current module: **v3.7.6**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,36 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.6 — the six slots, fixed for good; the Check button; the icon on black
+
+The owner's v3.7.5 log caught what shipped: allow lines with no release
+behind them, an exit that answered "changed externally" about the six-slot
+record and skipped every release, and apps still suspended through a
+re-flash and a reboot (Android persists suspensions; only an unsuspend
+clears them). Root cause: the release path was gated on a `dumpsys` reading
+this phone does not produce in the expected words.
+
+* **The release path is gate-free now** — `unsuspend_app` (same shell
+  identity that suspended, pm unsuspend is idempotent). `do_allow` frees on
+  our record alone; the exit runs the whole-record release **first**, before
+  any verdict can skip it; `restore_block_other_apps` releases everything
+  with no questions.
+* **The journal is re-recorded after every allow pass**, so the exit always
+  compares against the world as it is now.
+* **`engine.sh six-restore`** — the recovery command (Termux:
+  `su -c sh /data/adb/spsm/scripts/engine.sh six-restore`); `service.sh`
+  also runs it at boot whenever the mode is off but a record survives.
+* **One app, one slot** — the picker refuses duplicates and names the slot;
+  the whitelist writer de-duplicates on its own.
+* **The Check button shows its progress** (current option + running count)
+  and every probe step runs under a 90-second lid, so one slow option can
+  never make the button look dead (deep sleep once took 889 s).
+* **The icon is adaptive now**: the owner's battery as the foreground, pure
+  black as the background — no launcher plate behind it; legacy launchers
+  keep the black-square PNG.
+
+Harness: **565 checks, 0 failed.**
 
 ## What changed in 3.7.5 — the options, rebuilt around what was asked
 

@@ -37,6 +37,16 @@ ENGINE="$SPSM_DIR/scripts/engine.sh"
 # Publish the knob list for the options screen.
 sh "$ENGINE" dump-knobs >> "$SPSM_DIR/spsm.log" 2>&1
 
+# --- release anything a dead session left suspended --------------------------
+# Android persists app suspensions across reboots, and only an explicit
+# unsuspend clears them. If the last session was killed before its exit ran,
+# this is the pass that frees the phone. Runs only when the mode is OFF (when
+# it is on, the six-slot record belongs to the live session).
+if [ ! -f "$SPSM_DIR/state/active" ] && [ -s "$SPSM_DIR/state/blocked_by_us.tsv" ]; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') service: releasing apps a dead session left suspended" >> "$SPSM_DIR/spsm.log"
+  sh "$ENGINE" six-restore >> "$SPSM_DIR/spsm.log" 2>&1
+fi
+
 # --- crash / reboot recovery -------------------------------------------------
 if [ -f "$SPSM_DIR/state/needs_restore" ] || { [ -d "$SPSM_DIR/journal" ] && [ -f "$SPSM_DIR/state/active" ]; }; then
   RESUME=$(sed -n 's/^resume_on_boot=//p' "$SPSM_DIR/config" 2>/dev/null | tail -1)

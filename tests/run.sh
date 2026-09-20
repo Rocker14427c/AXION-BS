@@ -2647,9 +2647,8 @@ assert yellow > 1000 and black > yellow and other == 0, \
     'yellow=%d black=%d other=%d' % (yellow, black, other)
 PYICON
 check "the launcher icon is the old one, whole background black" $?
-[ ! -e "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" ] && \
-  [ ! -e "$REPO/app/res/drawable/ic_launcher_fg.xml" ]
-check "and the v3.7.3 redraw is gone - the PNG is the icon again" $?
+# The icon question is settled by case 81 below: the battery on black, via
+# an adaptive icon, with the legacy PNG as fallback.
 if grep -q "btn_recents" "$REPO/app/res/layout/activity_setup.xml" "$REPO/app/src/dev/axion/spsm/SetupActivity.java"; then
   bad "and the app carries no recents button (the user's launcher has its own)"
 else
@@ -3486,6 +3485,93 @@ run_engine verify > "$WORK/out.v80c" 2>&1
 grep -q "drift=0" "$WORK/out.v80c"
 check "with a clean exit ($(cat "$WORK/out.v80c"))" $?
 
+
+say "81. the six slots: the owner's v3.7.5 report, fixed at every layer"
+# The v3.7.5 log: an allow line with no release behind it (the dumpsys gate
+# never matched this phone), an exit that answered "changed externally" about
+# the record and skipped every release, and apps still suspended through a
+# re-flash and a reboot. Every layer is now gate-free on the release side.
+# 1 - the release path never asks dumpsys for permission, and goes through the
+#     same identity that suspended the app.
+grep -q "^unsuspend_app()" "$REPO/module/scripts/lib.sh" && \
+  grep -q "su 2000 -c" "$REPO/module/scripts/lib.sh"
+check "an unsuspend_app exists beside suspend_app, same identity" $?
+sed -n '/^do_allow()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/allow81"
+grep -q "unsuspend_app" "$WORK/allow81" && \
+  ! grep -q "suspended=true" "$WORK/allow81"
+check "do_allow frees on our record alone - no dumpsys gate left" $?
+sed -n '/^restore_block_other_apps()/,/^}/p' "$REPO/module/scripts/knobs.sh" > "$WORK/rb81"
+grep -q "unsuspend_app" "$WORK/rb81" && \
+  ! grep -q "suspended=true" "$WORK/rb81"
+check "the exit's release runs for every package in the record" $?
+# 2 - a slot swap while the phone is IN USE frees the added and blocks the
+#     removed, and re-records the journal so the exit still knows what is ours.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps
+printf 'com.whatsapp\ncom.spotify.music\n' > "$WORK/stub/pkgs3"
+screen_on
+run_engine activate >/dev/null 2>&1
+printf 'com.whatsapp\n' > "$WORK/spsm/whitelist.txt"
+run_engine allow > "$WORK/out.a81" 2>&1
+[ ! -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "the added app is free at once, screen on" $?
+grep -q "allow com.whatsapp: it is in the six slots, so it is free" "$WORK/spsm/spsm.log"
+check "and the log says the release actually happened" $?
+: > "$WORK/spsm/whitelist.txt"
+run_engine allow >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "the removed app is blocked again at once" $?
+[ "$(cat "$WORK/spsm/journal/block_other_apps.applied" 2>/dev/null | grep -c com.whatsapp)" -ge 1 ]
+check "and the journal was re-recorded to match the world" $?
+# 3 - even a verdict of "changed externally" cannot skip the releases any more.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps
+printf 'com.whatsapp\ncom.spotify.music\ncom.openai.chatgpt\n' > "$WORK/stub/pkgs3"
+screen_on
+run_engine activate >/dev/null 2>&1
+: > "$WORK/spsm/state/blocked_by_us.tsv"
+printf 'com.whatsapp\ncom.spotify.music\ncom.openai.chatgpt\n' >> "$WORK/spsm/state/blocked_by_us.tsv"
+printf 'com.whatsapp\t0\n' >> "$WORK/spsm/journal/block_other_apps.applied"
+run_engine deactivate > "$WORK/out.d81" 2>&1
+for p in com.whatsapp com.spotify.music com.openai.chatgpt; do
+  [ -e "$WORK/stub/pkg/$p.suspended" ] && break
+done
+[ "$p" = com.openai.chatgpt ]
+check "the exit releases the whole record, whatever the verdict said" $?
+grep -q "exit: released the six-slot record" "$WORK/spsm/spsm.log"
+check "and says so on the record" $?
+# 4 - the recovery command, and the boot that heals a dead session.
+run_engine six-restore > "$WORK/out.s81" 2>&1
+grep -q "^released=" "$WORK/out.s81"
+check "engine.sh six-restore answers with what it freed" $?
+grep -q "six-restore)" "$REPO/module/scripts/engine.sh"
+check "and it is a real engine command" $?
+grep -q "six-restore" "$REPO/module/service.sh" && \
+  grep -q "state/active" "$REPO/module/service.sh"
+check "a boot with a record left and the mode off heals the phone" $?
+# 5 - the picker: one app, one slot.
+grep -q "pick_already" "$REPO/app/src/dev/axion/spsm/AppPickerActivity.java" && \
+  grep -q "Prefs.getSlot" "$REPO/app/src/dev/axion/spsm/AppPickerActivity.java"
+check "the picker refuses an app that is already in another slot" $?
+grep -q "LinkedHashSet" "$REPO/app/src/dev/axion/spsm/Prefs.java"
+check "and the whitelist writer de-duplicates on its own" $?
+# 6 - the check shows its progress, and cannot hang on one option.
+grep -q "with_timeout" "$REPO/module/scripts/engine.sh" && \
+  grep -q "with_timeout 90 knob_apply" "$REPO/module/scripts/engine.sh"
+check "every probe step runs under a timeout lid" $?
+grep -q "state/progress" "$REPO/app/src/dev/axion/spsm/KnobsActivity.java" && \
+  grep -q "knobs_probing_n" "$REPO/app/src/dev/axion/spsm/KnobsActivity.java"
+check "the Check button shows which option it is on" $?
+# 7 - the icon: the battery on BLACK, on any launcher, via an adaptive icon.
+[ -f "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" ] && \
+  grep -q "@color/ic_launcher_background" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" && \
+  grep -q "@mipmap/ic_launcher_fg" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml"
+check "the launcher icon is adaptive: the battery on black" $?
+grep -q "ic_launcher_background.*#FF000000" "$REPO/app/res/values/colors.xml"
+check "the background really is pure black" $?
+[ -f "$REPO/app/res/mipmap-xxhdpi/ic_launcher_fg.png" ] && \
+  [ -f "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png" ]
+check "with the legacy black square kept for old launchers" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

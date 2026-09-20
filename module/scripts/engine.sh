@@ -399,6 +399,26 @@ do_deactivate() {
   # (held by pid ...)" waiting for a loop that was about to be stopped anyway.
   stop_daemon
 
+  # The hard guarantee behind the six slots, and it comes FIRST - before any
+  # journal verdict can answer "changed externally" about this record and
+  # skip it, and before anything else can empty the file: every package this
+  # mode ever recorded as suspended-by-us is released on the way out.
+  # v3.7.5 shipped an exit that skipped exactly this: the owner's phone kept
+  # ~20 apps suspended through an exit, a re-flash and a REBOOT (Android
+  # persists suspensions; only an unsuspend clears them). Idempotent,
+  # parallel, every single time.
+  if [ -s "$STATE/blocked_by_us.tsv" ]; then
+    _freed=0
+    while read -r _p; do
+      [ -n "$_p" ] || continue
+      ( unsuspend_app "$_p" ) &
+      _freed=$((_freed + 1))
+    done < "$STATE/blocked_by_us.tsv"
+    wait
+    rm -f "$STATE/blocked_by_us.tsv"
+    log "exit: released the six-slot record ($_freed package(s))"
+  fi
+
   # The one-minute core timer is disarmed with the session.
   rm -f "$STATE/cores_asleep"
 
@@ -421,6 +441,7 @@ do_deactivate() {
   _DPID=$!
   phase_session revert
   wait "$_DPID"
+
 
   # Which safety net is right depends on whether anything was actually left
   # behind - not on whether a journal exists. A session where every knob was
@@ -732,15 +753,29 @@ do_allow() {
   _blocked=0
   _list=$(cat "$_wl" 2>/dev/null)
   [ -n "$_list" ] || _list=''
-  # Free what it had suspended and is now allowed.
+  # Free what we suspended and the owner has now put in a slot.
+  #
+  # v3.7.5 gated the release twice - "is it in our record" AND "does the
+  # system say the app is still suspended" - and this phone's dumpsys does
+  # not answer in the words the second gate expected: the v3.7.5 log shows
+  # allow lines with no release behind them, so the app the owner had just
+  # added STAYED suspended, and the exit then answered "changed externally"
+  # and skipped every release it still held. The record gate stays (an app
+  # the USER suspended on their own is their decision, not ours to undo);
+  # the system-state gate is gone - our record is the authorisation, pm
+  # unsuspend is idempotent, and unsuspend_app goes through the same
+  # identity that did the suspending.
   for _p in $_list; do
-    [ -f "$STATE/blocked_by_us.tsv" ] || break
-    grep -qxF "$_p" "$STATE/blocked_by_us.tsv" || continue
-    has dumpsys && dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' \
-      && { pm unsuspend --user 0 "$_p" >/dev/null 2>&1 || pm unsuspend "$_p" >/dev/null 2>&1; _freed=$((_freed + 1)); }
-    grep -vxF "$_p" "$STATE/blocked_by_us.tsv" > "$STATE/blocked_by_us.tsv.tmp" 2>/dev/null \
-      && mv -f "$STATE/blocked_by_us.tsv.tmp" "$STATE/blocked_by_us.tsv" 2>/dev/null
-    log "allow $_p: it is in the six slots, so it is no longer blocked"
+    if [ -f "$STATE/blocked_by_us.tsv" ] && grep -qxF "$_p" "$STATE/blocked_by_us.tsv"; then
+      _freed=$((_freed + 1))
+      grep -vxF "$_p" "$STATE/blocked_by_us.tsv" > "$STATE/blocked_by_us.tsv.tmp" 2>/dev/null \
+        && mv -f "$STATE/blocked_by_us.tsv.tmp" "$STATE/blocked_by_us.tsv" 2>/dev/null
+      if unsuspend_app "$_p"; then
+        log "allow $_p: it is in the six slots, so it is free"
+      else
+        log "allow $_p: the system refused the unsuspend - it will be released at the exit"
+      fi
+    fi
   done
   # Block what was taken out of the slots, right now - screen on or off. The
   # old gate waited for the screen to go dark, and the owner caught the gap
@@ -751,9 +786,34 @@ do_allow() {
   if [ -f "$ACTIVE" ]; then
     apply_block_other_apps
     _blocked=1
+    # The journal records what apply_block_other_apps suspended AT APPLY TIME,
+    # but the two passes above have changed that since. Re-record what is true
+    # NOW - or the exit compares against a world that no longer exists and,
+    # exactly as in the v3.7.5 log, answers "changed externally" and releases
+    # nothing. The ORIG file is untouched: the exit still restores the phone
+    # to what it was before the mode came on.
+    case "$(j_state block_other_apps)" in
+      applied) j_record_applied block_other_apps "$(snapshot_block_other_apps 2>/dev/null)" ;;
+    esac
   fi
   echo "allowed=$_freed idle_recheck=$_blocked"
   return 0
+}
+
+# The owner's recovery command, safe to run at any time - Termux:
+#   su -c sh /data/adb/spsm/scripts/engine.sh six-restore
+# Releases everything in the six slots and everything our record still names,
+# however the session that suspended them ended.
+do_six_restore() {
+  _n=0
+  for _p in $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null) \
+            $(cat "$STATE/blocked_by_us.tsv" 2>/dev/null); do
+    [ -n "$_p" ] || continue
+    unsuspend_app "$_p" && _n=$((_n + 1))
+  done
+  rm -f "$STATE/blocked_by_us.tsv" 2>/dev/null
+  echo "released=$_n"
+  log "six-restore: $_n package(s) unsuspended (the six slots + our record)"
 }
 
 # ------------------------------------------------------------------ probe
@@ -770,6 +830,24 @@ do_allow() {
 # journal, and a live session's journal is not its to touch) and it never leaves
 # anything behind: every knob it touches is reverted before the next one.
 PROBE_DIR="$SPSM_DIR/probe"
+
+# A function call with a lid on it. The check once spent 889 seconds inside
+# ONE option's apply on this phone (deep_doze, the v3.7.5 log), which reads
+# to the person waiting as "the button does nothing". Every probe apply and
+# revert runs under this: when the lid comes down the option is reported as
+# unanswerable and the check moves on.
+with_timeout() { # with_timeout <seconds> <function> [args...]
+  _to_secs=$1; shift
+  ( "$@" ) &
+  _to_pid=$!
+  ( sleep "$_to_secs"; kill "$_to_pid" 2>/dev/null ) &
+  _to_watch=$!
+  wait "$_to_pid"
+  _to_rc=$?
+  kill "$_to_watch" 2>/dev/null
+  wait "$_to_watch" 2>/dev/null
+  return $_to_rc
+}
 
 probe_one() { # probe_one <knob> -> "verdict<TAB>detail"
   _k=$1
@@ -803,10 +881,10 @@ probe_one() { # probe_one <knob> -> "verdict<TAB>detail"
     printf 'unknown\tcould not read anything this option controls on this phone'
     return 0
   fi
-  knob_apply "$_k" >/dev/null 2>&1
+  with_timeout 90 knob_apply "$_k" >/dev/null 2>&1
   _after=$(probe_reading "$_k" "$_snapfn")
   _did=$(snap_diff "$_before" "$_after")
-  knob_revert "$_k" >/dev/null 2>&1
+  with_timeout 90 knob_revert "$_k" >/dev/null 2>&1
   _back=$(probe_reading "$_k" "$_snapfn")
   _undid=$(snap_diff "$_before" "$_back")
 
@@ -884,6 +962,7 @@ do_probe() { # do_probe [knob-id]
   _n=0; _works=0; _inert=0; _partial=0; _pref=0; _unknown=0
   for _k in $_list; do
     knob_exists "$_k" || { echo "$_k: no such option"; _n=$((_n + 1)); _unknown=$((_unknown + 1)); continue; }
+    progress "Checking: $(knob_meta "$_k" | cut -d'|' -f2)"
     _v=$(probe_one "$_k")
     _verdict=${_v%%	*}
     _detail=${_v#*	}
@@ -900,6 +979,8 @@ do_probe() { # do_probe [knob-id]
     echo "$_k: $_verdict - $_detail"
   done
   log "probe: done - $_works work, $_inert inert, $_partial partial, $_pref preferences, $_unknown unknown, of $_n"
+  progress "Check finished"
+  rm -f "$PROGRESS"
   echo "works=$_works inert=$_inert partial=$_partial preference=$_pref unknown=$_unknown total=$_n"
   echo "report: $_PROBE_REPORT"
 
@@ -920,6 +1001,8 @@ case "$CMD" in
   screen-on)  do_screen_on ;;
   # The daemon's one-minute timer (see daemon.sh): cores 2-7 go to sleep.
   core-sleep) do_core_sleep ;;
+  # The recovery command: release everything in the six slots and the record.
+  six-restore) do_six_restore ;;
   set)        do_set "$2" "$3" ;;
   verify)     do_verify ;;
   probe)      do_probe "$2" ;;

@@ -11,4 +11,5 @@
     <color name="danger">#FFFF5A5A</color>
     <color name="ok">#FF3DDC84</color>
     <color name="slot_bg">#FF1C1C1C</color>
+    <color name="ic_launcher_background">#FF000000</color>
 </resources>

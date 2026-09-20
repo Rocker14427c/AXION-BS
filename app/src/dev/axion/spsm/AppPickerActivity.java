@@ -13,6 +13,7 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -46,6 +47,18 @@ public class AppPickerActivity extends Activity {
         list.setAdapter(adapter);
         list.setOnItemClickListener((p, v, pos, id) -> {
             Apps.Item it = shown.get(pos);
+            // One app, one slot. The same app in two slots would be freed,
+            // blocked, and freed again inside one sync - and the slot that
+            // "held" it never really held anything. The owner asked for this
+            // outright: an app already sitting in another slot is refused
+            // here, with the slot it is in named.
+            for (int i = 0; i < 6; i++) {
+                if (i != slot && it.pkg.equals(Prefs.getSlot(this, i))) {
+                    Toast.makeText(this, getString(R.string.pick_already, i + 1),
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
             Prefs.setSlot(this, slot, it.pkg);   // this also frees it in the module
             finish();
         });

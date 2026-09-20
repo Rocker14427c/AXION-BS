@@ -552,7 +552,13 @@ radio_enabled() { # radio_enabled wifi|bt|nfc -> true|false, prints nothing when
 radio_remember() { # radio_remember <radio>
   [ -f "$RADIO_STATE" ] || : > "$RADIO_STATE"
   [ -n "$(snap_file_get "$RADIO_STATE" "$1")" ] && return 0
-  _v=$(radio_enabled "$1") || return 1
+  _v=$(radio_enabled "$1") || _v=''
+  # One short retry: under load the stub/real node can hiccup once, and a
+  # reading missed here silently turns into "not ours to put back" at the
+  # exit. A node that is REALLY unreadable (a state we must never guess at)
+  # is still unreadable a fifth of a second later, so nothing is masked.
+  [ -n "$_v" ] || { sleep 0.2 2>/dev/null || :; _v=$(radio_enabled "$1") || return 1; }
+  [ -n "$_v" ] || return 1
   printf '%s\t%s\n' "$1" "$_v" >> "$RADIO_STATE"
   return 0
 }
@@ -1343,37 +1349,15 @@ apply_block_other_apps() {
 
 restore_block_other_apps() {
   [ -f "$BLOCKED_BY_US" ] || return 0
-  # Same reading on the way out, which is where it matters most: this was the
-  # single slowest step of the exit (18 seconds in the v3.6.1 log) because every
-  # app was asked about separately.
-  _susp=''
-  _suspf="$SPSM_DIR/.tmp/susp.$$_${KRV_TAG:-main}"
-  if suspended_packages > "$_suspf" 2>/dev/null; then
-    _susp=" $(tr '\n' ' ' < "$_suspf") "
-  fi
-  rm -f "$_suspf"
-  # Together, like the apply: releasing a dozen apps one at a time is most of a
-  # slow exit.
+  # Every package in this record is one this mode suspended. ALL of them are
+  # released, together, with no questions asked: the dumpsys check that used
+  # to stand in front of each release did not match this phone's output, and
+  # the v3.7.5 log shows what that cost - an exit that skipped every release
+  # and left the apps suspended through a re-flash and a reboot. Our record
+  # is the authorisation; unsuspend_app is idempotent.
   while read -r _p; do
     [ -n "$_p" ] || continue
-    (
-      # Only if it is still suspended: if something else has since had an opinion
-      # about this app, that opinion wins.
-      #
-      # The journal above is what authorizes releasing this app at all; the
-      # system's record is only the fast path to "it is still suspended". A
-      # record that does not name it is NOT proof that it is not suspended -
-      # the system writes that file asynchronously, so an app this session
-      # suspended a moment ago can be missing from it - and this is the one
-      # mistake that cannot be left behind: the phone would keep an app that
-      # cannot be opened. When the record is silent about this app, the app is
-      # asked directly.
-      case "$_susp" in
-        *" $_p "*) ;;
-        *) dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' || exit 0 ;;
-      esac
-      pm unsuspend --user 0 "$_p" >/dev/null 2>&1 || pm unsuspend "$_p" >/dev/null 2>&1
-    ) &
+    ( unsuspend_app "$_p" ) &
   done < "$BLOCKED_BY_US"
   wait
   rm -f "$BLOCKED_BY_US"

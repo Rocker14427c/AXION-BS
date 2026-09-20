@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The owner's icon, the way a modern launcher wants it: the battery from
+     his original art as the foreground, PURE BLACK as the background - the
+     "paint it black" ask, and no white plate behind the icon on any launcher
+     that masks adaptive icons. The plain black-square PNG stays as the legacy
+     fallback for anything too old to mask. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_fg" />
+</adaptive-icon>

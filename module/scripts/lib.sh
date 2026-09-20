@@ -755,6 +755,29 @@ suspend_app() { # suspend_app <package>
   pm suspend --user 0 "$1" >/dev/null 2>&1 || pm suspend "$1" >/dev/null 2>&1
 }
 
+# The reverse, built the same way and with the same rule: pm unsuspend is
+# idempotent, so it is called WITHOUT asking anything first. Every gate that
+# used to sit in front of an unsuspend - "is it in our record", "does dumpsys
+# say suspended=true" - was a way to not free an app the user had just put in
+# a slot, and on this phone dumpsys does not answer in the words those gates
+# expected (the v3.7.5 log shows allow lines with no unsuspend behind them,
+# and an exit that skipped every release). An app in the six slots is usable.
+unsuspend_app() { # unsuspend_app <package>
+  _d="$SPSM_DIR/.tmp"
+  mkdir -p "$_d" 2>/dev/null
+  _sf="$_d/su2000"
+  [ -f "$_sf" ] || {
+    if su 2000 -c true >/dev/null 2>&1; then printf '1\n' > "$_sf"; else printf '0\n' > "$_sf"; fi
+  }
+  # First through the same identity that suspended it: whatever permitted the
+  # suspension permits its undo.
+  if [ "$(cat "$_sf" 2>/dev/null)" = 1 ] \
+     && su 2000 -c "pm unsuspend --user 0 $1" >/dev/null 2>&1; then
+    return 0
+  fi
+  pm unsuspend --user 0 "$1" >/dev/null 2>&1 || pm unsuspend "$1" >/dev/null 2>&1
+}
+
 # ------------------------------------------------------------------ home role
 home_holder() {
   h=$(cmd role get-role-holders android.app.role.HOME 2>/dev/null | head -1)

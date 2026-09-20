@@ -33,8 +33,12 @@ final class Prefs {
      */
     static void syncWhitelist(Context c) {
         // Same writer the turn-on path uses, so there is one quoting and one
-        // format for the file both of them read.
-        final String[] slots = getAll(c);
+        // format for the file both of them read. The set is de-duplicated
+        // first: whatever the picker already refuses, an old preference file
+        // must not be able to smuggle a double entry past the module.
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (String s : getAll(c)) if (s != null && s.length() > 0) seen.add(s);
+        final String[] slots = seen.toArray(new String[0]);
         new Thread(() -> {
             Root.writeWhitelist(slots);
             Root.exec("sh " + Root.DIR + "/scripts/engine.sh allow >/dev/null 2>&1");

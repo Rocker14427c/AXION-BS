@@ -55,6 +55,8 @@
     <string name="badge_unknown">could not check</string>
     <string name="probe_title">Check what works on this phone</string>
     <string name="knobs_probing">Checking every option. This takes about five minutes — leave the phone alone until it finishes.</string>
+    <string name="knobs_probing_n">Checking every option — %1$s finished so far. Leave the phone alone until it finishes.</string>
+    <string name="pick_already">Already in slot %1$d — an app can sit in only one slot. Remove it there first.</string>
     <string name="knobs_probed">Checked on this phone</string>
     <string name="super_power_saving">Super power saving</string>
     <string name="pick_show_system">Show system apps</string>
