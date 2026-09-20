@@ -239,7 +239,7 @@ GED_PARAMS=/sys/module/ged/parameters
 # ============================================================ Display / UI
 
 meta_home_swap() {
-  echo "Display|SPSM home screen|Replaces your home screen with this one while the mode is on, and puts your normal home back when you turn the mode off.|1|session|core"
+  echo "Home|Power-saving home|While the mode is on, this mode's own home screen takes over. Your regular home - every app and widget - returns the moment you switch the mode off.|1|session|core"
 }
 snapshot_home_swap() {
   printf 'home\t%s\n' "$(home_holder)"
@@ -389,21 +389,21 @@ restore_home_swap() {
 }
 
 meta_dt2w_off() {
-  echo "Display|Turn off double-tap to wake|Taps and swipes on the sleeping screen will not wake the phone. The power button still works.|1|session|battery"
+  echo "Display|No wake on double-tap|Taps and swipes on the sleeping screen no longer wake the phone. The power button always works.|1|session|battery"
 }
 snapshot_dt2w_off() { snap_kv $DT2W_SETTINGS $DT2W_NODES; }
 apply_dt2w_off() { apply_kv "@secure:double_tap_to_wake=0" "@system:double_tap_to_wake=0" "@secure:tap_to_wake=0"; for _f in $DT2W_NODES; do w 0 "$_f"; done; }
 restore_dt2w_off() { restore_kv "$1" "$2"; }
 
 meta_aod_off() {
-  echo "Display|Turn off always-on display|Stops the clock and notifications showing on the screen while it is asleep.|1|session|battery"
+  echo "Display|Always-on display off|The clock and notifications no longer stay lit on the sleeping screen.|1|session|battery"
 }
 snapshot_aod_off() { snap_kv @secure:doze_always_on @secure:doze_enabled @system:doze_always_on /sys/devices/platform/soc/soc:mtk-tb/ambient_enable; }
 apply_aod_off() { apply_kv "@secure:doze_always_on=0" "@secure:doze_enabled=0" "@system:doze_always_on=0"; }
 restore_aod_off() { restore_kv "$1" "$2"; }
 
 meta_brightness_cap() {
-  echo "Display|Limit screen brightness|Keeps the screen at a low, fixed brightness. It never makes the screen brighter than you set it.|1|session|battery"
+  echo "Display|Lower screen brightness|Keeps the screen at a gentle, fixed brightness. It never brightens the screen.|1|session|battery"
 }
 snapshot_brightness_cap() { snap_kv "$BL_PATH" @system:screen_brightness @system:screen_brightness_mode; }
 # The cap in this phone's own units.
@@ -447,28 +447,28 @@ apply_brightness_cap() {
 restore_brightness_cap() { restore_kv "$1" "$2"; }
 
 meta_timeout_short() {
-  echo "Display|15-second screen timeout|The screen turns itself off 15 seconds after you stop touching it.|1|session|battery"
+  echo "Display|Shorter screen timeout|The screen switches itself off 15 seconds after your last touch.|1|session|battery"
 }
 snapshot_timeout_short() { snap_kv @system:screen_off_timeout; }
 apply_timeout_short() { apply_kv "@system:screen_off_timeout=$(cfg timeout_ms 15000)"; }
 restore_timeout_short() { restore_kv "$1" "$2"; }
 
 meta_animations_off() {
-  echo "Display|Turn off animations|Removes screen animations, so everything feels quicker on reduced power.|1|session|perf"
+  echo "Display|Animations off|Screen animations are removed, so everything feels quicker on reduced power.|1|session|perf"
 }
 snapshot_animations_off() { snap_kv @global:animator_duration_scale @global:transition_animation_scale @global:window_animation_scale; }
 apply_animations_off() { apply_kv "@global:animator_duration_scale=0" "@global:transition_animation_scale=0" "@global:window_animation_scale=0"; }
 restore_animations_off() { restore_kv "$1" "$2"; }
 
 meta_haptic_off() {
-  echo "Display|Turn off vibration|Stops the phone vibrating for taps and key presses.|1|session|battery"
+  echo "Display|Vibration off|The phone no longer vibrates for taps and key presses.|1|session|battery"
 }
 snapshot_haptic_off() { snap_kv @system:haptic_feedback_enabled @system:vibrate_on; }
 apply_haptic_off() { apply_kv "@system:haptic_feedback_enabled=0" "@system:vibrate_on=0"; }
 restore_haptic_off() { restore_kv "$1" "$2"; }
 
 meta_rotate_lock() {
-  echo "Display|Lock screen rotation|Keeps the screen upright, so the rotation sensor stays quiet.|0|session|experimental"
+  echo "Display|Portrait lock|The screen stays upright, and the rotation sensor rests.|0|session|experimental"
 }
 snapshot_rotate_lock() { snap_kv @system:accelerometer_rotation; }
 apply_rotate_lock() { apply_kv "@system:accelerometer_rotation=0"; }
@@ -477,7 +477,7 @@ restore_rotate_lock() { restore_kv "$1" "$2"; }
 # ============================================================ Radio / network
 
 meta_wifi_off() {
-  echo "Radio|Turn off Wi-Fi|Wi-Fi switches off while the mode is on. Calls, SMS and mobile data keep working.|1|session|battery"
+  echo "Connectivity|Wi-Fi off|Wi-Fi is switched off while the mode is on. Calls, messages and mobile data continue.|1|session|battery"
 }
 # ----------------------------------------------------------------- radios
 # Wi-Fi, Bluetooth and NFC are not settings: `svc wifi disable` does not appear in
@@ -608,7 +608,7 @@ restore_wifi_off() {
 }
 
 meta_bt_off() {
-  echo "Radio|Turn off Bluetooth|Bluetooth switches off while the mode is on.|1|session|battery"
+  echo "Connectivity|Bluetooth off|Bluetooth is switched off while the mode is on.|1|session|battery"
 }
 snapshot_bt_off() { snap_kv @global:bluetooth_on; }
 probe_bt_off() { printf 'radio:bluetooth\t%s\n' "$(radio_enabled bt || echo unknown)"; }
@@ -625,7 +625,7 @@ restore_bt_off() {
 }
 
 meta_nfc_off() {
-  echo "Radio|Turn off NFC|NFC switches off while the mode is on. Tap-to-pay will not work.|1|session|battery"
+  echo "Connectivity|NFC off|NFC is switched off. Tap-to-pay resumes when the mode is turned off.|1|session|battery"
 }
 snapshot_nfc_off() { snap_kv @global:nfc_on; }
 probe_nfc_off() { printf 'radio:nfc\t%s\n' "$(radio_enabled nfc || echo unknown)"; }
@@ -642,7 +642,7 @@ restore_nfc_off() {
 }
 
 meta_scan_always_off() {
-  echo "Radio|Stop background scanning|Stops apps scanning for Wi-Fi and Bluetooth devices behind your back.|1|session|battery"
+  echo "Connectivity|Background scanning off|Apps can no longer scan for Wi-Fi and Bluetooth devices in the background.|1|session|battery"
 }
 snapshot_scan_always_off() {
   snap_kv @global:wifi_scan_always_enabled @global:ble_scan_always_enabled @global:network_recommendations_enabled
@@ -654,7 +654,7 @@ apply_scan_always_off() {
 restore_scan_always_off() { restore_kv "$1" "$2"; }
 
 meta_location_off() {
-  echo "Radio|Turn off location|Location switches off while the mode is on. Maps, weather and navigation will not update until you turn it off again.|0|session|breaks-features"
+  echo "Connectivity|Location off|Location is switched off while the mode is on. Maps, weather and navigation resume when it is turned back on.|0|session|breaks-features"
 }
 snapshot_location_off() { snap_kv @secure:location_mode @secure:location_providers_allowed; }
 probe_location_off() { printf 'location:enabled\t%s\n' "$(location_enabled_now || echo unknown)"; }
@@ -769,7 +769,7 @@ release_power_mode() { set_power_mode 0; }
 # governor is a session option: engaged when the mode comes on, lifted only
 # when the mode goes off, never touched by a screen change.
 meta_gov_powersave() {
-  echo "Processor|Power-save governor, always|While the mode is on, the kernel's own power-save governor holds every processor core at its lowest speed - screen on and off. This is the only thing that manages CPU speed in this mode: no frequency ceiling is ever written by hand.|1|session|battery"
+  echo "Performance|Processor power-save|The kernel's own power-save governor holds every core at its lowest speed for the whole session - screen on and off. No frequency limit is ever written by hand; this is the only control that manages speed.|1|session|battery"
 }
 # One governor path per cluster, by the path the owner's own command used:
 #   for cpu in /sys/devices/system/cpu/cpu[0-9]*; do echo powersave > "$cpu/cpufreq/scaling_governor"; done
@@ -876,7 +876,7 @@ note_gov_powersave() {
 # here that changes how the interface looks, so its description says so and the
 # switch takes it straight back.
 meta_blur_off() {
-  echo "Display|Turn off window blur|Stops the graphics chip redrawing blurred panels behind the interface - a saving on every frame while you use the phone. The screen looks plainer; switch this off to get the blur back.|1|session|perf"
+  echo "Performance|Window blur off|Blurred panels behind the interface are not drawn - a saving on every frame. The look is plainer; switch back on to restore it.|1|session|perf"
 }
 snapshot_blur_off() { snap_kv @global:disable_window_blurs; }
 apply_blur_off() { sput global disable_window_blurs 1; }
@@ -895,7 +895,7 @@ probe_blur_off() { printf 'blurs_disabled\t%s\n' "$(sget global disable_window_b
 # mode and put back afterwards. On a phone with no such rule this option has
 # nothing to do, and the probe says exactly that rather than pretending.
 meta_statusbar_on() {
-  echo "Display|Keep the status bar visible|Some ROMs hide the status bar with an immersive-mode rule (policy_control). This clears that rule while the mode is on and puts it back on exit, so the clock, the battery and the way back stay where they belong.|1|session|core"
+  echo "System|Status bar kept visible|If this ROM hides the status bar with an immersive rule, the rule is cleared while the mode is on, so the clock and battery stay in view. Your own setting returns on exit.|1|session|core"
 }
 # The switch is gone. The owner removed the option: the status bar is simply
 # kept visible the whole time the mode is on - the clock, the battery and the
@@ -945,7 +945,7 @@ probe_statusbar_on() {
 # engine re-checks the mode, the screen and the journal under the lock before
 # a single core is touched, so a wake that arrives during the firing wins.
 meta_cores_sleep() {
-  echo "Processor|Sleep cores 2 to 7 after a minute|When the screen has been off for one minute, cores 2 to 7 switch off and only cores 0 and 1 stay on - the deepest saving there is while nothing is happening. The moment the screen comes back on, every core returns.|1|deep|battery"
+  echo "Performance|Sleep six cores after a minute|After one full minute with the screen off, cores 2 to 7 power down and two remain for the system. Every core returns the instant the screen wakes.|1|deep|battery"
 }
 snapshot_cores_sleep() {
   # Exactly the cores this option may take down; cores 0 and 1 are never
@@ -988,7 +988,7 @@ probe_cores_sleep() {
 }
 
 meta_gpu_cap() {
-  echo "Processor|Graphics at minimum, always|The graphics chip stays at its lowest speed for the whole time the mode is on - screen on and off. The owner asked for exactly this: the GPU at minimum, no matter the screen.|1|session|battery"
+  echo "Performance|Graphics at minimum|The graphics chip stays at its lowest speed for the whole session - screen on and off.|1|session|battery"
 }
 # The GPU step ceiling is set two ways on this kernel: the two MediaTek tuning
 # nodes, which read back what was written, and /proc/gpufreq/gpufreq_opp_freq,
@@ -1020,7 +1020,7 @@ probe_gpu_cap() {
 }
 
 meta_ged_boost_off() {
-  echo "Processor|Stop performance boosts|Stops the phone raising processor and graphics speeds for touches and scrolling while the screen is off.|1|deep|battery"
+  echo "Performance|Performance boosts off|The phone's touch and scroll speed-ups are refused while the screen is off.|1|deep|battery"
 }
 snapshot_ged_boost_off() {
   snap_kv $GED_PARAMS/enable_cpu_boost $GED_PARAMS/enable_gpu_boost \
@@ -1034,7 +1034,7 @@ restore_ged_boost_off() { restore_kv "$1" "$2"; }
 # ============================================================ Apps
 
 meta_app_restrict() {
-  echo "Apps|Restrict background apps|While the screen is off, apps outside your six slots are allowed less background work. Their notifications may arrive late.|1|deep|battery"
+  echo "Apps|Restrict background work|While the screen is off, apps outside your six slots do less work in the background. Notifications may arrive a little later.|1|deep|battery"
 }
 snapshot_app_restrict() {
   # Snapshot is just the set of packages we manage: if that set still matches
@@ -1142,7 +1142,7 @@ restore_app_restrict() {
 }
 
 meta_freeze_google() {
-  echo "Apps|Pause Google services|Pauses Play Services, the Play Store and Search while the mode is on. Apps that rely on them will not get notifications until you turn the mode off.|0|deep|breaks-features"
+  echo "Apps|Pause Google services|Play services, the Play Store and Search are paused while the mode is on. Apps that depend on them stay quiet until it is turned off.|0|deep|breaks-features"
 }
 # The Google packages this option may pause. On the phone this was written for,
 # Play Services is not installed at all - it runs ReVanced GMS - so the fixed
@@ -1217,7 +1217,7 @@ restore_freeze_google() {
 # ============================================================ Doze / power
 
 meta_deep_doze() {
-  echo "Power|Deep sleep as soon as the screen is off|The phone goes into its deepest sleep immediately instead of waiting, and wakes normally when you pick it up.|1|deep|battery,breaks-features"
+  echo "Battery|Deep sleep immediately|The phone enters its deepest sleep state as soon as the screen goes off, and wakes normally.|1|deep|battery,breaks-features"
 }
 snapshot_deep_doze() {
   # Record the force flag, which is exactly what this knob changes. mState is a
@@ -1272,7 +1272,7 @@ restore_deep_doze() {
 }
 
 meta_battery_saver() {
-  echo "Power|Android battery saver|Turns on Android's own battery saver. This phone's version darkens the screen and adds little on top of SPSM.|0|session|experimental"
+  echo "Battery|Android battery saver|Android's own battery saver runs alongside this mode. On this phone it mainly dims the screen.|0|session|experimental"
 }
 snapshot_battery_saver() { snap_kv @global:low_power @global:low_power_sticky @global:battery_saver_constants; }
 apply_battery_saver() { apply_kv "@global:low_power=1" "@global:low_power_sticky=1"; }
@@ -1282,7 +1282,7 @@ apply_battery_saver() { apply_kv "@global:low_power=1" "@global:low_power_sticky
 restore_battery_saver() { restore_kv "$1" "$2"; }
 
 meta_block_other_apps() {
-  echo "Apps|Block other apps|Apps that are not in your six slots are stopped and cannot be opened until you turn the mode off. They return to normal afterwards.|1|session|battery,breaks-features"
+  echo "Apps|Block other apps|Apps outside your six slots are suspended and cannot be opened until the mode is turned off. Everything returns to normal afterwards.|1|session|battery,breaks-features"
 }
 # A snapshot function must only READ. The engine calls it twice for every
 # application - once to record the original and once to record what the change
@@ -1475,7 +1475,7 @@ note_app_restrict() {
 }
 
 meta_data_off() {
-  echo "Network|Turn off mobile data|Mobile data switches off while the mode is on, so messages arrive only after you turn it off again.|0|session|battery,breaks-features"
+  echo "Connectivity|Mobile data off|Mobile data is switched off while the mode is on. Messages arrive once it is turned back on.|0|session|battery,breaks-features"
 }
 snapshot_data_off() { snap_kv @global:mobile_data @global:mobile_data1; }
 probe_data_off() { printf 'data:enabled\t%s\n' "$(radio_enabled data || echo unknown)"; }
@@ -1512,7 +1512,7 @@ probe_app_restrict() {
 }
 
 meta_sync_off() {
-  echo "Power|Stop account sync|Email and contacts stop syncing until you turn the mode off.|0|session|breaks-features"
+  echo "Battery|Account sync off|Email and contacts stop syncing until the mode is turned off.|0|session|breaks-features"
 }
 snapshot_sync_off() { snap_kv @global:auto_sync; }
 apply_sync_off() { apply_kv "@global:auto_sync=0"; }
@@ -1587,7 +1587,7 @@ nav_now() {
 nav_is_three() { [ "$(nav_now)" = three ]; }
 
 meta_nav_buttons() {
-  echo "System|Three-button navigation|While the mode is on the phone itself uses three-button navigation - the system's own bar, on every screen including inside apps. Back is Back, Home comes back to this mode's home, and Recents opens this mode's own list. Your own navigation comes back when you switch the mode off.|1|session|core"
+  echo "System|Three-button navigation|The system's own three-button bar is used on every screen while the mode is on: Back is Back, Home returns here, and Recents opens this mode's task list. Your own navigation returns on exit.|1|session|core"
 }
 snapshot_nav_buttons() { snap_kv @secure:navigation_mode; }
 
@@ -1675,6 +1675,18 @@ restore_nav_buttons() {
 sweep_background() { # sweep_background <why>
   _why=${1:-on}
   _before=$(mem_available)
+  # A suspended app cannot start, so it cannot grab memory back: stopping the
+  # frozen set once per session is enough, and redoing 264 force-stops on
+  # every screen-off only kept the phone busy for nothing (15 s a sweep, in
+  # the v3.7.7 log). Every sweep after the first therefore only reaps the
+  # strays - processes of apps we never suspended - with the one-call
+  # kill-all, and reports the memory honestly either way.
+  if [ -f "$STATE/sweep_full" ]; then
+    has am && am kill-all >/dev/null 2>&1
+    _after=$(mem_available)
+    log "background sweep ($_why): strays cleared, free memory $(mem_words "$_before") -> $(mem_words "$_after")"
+    return 0
+  fi
   _n=0
   if [ -n "$SPSM_ROOT" ]; then
     # A fake phone has no processes to stop; the test reads the calls instead.
@@ -1696,13 +1708,15 @@ sweep_background() { # sweep_background <why>
     done < "$BLOCKED_BY_US"
     wait
   fi
+  # The full pass happened; the rest of this session only needs the light one.
+  : > "$STATE/sweep_full" 2>/dev/null
   has am && am kill-all >/dev/null 2>&1
   _after=$(mem_available)
   log "background sweep ($_why): $_n frozen app(s) stopped, free memory $(mem_words "$_before") -> $(mem_words "$_after")"
 }
 
 meta_sweep_bg() {
-  echo "Memory|Hand back background memory|Apps outside your six slots are stopped outright and their memory released - suspending an app stops it starting, it does not give back the memory it already holds. Runs when the mode is switched on, and again every time the screen goes off.|1|session|battery"
+  echo "Memory|Free background memory|Apps outside your six slots are stopped and the memory they hold is returned to the phone. Runs when the mode starts and whenever the screen goes off.|1|session|battery"
 }
 snapshot_sweep_bg() { :; }
 apply_sweep_bg() { sweep_background "mode on"; }
@@ -1761,7 +1775,7 @@ rom_bg_candidates() {
 }
 
 meta_rom_bg_off() {
-  echo "Apps|Restrict the ROM's background work|The phone's own apps and services that are working in the background while you are not using them are restricted while the screen is off - the same switch Settings offers per app, per package. Nothing is disabled or suspended: every one of them still works the moment you open it, and each is put back on wake.|1|deep|battery"
+  echo "Apps|Restrict the ROM's background services|The phone's own background services are restricted while the screen is off - the same control Settings offers, applied for you. Each is restored the moment you wake the phone.|1|deep|battery"
 }
 # Same shape as app_restrict: the snapshot is the set of packages we manage, so a
 # set that still matches means the per-package values in the sub-journal are
@@ -1884,7 +1898,7 @@ sf_set_fps() { # sf_set_fps <rate>
 }
 
 meta_fps_cap() {
-  echo "Display|Cap the frame rate (30 fps)|Holds the whole screen - every app and this mode's home - to 30 frames a second while the mode is on, with the command verified on this phone (SurfaceFlinger's own frame-rate override), and puts the phone's own 60 back on exit. Needs one reboot after installing before it can work (the module arms the phone's override at boot); until then the option says so and touches nothing. 40 is not a rate a 60 Hz screen can show: the rate has to divide the panel's refresh.|0|session|battery"
+  echo "Display|Frame rate capped at 30 fps|The whole screen is held to 30 frames per second while the mode is on. It needs one reboot after installation to arm; until then the option reports it is not ready and changes nothing.|0|session|battery"
 }
 # Nothing on the phone reports this rate back, so the snapshot is the fact that
 # the knob is ours to undo, nothing more.
@@ -2101,6 +2115,7 @@ blockable_packages() {
   for _p in $(printf '%s\n' $_all | sort -u); do
     [ -n "$_p" ] || continue
     case "$_keep" in *" $_p "*) continue ;; esac
+    case "$_p" in *rro*|*[Oo]verlay*) continue ;; esac
     echo "$_p"
   done
 }
@@ -2109,7 +2124,7 @@ blockable_packages() {
 # the suspension widening - one switch, one story: the phone's own apps are
 # left to their own work unless the owner asks otherwise.
 meta_block_system_apps() {
-  echo "Apps|Restrict system apps too|Also stops and restricts the phone's OWN preinstalled apps, not just installed ones - on a stock-OEM phone the preinstalled junk is usually a system app, so this is where the real saving is. On a clean ROM leave it off. The phone's own plumbing is never touched: calls, SMS, the dialer, the keyboard, the launcher, the modem, the share/intent resolver, the permission controller, the file picker and the media provider.|0|session|breaks-features,control"
+  echo "Apps|Restrict system apps too|Extends blocking and background limits to the phone's preinstalled apps - on a stock phone that is where the real saving is. Android's own essential services are never touched. On a clean ROM, leave it off.|0|session|breaks-features,control"
 }
 snapshot_block_system_apps() { :; }
 apply_block_system_apps() { :; }
@@ -2132,6 +2147,7 @@ managed_packages() {
     [ -n "$_p" ] || continue
     case "$_keep" in *" $_p "*) continue ;; esac
     case "$_ex_s" in *" $_p "*) continue ;; esac
+    case "$_p" in *rro*|*[Oo]verlay*) continue ;; esac
     echo "$_p"
   done
 }

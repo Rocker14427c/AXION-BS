@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.8
-versionCode=66
+version=v3.7.9
+versionCode=67
 author=Axion SPSM
-description=v3.7.8 fixes from the owner's v3.7.7 report: the parallel work is bounded (six packages at a time, two knobs at a time) so the load spike, the general slowness and the vanishing navigation bar are gone; Android's IPC plumbing (share resolver, permission controller, document picker, media provider) joined the never-suspend set, so "Restrict system apps too" can no longer break Share; the three doze state reads carry timeout lids. Suite: 586 checks, 0 failed.
+description=v3.7.9: a bug-hunt and polish round. The background memory sweep runs its full pass once per session instead of re-stopping every suspended app on each screen-off; runtime resource overlays are never suspended or restricted by the system-app widening; the exit log says what it actually releases. Every option's title and description is rewritten in plain language, and the launcher icon is redrawn at launcher size instead of filling its tile. Suite: 594 checks, 0 failed.

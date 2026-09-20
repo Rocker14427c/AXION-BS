@@ -612,15 +612,19 @@ done < "$KL"
 [ "$BAD" = "0" ]; check "every listed knob is settable via engine.sh" $?
 
 # The owner's v3.7.5 model, pinned in the very list the app shows: the governor
-# and the GPU floor are SESSION options named "always", the core sleep is a deep
-# option with its exact promise, and the three removed knobs are gone for good.
-grep -q "^gov_powersave|Processor|Power-save governor, always|" "$KL" && \
-  grep "^gov_powersave|" "$KL" | grep -q "|session|"
-check "the governor is listed as a session option, named 'always'" $?
-grep -q "^gpu_cap|Processor|Graphics at minimum, always|" "$KL" && \
+# and the GPU floor are SESSION options, the governor's line still carries the
+# no-hand-written-cap promise word for word, the core sleep is a deep option
+# with its exact promise, and the three removed knobs are gone for good.
+# (v3.7.9 renamed the options so they read like a stock power-saving mode;
+# what each one does is unchanged, and so is what is pinned here.)
+grep -q "^gov_powersave|Performance|Processor power-save|" "$KL" && \
+  grep "^gov_powersave|" "$KL" | grep -q "|session|" && \
+  grep "^gov_powersave|" "$KL" | grep -q "No frequency limit is ever written by hand"
+check "the governor is listed as a session option, cap-free by promise" $?
+grep -q "^gpu_cap|Performance|Graphics at minimum|" "$KL" && \
   grep "^gpu_cap|" "$KL" | grep -q "|session|"
-check "the GPU floor is listed as a session option, named 'always'" $?
-grep -q "^cores_sleep|Processor|Sleep cores 2 to 7 after a minute|" "$KL"
+check "the GPU floor is listed as a session option" $?
+grep -q "^cores_sleep|Performance|Sleep six cores after a minute|" "$KL"
 check "the core sleep is listed with its exact promise" $?
 grep "^cores_sleep|" "$KL" | awk -F'|' '{exit !($5=="1")}'
 check "and it is on by default" $?
@@ -3171,6 +3175,7 @@ grep -q "^am make-uid-idle com.spotify.music$" "$WORK/stub/calls"
 check "and each one is handed to ActivityManager as idle, not merely stopped" $?
 grep -q "^am kill-all$" "$WORK/stub/calls"
 check "and the phone is asked to clear what it still calls background" $?
+_nstop=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
 # Screen off: memory an app grabbed while the screen was on is given back the
 # moment it goes off. This is the half that keeps the mode saving over a long day.
 screen_off
@@ -3180,11 +3185,24 @@ check "every screen-off sweeps again" $?
 n=$(grep -c "^am kill-all$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" -ge 2 ]
 check "so a phone left alone all afternoon keeps giving the memory back (${n:-0} sweeps)" $?
+# A suspended app cannot run, so it cannot grab memory back: redoing the
+# per-app pass on every screen-off only kept 264 force-stops churning (the
+# v3.7.7 treadmill - 15 s a sweep, and the load with it). The second sweep
+# reaps strays and reports the memory, nothing more.
+_m=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+[ "${_m:-0}" = "${_nstop:-0}" ]
+check "and the suspended set is not force-stopped all over again ($_m)" $?
+grep -q "background sweep (screen off): strays cleared" "$WORK/spsm/spsm.log"
+check "the light sweep says exactly what it did" $?
 screen_on
 run_engine deactivate >/dev/null 2>&1
 run_engine verify > "$WORK/out.v74" 2>&1
 grep -q "drift=0" "$WORK/out.v74"
 check "and the sweep leaves nothing to undo ($(cat "$WORK/out.v74"))" $?
+run_engine activate >/dev/null 2>&1
+[ "$(grep -c "background sweep (mode on): " "$WORK/spsm/spsm.log" 2>/dev/null)" = 2 ]
+check "a new session sweeps fully again" $?
+run_engine deactivate >/dev/null 2>&1
 
 # Switched off by the user: nothing is stopped by the sweep, and no line claims it.
 make_tree; make_stubs; seed_stub_state
@@ -3573,7 +3591,7 @@ for p in com.whatsapp com.spotify.music com.openai.chatgpt; do
 done
 [ "$p" = com.openai.chatgpt ]
 check "the exit releases the whole record, whatever the verdict said" $?
-grep -q "exit: released the six-slot record" "$WORK/spsm/spsm.log"
+grep -q "exit: released every suspended app" "$WORK/spsm/spsm.log"
 check "and says so on the record" $?
 # 4 - the recovery command, and the boot that heals a dead session.
 run_engine six-restore > "$WORK/out.s81" 2>&1
@@ -3721,6 +3739,29 @@ run_engine screen-on >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
 [ ! -e "$WORK/stub/pkg/com.oem.junk.suspended" ]
 check "and the exit still frees everything it stopped" $?
+
+say "84. runtime overlays are never touched"
+# The owner's own list had android.axion_auto_generated_rro_product__ in it: the
+# widening read overlay packages off `pm list packages -s` and suspended them.
+# An overlay carries no code to stop - it is only resources - and taking it out
+# from under the apps that use it can break their theming. Both widening paths
+# (block and restrict) now skip every RRO/overlay package by name.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps app_restrict block_system_apps
+printf 'android.axion_auto_generated_rro_product__\ncom.pixelfresh.overlay\n' >> "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/android.axion_auto_generated_rro_product__.suspended" ]
+check "an RRO overlay is never suspended by the widening" $?
+[ ! -e "$WORK/stub/pkg/com.pixelfresh.overlay.suspended" ]
+check "and neither is any overlay package" $?
+[ ! -e "$WORK/stub/bucket/android.axion_auto_generated_rro_product__" ]
+check "its background work is not restricted either" $?
+screen_on
+run_engine screen-on >/dev/null 2>&1
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/android.axion_auto_generated_rro_product__.suspended" ]
+check "and the exit has nothing of theirs to free" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

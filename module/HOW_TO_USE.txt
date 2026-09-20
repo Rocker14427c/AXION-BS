@@ -1,20 +1,20 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.8.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.9.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
 - A value you change yourself after us is never overwritten.
 - CPU speed has ONE manager in this mode: the kernel's power-save governor
-  (Options -> "Power-save governor, always"). It holds every core at its lowest
+  (Options -> Performance -> "Processor power-save"). It holds every core at its lowest
   speed for as long as the mode is on - screen on and off - and no frequency
   ceiling is ever written by hand. The old ceiling options ("Limit the
   processor while asleep", "Keep power limits while using the phone") and the
   Low Power mode switch are gone; they all wrote speed limits, and you asked
   for the governor to be the only hand on the CPU.
-- The graphics chip is the same story: "Graphics at minimum, always" holds it
+- The graphics chip is the same story: "Graphics at minimum" holds it
   at its floor the whole time the mode is on - screen on and off.
-- New: "Sleep cores 2 to 7 after a minute" (on by default). When the screen has
+- New: "Sleep six cores after a minute" (Options -> Performance, on by default). When the screen has
   been off for a whole minute, cores 2-7 switch off and only cores 0 and 1 stay
   awake. The moment you turn the screen on, every core comes back.
 - Deep sleep and the per-app background limits still apply only while the
@@ -44,9 +44,22 @@ NEW IN THIS BUILD (v3.7.7)
   that is the maker's own app, with a name no list can know. New option
   "Restrict system apps too" (OFF by default): on an OEM phone the preinstalled
   junk is usually a system app, and this stops and restricts it as well. On a
-  clean ROM leave it off. "Restrict the ROM's background work" was already
+  clean ROM leave it off. "Restrict the ROM's background services" was already
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
+
+FROM v3.7.9
+- BUG-HUNT FIXES. The memory sweep stops every suspended app once per
+  session now, not again on every screen-off (a suspended app cannot start,
+  so it cannot take memory back - redoing it only kept the phone busy).
+  Runtime overlays - packages that are only resources - are never suspended
+  or restricted by "Restrict system apps too"; one of them was in the last
+  log's block list, and taking it could have broken app theming.
+- EVERY OPTION NOW READS PLAINLY. Same behaviour, same defaults; the titles
+  and descriptions are rewritten the way a phone maker's own power-saving
+  mode reads - short, and in your language.
+- THE APP ICON IS LAUNCHER-SIZED. The battery no longer fills the whole tile.
+- The full test rig passes 594 checks, 0 failed.
 
 FROM v3.7.8
 - THE PARALLEL WORK NOW HAS A CEILING. v3.7.7 ran the per-app work and the
@@ -118,12 +131,12 @@ FROM v3.6.0
   the frozen background is stopped with it. The message counts what is left -
   "Cleared 2 · 0 still open" - because the phone's task list is read back rather
   than assumed, and the log line has the memory freed with it.
-- New option: "Hand back background memory" (Options -> Memory, on by default).
+- New option: "Free background memory" (Options -> Memory, on by default).
   Suspending an app stops it starting; it does not give back the memory it is
   holding. Every app outside your six is stopped outright and made idle when the
   mode goes on and every time the screen goes off, so the memory keeps coming
   back. Nothing is changed here, so there is nothing to undo.
-- New option: "Restrict the ROM's background work" (Options -> Apps, deep, on by
+- New option: "Restrict the ROM's background services" (Options -> Apps, deep, on by
   default). While the screen is off, the phone's own packages that are actually
   running are put into the restricted standby bucket with background running
   denied - the same switch Settings offers per app - and are put back on wake.
@@ -228,7 +241,7 @@ NEXT
 FROM v3.3.1
 - The status bar stays visible (the home screen's theme was asking for full
   screen), and a system-wide immersive rule is cleared if your ROM has one
-  (Options -> Display -> "Keep the status bar visible").
+  (Options -> System -> "Status bar kept visible").
 - Power limits, the processor's Low Power mode and blur off are held while you use
   the phone; each is one switch in Options.
 - SPSM's own recents arrived in v3.2.0: read from the phone's task list, so the

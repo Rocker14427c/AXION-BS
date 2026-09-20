@@ -359,6 +359,7 @@ do_activate() {
   _on_t0=$(date +%s)
   sync_scripts
   j_reset
+  rm -f "$STATE/sweep_full"
   log "===== SPSM v3 ON (scripts $(scripts_stamp), module $(spsm_version)) ====="
 
   # The visible switch first: the user should see the black home in about a
@@ -447,11 +448,13 @@ do_deactivate() {
     done < "$STATE/blocked_by_us.tsv"
     wait
     rm -f "$STATE/blocked_by_us.tsv"
-    log "exit: released the six-slot record ($_freed package(s))"
+    log "exit: released every suspended app ($_freed package(s))"
   fi
 
-  # The one-minute core timer is disarmed with the session.
+  # The one-minute core timer is disarmed with the session, and the sweep
+  # remembers nothing into the next one.
   rm -f "$STATE/cores_asleep"
+  rm -f "$STATE/sweep_full"
 
   # The CPU power mode is NOT touched on the way out - and not on the way in
   # either. v3.7.5 removed the Low Power mode option at the owner's direction

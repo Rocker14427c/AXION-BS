@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.8**.
+Current module: **v3.7.9**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,38 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.9 — the bug hunt; the option list rewritten like a stock mode
+
+A proper bug-hunting round over the shipped v3.7.7 log, plus the owner's ask:
+options that read and explain themselves the way an OEM's own power-saving
+mode does.
+
+* **The memory sweep was a treadmill.** A suspended app cannot start, so it
+  cannot grab memory back — yet v3.7.7 re-stopped all 264 of them on every
+  screen-off (15 s a sweep, with the load spike riding along). The full pass
+  now runs once per session; every later sweep reaps strays and reports the
+  memory, which is all the phone actually needs.
+* **Runtime overlays are never touched.** The owner's own block list carried
+  `android.axion_auto_generated_rro_product__`: the system-app widening had
+  suspended an RRO — a package that is only resources, with nothing to stop,
+  and one that can pull the theming out from under the apps using it. Both
+  widening paths now skip every overlay package by name.
+* **The exit log told the truth badly.** "Released the six-slot record" named
+  the slots; what it releases is every app this mode suspended (264 of them
+  on his phone, slots or not). It now says "released every suspended app",
+  and the sweep's once-per-session note says what it did instead of
+  implying it stopped nothing.
+* **Every option title and description is rewritten in plain words** — same
+  behaviour, same defaults, same scopes, byte-for-byte; only the words
+  changed. "Power-save governor, always" reads as "Processor power-save",
+  "Hand back background memory" as "Free background memory", and so on for
+  all 31, each still one switch with one honest sentence.
+* **The launcher icon is launcher-sized.** The battery filled the whole tile
+  (67% of the adaptive canvas, past the 66% safe zone) — it is redrawn at
+  53%, with proper margins on the legacy black square too.
+* Suite: **594 checks, 0 failed**, including the light-sweep pins, the
+  overlay case, and the renamed options pinned with their promises intact.
 
 ## What changed in 3.7.8 — the parallelism bounded; the phone's plumbing untouchable
 
