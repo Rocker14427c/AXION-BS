@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.6**.
+Current module: **v3.7.7**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,39 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.7 — the timer that cannot be made to wait; universal by construction
+
+The owner asked the right audit questions: did the cores actually sleep during
+his ~7-hour night, and are the restriction options right on other phones
+(LineageOS / AxionOS / stock OEM, system or user apps)?
+
+* **The core sleep fired 63 minutes late** — visible in his own v3.7.5 log
+  (screen off 00:49:31, cores asleep 01:52:41). Root cause: `do_core_sleep`
+  queued on the engine lock behind the deep phase, which had spent 149 s +
+  889 s + 450 s in three sequential knobs. Now: the core sleep takes no lock
+  (the per-knob journal discipline already proven by the session phase), the
+  world is re-checked before a core is touched, and a wake that lands during
+  the apply is undone by the very same call. Direct `core-sleep` calls arm
+  the timer themselves.
+* **The deep phase applies side by side** (session-phase pattern: per-knob
+  subshells, `KRV_TAG` scratch isolation) — wall time is the slowest knob,
+  not the sum. **The wake is parallel too, cores first**: `do_screen_on`
+  restores the cores before anything else is even started, then releases the
+  rest of the deep phase together instead of minutes of sequential reverts
+  while the phone is in someone's hand.
+* **Universality.** `protected_packages` now asks the role manager for the
+  holders of DIALER, SMS and EMERGENCY — the maker's own apps on a stock OEM
+  are protected with no static list. New opt-in knob **"Restrict system apps
+  too"** (`block_system_apps`, session, default OFF, control) widens both
+  `blockable_packages` (suspension) and `managed_packages` (buckets/appops)
+  to the phone's own packages. `rom_bg_off` was audited and is already
+  device-adaptive: its candidates are read off the running phone at every
+  screen-off, minus the protected/core/exempt sets.
+* `sweep_background` and `apply_deep_doze` audited: both already parallel /
+  ceilinged — no change needed.
+
+Harness: **578 checks, 0 failed.**
 
 ## What changed in 3.7.6 — the six slots, fixed for good; the Check button; the icon on black
 

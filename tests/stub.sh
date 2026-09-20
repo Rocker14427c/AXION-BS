@@ -421,7 +421,14 @@ case "$CMD" in
         ;;
       "appops get") cat "$S/appop/$3" 2>/dev/null || echo "RUN_ANY_IN_BACKGROUND: allow" ;;
       "appops set") printf '%s: %s\n' "$4" "$5" > "$S/appop/$3" ;;
-      "role get-role-holders") cat "$S/home_role" 2>/dev/null ;;
+      "role get-role-holders")
+        # HOME keeps its long-standing file; every other role gets its own,
+        # so a test can make this phone an OEM phone (a dialer with a maker's
+        # name no static list can know).
+        case "$3" in
+          android.app.role.HOME) cat "$S/home_role" 2>/dev/null ;;
+          *)                     cat "$S/role_$3" 2>/dev/null ;;
+        esac ;;
       "role add-role-holder")
         printf '%s\n' "$4" > "$S/home_role"
         [ "$4" = "dev.axion.spsm" ] && printf 'dev.axion.spsm/.SpsmHomeActivity\n' > "$S/home_activity"

@@ -3573,6 +3573,79 @@ check "the background really is pure black" $?
   [ -f "$REPO/app/res/mipmap-xxhdpi/ic_launcher.png" ]
 check "with the legacy black square kept for old launchers" $?
 
+say "82. universal by construction, and the timer that cannot be made to wait"
+# The owner runs this module on stock-OEM phones too, and his v3.7.5 log
+# showed the core sleep running 63 minutes late: it queued behind the deep
+# phase's lock. Four answers, pinned here.
+# 1 - the core sleep never queues: no lock, world re-checked, and a wake that
+#     lands during the apply is undone by the very same call.
+sed -n '/^do_core_sleep()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/cs82"
+grep -q "lock_acquire" "$WORK/cs82" && bad "the core sleep still queues on the lock" || ok "the core sleep does not queue behind the deep phase" $?
+grep -q "knob_revert cores_sleep" "$WORK/cs82"
+check "and a wake that lands mid-apply is undone by the same call" $?
+# The functional shape: with the screen on, the timer firing changes nothing.
+make_tree; make_stubs; seed_stub_state
+enable_knobs cores_sleep
+screen_on
+run_engine activate >/dev/null 2>&1
+: > "$WORK/spsm/state/cores_asleep"
+run_engine core-sleep >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu3/online")" = "1" ]
+check "the timer firing while the phone is awake touches no core" $?
+# 2 - the deep phase applies side by side, and the wake releases side by side
+#     with the cores FIRST.
+grep -q "KRV_TAG=$_k" <(sed -n '/^phase_deep()/,/^}/p' "$REPO/module/scripts/engine.sh")
+check "the deep phase applies its knobs side by side" $?
+sed -n '/^do_screen_on()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/so82"
+_a=$(grep -n "knob_revert cores_sleep" "$WORK/so82" | head -1 | cut -d: -f1)
+_b=$(grep -n "knobs_all" "$WORK/so82" | head -1 | cut -d: -f1)
+[ -n "$_a" ] && [ -n "$_b" ] && [ "$_a" -lt "$_b" ]
+check "the wake restores the cores before the parallel fan (lines $_a, $_b)" $?
+# 3 - the phone's ROLES are protected, whoever holds them: on an OEM phone
+#     the dialer is the maker's own app with a name no static list can know.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps
+printf 'com.oem.dialer\ncom.whatsapp\ncom.openai.chatgpt\n' > "$WORK/stub/pkgs3"
+printf 'com.oem.dialer\n' > "$WORK/stub/role_android.app.role.DIALER"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.whatsapp.suspended" ] && [ -e "$WORK/stub/pkg/com.openai.chatgpt.suspended" ]
+check "ordinary apps are blocked as always" $?
+[ ! -e "$WORK/stub/pkg/com.oem.dialer.suspended" ]
+check "but an OEM dialer known only through its ROLE is never touched" $?
+run_engine deactivate >/dev/null 2>&1
+# 4 - the phone's own apps, strictly opt-in: off by default (a clean ROM is
+#     left alone), and when asked for, they are blocked AND restricted - the
+#     protected list still standing in front.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps app_restrict
+printf 'com.oem.junk\n' >> "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.oem.junk.suspended" ]
+check "with the switch off, system apps are left exactly as they were" $?
+run_engine deactivate >/dev/null 2>&1
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps app_restrict block_system_apps
+printf 'com.oem.junk\n' >> "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.oem.junk.suspended" ]
+check "with the switch on, the preinstalled junk is stopped too" $?
+# The per-app restriction is a deep knob: it exists while the screen is off.
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ "$(cat "$WORK/stub/bucket/com.oem.junk" 2>/dev/null)" = "restricted" ]
+check "and its background work is restricted while asleep" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.oem.junk.suspended" ]
+check "and the exit frees it again" $?
+# 5 - the deep phase is quicker by construction: one screen-off must not
+#     serialise the three slow knobs. The proof is the source: the apply fans
+#     out per knob with the per-knob journal tag, exactly like the session.
+grep -q "Idle: applying the asleep options" "$REPO/module/scripts/engine.sh"
+check "the deep apply says what it is while the fan runs" $?
+
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" = "0" ] || exit 1

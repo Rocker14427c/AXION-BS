@@ -975,8 +975,8 @@ apply_cores_sleep() {
 }
 restore_cores_sleep() {
   # Faithful restore: whatever the cores were doing before is what they should
-  # be doing after - on the wake path this runs FIRST (first in DEEP_FAST),
-  # because six offline cores are the one change the user would feel.
+  # be doing after - on the wake path this runs FIRST, before anything else is
+  # even started, because six offline cores are the one change the user feels.
   restore_kv "$1" "$2"
 }
 probe_cores_sleep() {
@@ -1921,6 +1921,7 @@ timeout_short
 animations_off
 haptic_off
 rotate_lock
+block_system_apps
 block_other_apps
 sweep_bg
 wifi_off
@@ -2022,6 +2023,15 @@ ROOT_APPS="com.topjohnwu.magisk me.weishu.kernelsu com.rifsxd.ksunext com.sukisu
 # with no keyboard cannot answer anyone) and the launcher.
 protected_packages() {
   printf '%s\n' $ESSENTIALS $ROOT_APPS
+  # The phone's own ROLES - dialer, SMS, emergency - by whoever holds them.
+  # On an AOSP ROM that is com.android.dialer and com.android.mms (both in
+  # ESSENTIALS already); on a stock-OEM phone it is the maker's own apps,
+  # with names no static list can know. The role manager is asked instead,
+  # which is the one answer that is right on every ROM.
+  for _role in android.app.role.DIALER android.app.role.SMS android.app.role.EMERGENCY; do
+    _h=$(cmd role get-role-holders "$_role" 2>/dev/null | head -1)
+    [ -n "$_h" ] && printf '%s\n' "$_h"
+  done
   # Current and enabled keyboards, e.g. "com.google.android.inputmethod.latin/...".
   for _src in default_input_method enabled_input_methods; do
     _v=$(sget secure "$_src")
@@ -2039,21 +2049,43 @@ protected_packages() {
 # the user allowed, the protected packages above, and anything Android is already
 # exempting from battery optimisation (those are exempt for a reason - alarms,
 # accessibility, and the like).
+#
+# "Restrict system apps too" (block_system_apps, OFF by default) widens this to
+# the phone's OWN packages - on a stock-OEM phone the preinstalled junk is
+# system apps, and that is where the rest of the saving lives. The protected
+# list (essentials, root managers, keyboard, launcher, and now the role
+# holders: dialer, SMS, emergency) still stands in front of it.
 blockable_packages() {
   _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
-  for _p in $_all; do
+  if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then
+    _all="$_all $(pm list packages -s 2>/dev/null | sed 's/^package://')"
+  fi
+  # One sort, once, so a package in both lists costs one pass, not two writes.
+  for _p in $(printf '%s\n' $_all | sort -u); do
     [ -n "$_p" ] || continue
     case "$_keep" in *" $_p "*) continue ;; esac
     echo "$_p"
   done
 }
 
+# The same widening for the per-app background restriction. OFF together with
+# the suspension widening - one switch, one story: the phone's own apps are
+# left to their own work unless the owner asks otherwise.
+meta_block_system_apps() {
+  echo "Apps|Restrict system apps too|Also stops and restricts the phone's OWN preinstalled apps, not just installed ones - on a stock-OEM phone the preinstalled junk is usually a system app, so this is where the real saving is. On a clean ROM leave it off. Calls, SMS, the dialer, the keyboard, the launcher and the modem are never touched.|0|session|breaks-features,control"
+}
+snapshot_block_system_apps() { :; }
+apply_block_system_apps() { :; }
+restore_block_system_apps() { :; }
+
 managed_packages() {
-  _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') "
-  _keep="$_keep $ESSENTIALS "
+  _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
+  if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then
+    _all="$_all $(pm list packages -s 2>/dev/null | sed 's/^package://')"
+  fi
   # `echo "$_exempt" | grep -q "$_p"` inside this loop was a process per
   # installed app - about a hundred of them, twice per idle period - and it is
   # what made the app list the slowest single step of an activation on the

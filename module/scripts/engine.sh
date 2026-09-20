@@ -237,31 +237,37 @@ phase_session_revert() { # <knob list, deep already excluded>
 
 phase_deep() { # apply|revert
   _mode=$1
-  [ "$_mode" = revert ] && _list=$(knobs_reversed) || _list=$(knobs_all)
-  for _k in $_list; do
+  [ "$_mode" = revert ] && { phase_deep_revert; return 0; }
+  # The apply, side by side - for the same reason the session is. On the
+  # owner's phone ONE sequential screen-off spent 149s in app_restrict, then
+  # 889s in deep_doze, then 450s in rom_bg_off, all in a row: the deep phase
+  # held the engine for the better part of an hour, and the core sleep - the
+  # whole point of which is ONE MINUTE - queued behind all of it (the v3.7.5
+  # log: cores down 63 minutes after the screen went dark). The knobs are
+  # independent values, each journalling only itself (KRV_TAG keeps the
+  # scratch files apart), so they run together; the wall time is the slowest
+  # knob, not the sum. The core sleep is NOT applied here at all: its delay
+  # is the feature, and the daemon's timer fires it (engine.sh core-sleep).
+  progress "Idle: applying the asleep options"
+  for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
-    _kt0=$(date +%s)
-    if [ "$_mode" = apply ]; then
-      knob_enabled "$_k" "$(knob_default "$_k")" || continue
-      # The core sleep is NOT applied here. Its whole point is the minute of
-      # continuous sleep, and the deep phase runs at the transition; the
-      # daemon's timer fires engine.sh core-sleep when the minute is up.
-      [ "$_k" = cores_sleep ] && continue
-      if [ -f "$STATE/deep_report" ]; then
-        case " $DEEP_ONCE " in
-          *" $_k "*)
-            log "idle: $_k is already in place from this idle period - not redoing it"
-            continue ;;
-        esac
-      fi
-      progress "Idle: $(knob_meta "$_k" | cut -d'|' -f2)"
-      knob_apply "$_k"
-    else
-      knob_revert "$_k"
+    knob_enabled "$_k" "$(knob_default "$_k")" || continue
+    [ "$_k" = cores_sleep ] && continue
+    if [ -f "$STATE/deep_report" ]; then
+      case " $DEEP_ONCE " in
+        *" $_k "*)
+          log "idle: $_k is already in place from this idle period - not redoing it"
+          continue ;;
+      esac
     fi
-    _d=$(( $(date +%s) - _kt0 ))
-    [ "$_d" -ge 2 ] && log "  slow: $_mode $_k took ${_d}s"
+    ( KRV_TAG=$_k
+      _kt0=$(date +%s)
+      knob_apply "$_k"
+      _d=$(( $(date +%s) - _kt0 ))
+      [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
+    ) &
   done
+  wait
 }
 
 # Reverting a deep phase must also undo knobs that are still applied, so it
@@ -288,22 +294,38 @@ phase_deep_revert() {
 
 # ------------------------------------------------------------------ commands
 
-# The daemon's one-minute timer fired: put cores 2-7 to sleep. Everything is
-# re-checked under the lock, because the world may have moved on in the minute
-# since the timer was armed: the mode may be off, the screen may be on (the
-# whole point of the option is that it never takes a core while somebody is
-# looking), or the cores may already be asleep from an earlier firing.
+# The daemon's one-minute timer fired: put cores 2-7 to sleep.
+#
+# This deliberately does NOT take the engine lock. The v3.7.5 log is why: the
+# deep phase (which holds the lock through its whole apply) took the better
+# part of an hour on this phone, and the core sleep - which the owner asked
+# to happen after ONE minute - queued behind it and ran 63 minutes late. The
+# per-knob journal discipline (KRV_TAG scratch, one knob per journal slice)
+# is exactly what the session phase's parallel applies already rely on, so a
+# concurrent core-sleep is as safe as those. The world is re-checked before a
+# single core is touched: the mode on, the screen off, the timer still armed,
+# the knob not already applied. And because there is no lock to serialise a
+# wake against, the wake race is answered the honest way: after the cores are
+# down, the screen and the marker are looked at AGAIN - and if a wake landed
+# in between, this very call puts the cores straight back.
 do_core_sleep() {
   knob_enabled cores_sleep "$(knob_default cores_sleep)" || return 0
-  lock_acquire || return 0
-  [ -f "$ACTIVE" ] || { lock_release; return 0; }
-  [ "$(screen_state)" = "off" ] || { lock_release; return 0; }
+  [ -f "$ACTIVE" ] || return 0
+  # Whoever fires this arms it - the daemon writes the marker before calling,
+  # and a direct call (recovery, the tests) arms it here. The wake disarms by
+  # removing the file, which is what the post-apply check below reads.
+  [ -f "$STATE/cores_asleep" ] || : > "$STATE/cores_asleep" 2>/dev/null
+  [ "$(screen_state)" = "off" ] || return 0
   case "$(j_state cores_sleep)" in
-    applied) lock_release; return 0 ;;
+    applied) return 0 ;;
   esac
-  progress "Idle: $(knob_meta cores_sleep | cut -d'|' -f2)"
-  knob_apply cores_sleep
-  lock_release
+  KRV_TAG=cores_sleep knob_apply cores_sleep
+  # The wake may have landed while the cores were going down. Then undo it
+  # here, now - do not leave six sleeping cores under somebody's finger.
+  if [ ! -f "$STATE/cores_asleep" ] || [ "$(screen_state)" != "off" ]; then
+    KRV_TAG=cores_sleep knob_revert cores_sleep
+  fi
+  return 0
 }
 
 do_activate() {
@@ -509,13 +531,6 @@ do_screen_off() {
   lock_release
 }
 
-# Fast knobs first on wake: core and speed state is what you feel in the first
-# second - six sleeping cores most of all - so the cores come back before
-# anything else is touched. The slow ones (per-package appops) can finish after
-# the phone is already responsive. The governor and the GPU floor are session
-# knobs now and are not on this list: a wake does not lift them any more.
-DEEP_FAST="cores_sleep ged_boost_off deep_doze"
-
 # The deep knobs that are expensive, cannot revert by themselves, and are already
 # in place from an earlier screen-off in the same idle period: the per-app
 # background restrictions and the request for deep sleep. Re-applying them cost
@@ -533,20 +548,27 @@ do_screen_on() {
   # after the mode is already off.
   [ -f "$ACTIVE" ] || { lock_release; return 0; }
   log "screen on -> release deep phase"
-  # The cores come back before anything else (first in DEEP_FAST), and the
-  # one-minute timer is disarmed so the next sleep starts fresh. The governor
-  # and the GPU floor are session knobs: a wake does not lift them any more -
-  # "all the time is good enough", as the owner put it.
+  # The cores come back FIRST, before anything else is even started - six
+  # sleeping cores are the one change the user would feel - and the one-minute
+  # timer is disarmed so the next sleep starts fresh. Everything else deep is
+  # released side by side: the wake is when the phone is in somebody's hand,
+  # and the v3.7.5 log shows the sequential wake spending minutes putting
+  # per-package restrictions back while the owner watched a slow phone.
+  # The governor and the GPU floor are session knobs: a wake does not lift
+  # them - "all the time is good enough", as the owner put it.
   rm -f "$STATE/cores_asleep"
-  for _k in $DEEP_FAST; do
-    [ "$(knob_scope "$_k")" = "deep" ] || continue
-    knob_revert "$_k"
-  done
+  knob_revert cores_sleep
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
-    case " $DEEP_FAST " in *" $_k "*) continue ;; esac
-    knob_revert "$_k"
+    [ "$_k" = cores_sleep ] && continue
+    ( KRV_TAG=$_k
+      _kt0=$(date +%s)
+      knob_revert "$_k"
+      _d=$(( $(date +%s) - _kt0 ))
+      [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
+    ) &
   done
+  wait
   # Only after every comparison is done, in case a knob did not come back.
   safety_unlock
   # The idle state is over; the report file is cleared so that `status` never
