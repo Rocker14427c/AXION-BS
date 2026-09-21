@@ -72,6 +72,11 @@ public class SpsmTileService extends TileService {
 
     private void paint(Tile t, State s) {
         t.setLabel(getString(R.string.tile_label));
+        // The icon is what the system tints with the accent colour when the
+        // tile is ACTIVE; set it on every paint so the active state reads as
+        // colour, the way every other tile does.
+        t.setIcon(android.graphics.drawable.Icon.createWithResource(
+                getApplicationContext(), R.drawable.ic_tile_battery));
         t.setState(s.on ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
         t.setSubtitle(s.busy ? getString(R.string.tile_busy) : null);
         t.updateTile();

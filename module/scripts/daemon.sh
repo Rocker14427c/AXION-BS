@@ -150,7 +150,12 @@ while true; do
     fi
     if [ "$now" = "off" ]; then
       off_since=$(date +%s)
-      sh "$SCRIPT_DIR/engine.sh" screen-off >>"$LOG" 2>&1
+      # Detached on purpose. Run inline, the deep phase held this loop for as
+      # long as it took - seven minutes on the owner's phone - and starved
+      # the one-minute core timer of the very minute that is its point. The
+      # child runs on its own now; the loop keeps ticking, the timer fires on
+      # schedule, and a wake is answered the moment it happens.
+      sh "$SCRIPT_DIR/engine.sh" screen-off >>"$LOG" 2>&1 &
       drain_note
     else
       # Waking up is the moment that has to feel instant, so this runs before
@@ -158,10 +163,25 @@ while true; do
       # why the marker is cleared before the engine is called.
       off_since=0
       rm -f "$STATE/cores_asleep"
-      sh "$SCRIPT_DIR/engine.sh" screen-on >>"$LOG" 2>&1
+      # The detached deep phase may still hold the lock; the wake waits for
+      # its turn instead of giving up - thirty tries, minutes of patience,
+      # and the cores marker is already gone so the timer cannot re-arm.
+      _wk=0
+      until sh "$SCRIPT_DIR/engine.sh" screen-on >>"$LOG" 2>&1; do
+        _wk=$((_wk + 1))
+        [ "$_wk" -ge 30 ] && break
+        nap 3
+      done
+      if [ "$_wk" -gt 0 ]; then
+        log "wake: waited for the deep phase to let go"
+      fi
       drain_report
+      _woke=yes
+      [ "$_wk" -ge 30 ] && _woke=no
     fi
-    last_state=$now
+    # A wake that could not get the lock is not a wake yet: leave the believed
+    # state as it was, so the next tick tries again.
+    [ "${_woke:-yes}" = "yes" ] && last_state=$now
     # The transition itself takes time (the deep phase applies or releases), so
     # the world may have moved on while it ran. Re-read before sleeping.
     continue

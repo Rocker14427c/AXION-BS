@@ -133,6 +133,20 @@ progress() { echo "$1" > "$PROGRESS" 2>/dev/null; }
 # is one of ours (engine.sh or daemon.sh - never anything else) and takes the
 # lock. Killing it is safe precisely because the exit does a full revert anyway;
 # the worker's half-finished work is exactly what the exit is about to redo.
+# Drop this worker's priority to the floor. Every fan worker calls it first:
+# on cores the governor holds at minimum, the phone's own interface must win
+# the race for the CPU - the navigation bar is SystemUI drawing, and the owner
+# watched it vanish for whole seconds while fans ran at normal priority. The
+# pid comes from /proc/self/stat, whose first field is the reading process's
+# own pid: $$ here would name the parent shell, and renicing that would drag
+# the daemon down with the worker.
+bg_nice() {
+  _bp=''
+  read -r _bp _ < /proc/self/stat 2>/dev/null
+  [ -n "$_bp" ] && renice 19 -p "$_bp" >/dev/null 2>&1
+  return 0
+}
+
 lock_acquire() {
   _prio=$1
   _i=0

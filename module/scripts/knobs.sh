@@ -1070,11 +1070,13 @@ apply_app_restrict() {
         # Already recorded in this idle period: these are our values, so hold
         # them in place without reading anything.
         (
+          bg_nice
           am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
           cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
         ) & ;;
       *)
         (
+          bg_nice
           _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
           [ -n "$_ob" ] || _ob=-
           _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
@@ -1120,6 +1122,7 @@ restore_app_restrict() {
   while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
     (
+      bg_nice
       if [ "$_ob" != "-" ]; then
         _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
         # Only undo our own change: if the system or the user moved it since,
@@ -1189,7 +1192,8 @@ apply_freeze_google() {
   # suspend_app, not a bare pm suspend: as root the suspender is recorded as
   # "root", and the system's suspended-app dialog crashes on that name.
   for _p in $(google_packages); do
-    ( suspend_app "$_p"
+    ( bg_nice
+      suspend_app "$_p"
       am force-stop "$_p" >/dev/null 2>&1 ) &
   done
   wait
@@ -1341,6 +1345,7 @@ apply_block_other_apps() {
   for _p in $(blockable_packages); do
     [ -n "$_p" ] || continue
     (
+      bg_nice
       # An app that is already suspended is somebody else's decision - the user's,
       # or another tool's. Never ours to take over, and never ours to release.
       if [ -n "$_susp" ]; then
@@ -1376,7 +1381,7 @@ restore_block_other_apps() {
   _c=0
   while read -r _p; do
     [ -n "$_p" ] || continue
-    ( unsuspend_app "$_p" ) &
+    ( bg_nice; unsuspend_app "$_p" ) &
     _c=$((_c + 1))
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$BLOCKED_BY_US"
@@ -1698,6 +1703,7 @@ sweep_background() { # sweep_background <why>
       [ -n "$_p" ] || continue
       _n=$((_n + 1))
       (
+        bg_nice
         am force-stop "$_p" >/dev/null 2>&1
         # A suspended app cannot have been started by the user, so telling the
         # phone it is idle is a statement of fact.
@@ -1809,12 +1815,14 @@ apply_rom_bg_off() {
         # Already recorded in this idle period: these are our values, so there is
         # nothing to read and nothing to write down - just hold them in place.
         (
+          bg_nice
           am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
           cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
           am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
         ) & ;;
       *)
         (
+          bg_nice
           _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
           [ -n "$_ob" ] || _ob=-
           _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
@@ -1851,6 +1859,7 @@ restore_rom_bg_off() {
   while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
     (
+      bg_nice
       if [ "$_ob" != "-" ]; then
         _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
         # Only undo our own change: a value something else has moved since is a

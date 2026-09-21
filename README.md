@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.10**.
+Current module: **v3.7.11**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,41 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.11 — the log's seven minutes, paid back
+
+His v3.7.10 log was unambiguous: the screen-off deep phase held the engine for
+**seven minutes** (app_restrict 175 s, rom_bg_off 243 s on two-wide fans), the
+core timer fired 17 minutes late, the exit spent 100 s releasing 188 apps under
+the governor, and the navigation bar still vanished while fans ran at normal
+priority. Every number in this round answers one of those.
+
+* **The deep phase runs six at a time, reniced.** Two at a time was v3.7.8's
+  answer to the load spike; the log shows what it cost. Six workers at
+  background priority (`renice 19`, the phone's own interface always wins the
+  CPU) is both brisk and invisible — the direct fix for the disappearing
+  navigation bar. Every fan and every per-package loop runs this way now.
+* **The daemon no longer babysits the deep phase.** Screen-off work runs
+  detached; the loop keeps ticking, so the core timer fires on schedule and a
+  wake is answered the moment it happens (the wake waits its turn behind a
+  running deep phase instead of giving up after twenty seconds).
+* **The caps land last and lift first** — the owner's own tip, and the log
+  proves him right: under the governor every package-manager call costs most
+  of a second (the 188-app block spent 52 s capped), so activation applies
+  `gov_powersave`/`gpu_cap` after all the expensive asks, and the exit lifts
+  them before anything else, putting the whole exit at full speed.
+* **Three-button navigation is built into the power-saving home.** One
+  switch, as asked; the separate option is gone from the list (the bar only
+  applies while the mode's home is up, and both revert exactly as before).
+* **The tile and the app tell the truth again.** Root cause of both "the tile
+  never turns blue" and "the button still says Turn on": the app read the
+  mode marker from a path nothing writes (`/data/adb/spsm/active` instead of
+  `state/active`). One path, two fixed symptoms — plus the tile now carries
+  its icon, which is what the system tints when a tile is active.
+* **With the mode's home off, the launcher is refreshed on activation** — the
+  owner's launcher does not re-read suspension states, so blocked apps kept
+  full-colour icons until now; one restart shows them as suspended.
+* Suite: **615 checks, 0 failed**, twice consecutively.
 
 ## What changed in 3.7.10 — the second hunt: recovery that drags, recovery that fights, toasts in code
 

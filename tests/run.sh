@@ -3042,10 +3042,13 @@ _h=$(grep -n "launcher refreshed" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
 check "and the ordered reverts kept their order on the way out" $?
 
 # An exit with every option switched off changed nothing, so there is nothing for
-# the launcher to rebuild and no reason to restart somebody's home screen.
+# the launcher to rebuild and no reason to restart somebody's home screen. The
+# built-in navigation is not in the list any more - switch it off explicitly,
+# which is what a user who wanted nothing changed would have to do.
 make_tree; make_stubs; seed_stub_state
 run_engine dump-knobs >/dev/null 2>&1
 while IFS='|' read -r _id _rest; do echo "knob.$_id=0" >> "$WORK/spsm/config"; done < "$WORK/spsm/knobs.list"
+echo "knob.nav_buttons=0" >> "$WORK/spsm/config"
 screen_on
 run_engine activate >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
@@ -3129,18 +3132,27 @@ run_engine deactivate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
 check "and its own setting survives the round trip" $?
 
-# Switched off by the user: the phone's navigation is not touched at all.
+# The separate navigation option is GONE - the nav bar is built into the
+# power-saving home. With the home off, the phone's navigation is not touched,
+# and the launcher is refreshed once so suspended apps show as suspended in
+# the drawer (the owner's launcher does not re-read the states on its own).
 make_tree; make_stubs; seed_stub_state
-disable_knobs nav_buttons
+disable_knobs home_swap
+enable_knobs block_other_apps
 screen_on
 run_engine activate >/dev/null 2>&1
 [ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
-check "with the option off the phone's navigation is left alone" $?
+check "with the home off the phone's navigation is left alone" $?
 if grep -q "^cmd overlay enable-exclusive" "$WORK/stub/calls"; then
   bad "and nothing is even asked of it"
 else
   ok "and nothing is even asked of it"
 fi
+n=$(grep -c "^am force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 1 ]
+check "and the launcher was refreshed once, so suspended apps show (got ${n:-0})" $?
+grep -q "launcher refreshed: com.android.launcher3 restarted" "$WORK/spsm/spsm.log"
+check "and the log says so" $?
 run_engine deactivate >/dev/null 2>&1
 
 # A phone that will not say which navigation it uses: left alone, and told so.
@@ -3790,6 +3802,61 @@ check "and the suspended app really is freed" $?
 run_engine deactivate >/dev/null 2>&1
 [ ! -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
 check "the exit after a recovery leaves the phone clean" $?
+
+say "86. the caps land last and lift first; the deep phase runs wide, low and detached"
+# The owner's v3.7.10 log: screen-off held the engine seven minutes
+# (app_restrict 175s, rom_bg_off 243s on two-wide fans), the core timer fired
+# 17 minutes late, the exit spent 100s releasing 188 apps under the governor,
+# and the nav bar still vanished while fans ran at normal priority. The owner's
+# own tip - caps on last, off first - plus wide reniced fans and a daemon that
+# no longer babysits the deep phase.
+# 1 - the caps are applied after every expensive ask, and lifted before the
+#     exit does any.
+grep -q "for _k in block_other_apps sweep_bg home_swap nav_buttons gov_powersave gpu_cap; do" "$REPO/module/scripts/engine.sh"
+check "the caps are the LAST things applied on the way in" $?
+_a=$(grep -n "KRV_TAG=gov_powersave knob_revert gov_powersave" "$REPO/module/scripts/engine.sh" | head -1 | cut -d: -f1)
+_b=$(grep -n "released every suspended app" "$REPO/module/scripts/engine.sh" | head -1 | cut -d: -f1)
+[ -n "$_a" ] && [ -n "$_b" ] && [ "$_a" -lt "$_b" ]
+check "and the FIRST things undone on the way out (lines $_a, $_b)" $?
+# 2 - every fan worker runs at background priority: the interface wins the CPU.
+[ "$(grep -c "bg_nice" "$REPO/module/scripts/engine.sh")" -ge 7 ]
+check "every engine fan worker is reniced" $?
+[ "$(grep -c "bg_nice" "$REPO/module/scripts/knobs.sh")" -ge 8 ]
+check "and every per-package loop too" $?
+# 3 - the daemon hands the deep phase its own process and keeps ticking.
+grep -q 'engine.sh" screen-off >>"$LOG" 2>&1 &' "$REPO/module/scripts/daemon.sh"
+check "the screen-off work runs detached from the daemon's loop" $?
+grep -q "until sh \"\$SCRIPT_DIR/engine.sh\" screen-on" "$REPO/module/scripts/daemon.sh"
+check "and a wake waits its turn instead of giving up" $?
+# 4 - functional: the exit really does lift the caps before the record goes.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps gov_powersave
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")" = "powersave" ]
+check "the session holds the governor, as always" $?
+_g=$(grep -n "governor: power-save on" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
+_bl=$(grep -n "snap block_other_apps" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
+[ -n "$_g" ] && [ -n "$_bl" ] && [ "$_g" -gt "$_bl" ]
+check "and the governor landed AFTER the blocking work (lines $_bl, $_g)" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")" = "schedutil" ]
+check "the exit puts the governor back" $?
+_c1=$(grep -n "the caps are off first" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
+_c2=$(grep -n "released every suspended app" "$WORK/spsm/spsm.log" | tail -1 | cut -d: -f1)
+[ -n "$_c1" ] && [ -n "$_c2" ] && [ "$_c1" -lt "$_c2" ]
+check "and the caps-left-first order held (lines $_c1, $_c2)" $?
+# 5 - the app told the truth again: the marker path is the engine's own.
+grep -q 'state/active' "$REPO/app/src/dev/axion/spsm/Root.java"
+check "the app reads the mode marker from state/active, where the engine writes it" $?
+grep -q "setIcon" "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "and the tile carries its icon, so active reads as colour" $?
+run_engine dump-knobs >/dev/null 2>&1
+if grep -q "^nav_buttons|" "$WORK/spsm/knobs.list" 2>/dev/null; then
+  bad "the navigation option is gone from the list"
+else
+  ok "the navigation option is gone from the list"
+fi
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

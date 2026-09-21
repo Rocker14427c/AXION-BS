@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.10.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.11.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -47,6 +47,24 @@ NEW IN THIS BUILD (v3.7.7)
   clean ROM leave it off. "Restrict the ROM's background services" was already
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
+
+FROM v3.7.11
+- THE NAVIGATION BAR STAYS. Every worker now runs at background priority
+  (the interface always wins the CPU), the asleep options run six at a
+  time instead of two, and the daemon no longer waits on them - your
+  screen-off took seven minutes in the last log; now the core timer fires
+  on schedule and a wake is answered instantly.
+- TURN ON/OFF IS FASTER, YOUR TIP: the processor and graphics caps are
+  applied LAST on the way in and lifted FIRST on the way out, so all the
+  per-app work runs at the phone's own speed (the 100-second exit release
+  was capped; now it is not).
+- THREE-BUTTON NAVIGATION IS PART OF "Power-saving home" now - one switch,
+  no separate option. Your own navigation still comes back on exit.
+- THE TILE NOW SHOWS ITSELF ACTIVE (blue, like other tiles), and the app's
+  button follows the mode - the app was reading the wrong switch file.
+- With the mode's home off, your launcher is refreshed on activation so
+  suspended apps show as suspended in the drawer.
+- The full test rig passes 615 checks, 0 failed.
 
 FROM v3.7.10
 - RECOVERY IS FAST NOW. su -c sh /data/adb/spsm/scripts/engine.sh six-restore

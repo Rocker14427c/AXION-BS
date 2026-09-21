@@ -174,22 +174,39 @@ phase_session() { # apply|revert
   # together), then the home role, then the navigation mode (the phone is put
   # on three buttons only once the mode's home is there to receive it).
   progress "Applying"
-  _tail=''
+  # Bounded two at a time, and every worker reniced: the navigation bar is
+  # SystemUI drawing, and it must win the CPU while the mode is setting up.
+  _c=0
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
     knob_enabled "$_k" "$(knob_default "$_k")" || continue
     case $_k in
-      block_other_apps|sweep_bg|home_swap|nav_buttons) _tail="$_tail $_k" ; continue ;;
+      block_other_apps|sweep_bg|home_swap|nav_buttons|gov_powersave|gpu_cap) continue ;;
     esac
     ( KRV_TAG=$_k
+      bg_nice
       _kt0=$(date +%s)
       knob_apply "$_k"
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 2 ] && { wait; _c=0; }
   done
   wait
-  for _k in $_tail; do
+  # The ordered tail, written out in full: blocking before the sweep (it hands
+  # back the memory of exactly the apps just blocked), the home before the
+  # navigation that needs it, and the two caps LAST - the owner's own tip, and
+  # his v3.7.10 log proves it right: under the governor every package-manager
+  # call costs most of a second (the 188-app block spent 52s capped), while at
+  # the phone's own speed the same work is a fraction of that. The caps land
+  # after the expensive asks are done and cost two sysfs writes.
+  for _k in block_other_apps sweep_bg home_swap nav_buttons gov_powersave gpu_cap; do
+    knob_enabled "$_k" "$(knob_default "$_k")" || continue
+    # Navigation is built into the power-saving home: no home up, no bar.
+    case $_k in nav_buttons)
+      knob_enabled home_swap "$(knob_default home_swap)" || continue ;;
+    esac
     _kt0=$(date +%s)
     knob_apply "$_k"
     _d=$(( $(date +%s) - _kt0 ))
@@ -220,6 +237,7 @@ phase_session_revert() { # <knob list, deep already excluded>
       nav_buttons) _tail="$_tail $_k" ; continue ;;
     esac
     ( KRV_TAG=$_k
+      bg_nice
       _kt0=$(date +%s)
       knob_revert "$_k"
       _d=$(( $(date +%s) - _kt0 ))
@@ -261,14 +279,22 @@ phase_deep() { # apply|revert
           continue ;;
       esac
     fi
+    # SIX at a time, reniced: two at a time was the v3.7.8 answer to the load
+    # spike, and the owner's v3.7.10 log shows what it cost - app_restrict
+    # 175s, rom_bg_off 243s, a screen-off that held the engine for seven
+    # minutes and starved the core timer of its minute. Wide enough to be
+    # quick, reniced so the phone never feels it. The daemon runs this
+    # detached now (see daemon.sh), so the timer and pokes are answered
+    # while it works.
     ( KRV_TAG=$_k
+      bg_nice
       _kt0=$(date +%s)
       knob_apply "$_k"
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
-    [ "$_c" -ge 2 ] && { wait; _c=0; }
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
 }
@@ -287,13 +313,14 @@ phase_deep_revert() {
   for _k in $(knobs_reversed); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     ( KRV_TAG=$_k
+      bg_nice
       _kt0=$(date +%s)
       knob_revert "$_k"
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
-    [ "$_c" -ge 2 ] && { wait; _c=0; }
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
 }
@@ -382,6 +409,13 @@ do_activate() {
 
   start_daemon
   tmp_sweep
+  # The owner's launcher does not re-read suspension states on its own, so
+  # with this mode's home OFF the blocked apps kept full-colour icons in the
+  # drawer. One refresh - only when something was actually blocked, and never
+  # while the mode's own home is up (the launcher is left alone then).
+  if ! knob_enabled home_swap "$(knob_default home_swap)" && [ -s "$STATE/blocked_by_us.tsv" ]; then
+    refresh_launcher "$(home_package)"
+  fi
   progress "On"
   rm -f "$PROGRESS"
   log "SPSM ON: $(applied_count) knobs applied in $(( $(date +%s) - _on_t0 ))s"
@@ -428,6 +462,18 @@ do_deactivate() {
   # (held by pid ...)" waiting for a loop that was about to be stopped anyway.
   stop_daemon
 
+  # The owner's tip, and his v3.7.10 log proves it: with the governor still
+  # holding the cores at minimum, everything after this point ran at the
+  # phone's slowest - the 188-app release alone spent 100s. The two "always"
+  # caps go back FIRST (two sysfs writes), so the whole exit runs at the
+  # phone's own speed from its first moment. A knob that was never applied
+  # is skipped by the revert itself.
+  if [ "$_was_on" = 1 ]; then
+    KRV_TAG=gov_powersave knob_revert gov_powersave
+    KRV_TAG=gpu_cap knob_revert gpu_cap
+    log "exit: the caps are off first - the rest of the exit runs at full speed"
+  fi
+
   # The hard guarantee behind the six slots, and it comes FIRST - before any
   # journal verdict can answer "changed externally" about this record and
   # skip it, and before anything else can empty the file: every package this
@@ -441,7 +487,7 @@ do_deactivate() {
     _c=0
     while read -r _p; do
       [ -n "$_p" ] || continue
-      ( unsuspend_app "$_p" ) &
+      ( bg_nice; unsuspend_app "$_p" ) &
       _freed=$((_freed + 1))
       _c=$((_c + 1))
       [ "$_c" -ge 6 ] && { wait; _c=0; }
@@ -570,23 +616,24 @@ do_screen_on() {
   # them - "all the time is good enough", as the owner put it.
   rm -f "$STATE/cores_asleep"
   knob_revert cores_sleep
-  # The rest, TWO AT A TIME. Wide open, the wake once asked the phone for
-  # every pm/appops call it owed at the same instant - on CPUs the governor
-  # holds at minimum - and the owner watched the load average climb and the
-  # navigation bar disappear for seconds while SystemUI starved. Two at a
-  # time keeps the wake brisk and the phone alive.
+  # The rest, SIX AT A TIME and reniced. Wide open, the wake once asked the
+  # phone for every pm/appops call it owed at the same instant and the owner
+  # watched the navigation bar disappear; two at a time made the wake itself
+  # crawl (14s just to lift the per-app limits). Six workers at background
+  # priority is both: brisk, and invisible to the phone in hand.
   _c=0
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     [ "$_k" = cores_sleep ] && continue
     ( KRV_TAG=$_k
+      bg_nice
       _kt0=$(date +%s)
       knob_revert "$_k"
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
-    [ "$_c" -ge 2 ] && { wait; _c=0; }
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
   # Only after every comparison is done, in case a knob did not come back.
@@ -722,9 +769,11 @@ do_dump_knobs() {
   : > "$KNOBS_LIST"
   for _k in $(knobs_all); do
     # Not every knob is a choice. The status bar is kept visible because the
-    # mode is on, not because anyone asked for it this time, so it is not
-    # offered - and its switch no longer exists to be found here.
-    case $_k in statusbar_on) continue ;; esac
+    # mode is on, not because anyone asked for it this time, and three-button
+    # navigation is built into the power-saving home (the owner asked for one
+    # switch, not two) - neither is offered, and no switch exists here for
+    # them. Both still apply, and both still revert, exactly as before.
+    case $_k in statusbar_on|nav_buttons) continue ;; esac
     echo "$_k|$(knob_meta "$_k")" >> "$KNOBS_LIST"
   done
   echo "wrote $KNOBS_LIST"
@@ -867,7 +916,7 @@ do_six_restore() {
   for _p in $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null) \
             $(cat "$STATE/blocked_by_us.tsv" 2>/dev/null); do
     [ -n "$_p" ] || continue
-    ( unsuspend_app "$_p" >/dev/null 2>&1 && echo x >> "$_r" ) &
+    ( bg_nice; unsuspend_app "$_p" >/dev/null 2>&1 && echo x >> "$_r" ) &
     _c=$((_c + 1))
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done

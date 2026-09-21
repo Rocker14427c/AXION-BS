@@ -6,7 +6,12 @@ import java.io.InputStreamReader;
 final class Root {
     static final String ENTER = "/data/adb/spsm/enter.sh";
     static final String EXIT = "/data/adb/spsm/exit.sh";
-    static final String ACTIVE = "/data/adb/spsm/active";
+    // The engine's own marker (lib.sh: ACTIVE="$STATE/active"). The old path
+    // here - /data/adb/spsm/active - is a file nothing has ever written, so
+    // isActive() was always false: the app's button stayed "Turn on" while the
+    // mode ran, and the tile never once showed itself active. Two symptoms,
+    // one wrong path.
+    static final String ACTIVE = "/data/adb/spsm/state/active";
     static final String WHITELIST = "/data/adb/spsm/whitelist.txt";
     static final String DIR = "/data/adb/spsm";
 
