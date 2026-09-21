@@ -59,4 +59,15 @@ exit; a refused write must still be named with both sides.
 ## Install
 
 Mode off → flash `Axion-SPSM-v3.8.1-RMX3430.zip` → reboot.
-v3.8.0 remains published as a fallback build.
+
+## Download
+
+Flashable zip (also committed in this repo at the tag):
+
+`https://raw.githubusercontent.com/Rocker14427c/AXION-BS/v3.8.1/release/Axion-SPSM-v3.8.1-RMX3430.zip`
+
+sha256: `69fad0c95e7ae0eeff5672dc15bb8309829ff770d4ad0b0d0f00a43c49a0ce08`
+
+## Reference / fallback
+
+v3.8.0 remains published as a fallback build: <https://github.com/Rocker14427c/AXION-BS/releases/tag/v3.8.0>
