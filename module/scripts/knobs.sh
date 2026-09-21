@@ -733,25 +733,6 @@ pwr_mode_now() { pwr_mode_token "$(rd "$PWRMODE")"; }
 # settles a moment later. So: write, give it a moment, read, and try again - and
 # report honestly whether the phone is back in its normal mode, rather than
 # claiming a value we did not achieve.
-set_power_mode() { # set_power_mode <0|1>
-  _want=$1
-  case "$_want" in 0|1) ;; *) return 2 ;; esac
-  # Six tries, four tenths of a second apart: the phone was measured taking
-  # about a second to show that it had left Low Power mode, and a check that
-  # read sooner than that reported a change that had in fact worked. The wait is
-  # the whole budget - the loop leaves the moment the node agrees - so a phone
-  # that answers at once is not made to wait at all.
-  _i=0
-  while [ "$_i" -lt 6 ]; do
-    w "$_want" "$PWRMODE"
-    sleep 0.4 2>/dev/null || :
-    [ "$(pwr_mode_now)" = "$_want" ] && return 0
-    _i=$((_i + 1))
-  done
-  return 1
-}
-release_power_mode() { set_power_mode 0; }
-
 # ==================================================== the power-save governor
 #
 # The owner's own words: "if you change the governor to powersave then no need to
@@ -2102,6 +2083,15 @@ protected_packages() {
   done
   # Whatever is the home app right now.
   home_holder
+  # And EVERY launcher, not just the current holder: while this mode's own
+  # home holds the role, the user's real launcher holds nothing - and it was
+  # suspended exactly then, every session, drifting the exit into the safety
+  # valves. The owner carries two launchers; anything that can answer the
+  # HOME category is somebody's home, and is never touched.
+  cmd role get-role-holders android.app.role.HOME 2>/dev/null
+  cmd package query-activities --brief -a android.intent.action.MAIN \
+    -c android.intent.category.HOME 2>/dev/null |
+    sed -n 's|^\([a-zA-Z0-9._]\{2,\}\)/.*|\1|p'
 }
 
 # Third-party apps this mode is allowed to suspend: everything except the apps

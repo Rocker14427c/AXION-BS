@@ -202,10 +202,15 @@ phase_session() { # apply|revert
   # the phone's own speed the same work is a fraction of that. The caps land
   # after the expensive asks are done and cost two sysfs writes.
   for _k in block_other_apps sweep_bg home_swap nav_buttons gov_powersave gpu_cap; do
-    knob_enabled "$_k" "$(knob_default "$_k")" || continue
-    # Navigation is built into the power-saving home: no home up, no bar.
-    case $_k in nav_buttons)
-      knob_enabled home_swap "$(knob_default home_swap)" || continue ;;
+    # Navigation is built into the power-saving home: both follow the home
+    # switch alone - never a saved preference of their own. (The owner's
+    # phone carried a stale knob.nav_buttons=0 from an older version, and
+    # the built-in never fired.) No home up, no bar.
+    case $_k in
+      home_swap|nav_buttons)
+        knob_enabled home_swap "$(knob_default home_swap)" || continue ;;
+      *)
+        knob_enabled "$_k" "$(knob_default "$_k")" || continue ;;
     esac
     _kt0=$(date +%s)
     knob_apply "$_k"
@@ -231,6 +236,11 @@ phase_session() { # apply|revert
 phase_session_revert() { # <knob list, deep already excluded>
   _list="$@"
   _tail=''
+  # SIX at a time, like every other fan. This one ran wide open - a dozen
+  # workers, each re-reading its own knob to prove the revert - and the
+  # owner's exit spent 103s inside ONE knob's verify snapshot while they all
+  # fought each other and the interface for the CPU. Bounded, it is seconds.
+  _c=0
   for _k in $_list; do
     [ "$(knob_scope "$_k")" = "deep" ] && continue
     case $_k in
@@ -243,6 +253,8 @@ phase_session_revert() { # <knob list, deep already excluded>
       _d=$(( $(date +%s) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
+    _c=$((_c + 1))
+    [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
   for _k in $_tail; do

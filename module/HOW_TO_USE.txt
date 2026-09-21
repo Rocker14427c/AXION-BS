@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.11.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.12.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -47,6 +47,21 @@ NEW IN THIS BUILD (v3.7.7)
   clean ROM leave it off. "Restrict the ROM's background services" was already
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
+
+FROM v3.7.12
+- THE BUILT-IN NAVIGATION WORKS NOW. v3.7.11 made it part of
+  "Power-saving home" but an old saved "nav off" from an earlier version
+  could still silence it. No more: home on = bar on, home off = your own
+  navigation, nothing else decides.
+- YOUR LAUNCHER IS SACRED. The block list was suspending your launcher (and
+  your second launcher) - that was part of the drawer not showing suspended
+  apps, and every exit ended with a false alarm and the emergency valves.
+  Launchers are never touched now, and exits end clean.
+- THE EXIT IS FASTER AGAIN. Its last unbounded fan (a dozen checks at once)
+  is bounded six at a time: the 103-second revert in your log is seconds.
+- A full code audit removed everything dead: the old Low-Power writer,
+  unused helpers and wrappers, and the app's unused state map.
+- The full test rig passes 623 checks, 0 failed.
 
 FROM v3.7.11
 - THE NAVIGATION BAR STAYS. Every worker now runs at background priority

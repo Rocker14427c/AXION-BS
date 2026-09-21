@@ -30,7 +30,6 @@ public class KnobsActivity extends Activity {
     private LinearLayout list;
     private TextView status;
     private final Map<String, Switch> switches = new LinkedHashMap<>();
-    private final Map<String, Boolean> original = new HashMap<>();
     /** knob id -> the human label from knobs.list, so toasts speak the option's name. */
     private final Map<String, String> labels = new HashMap<>();
     /** knob id -> "works"/"inert"/"partial"/"unknown", from the last probe. */
@@ -51,8 +50,7 @@ public class KnobsActivity extends Activity {
     private void load() {
         status.setText(R.string.knobs_loading);
         list.removeAllViews();
-        switches.clear();
-        original.clear();
+ switches.clear();
         labels.clear();
 
         new Thread(() -> {
@@ -165,8 +163,7 @@ public class KnobsActivity extends Activity {
                     badge.setTextColor(colour);
                 }
 
-                sw.setChecked(on);
-                original.put(id, on);
+ sw.setChecked(on);
                 sw.setOnCheckedChangeListener((v, checked) -> {
                     // A disabled-looking row still toggles; the write happens on
                     // the listener so the user's intent is never lost.
@@ -288,8 +285,7 @@ public class KnobsActivity extends Activity {
         new Thread(() -> {
             String res = Root.exec("sh " + Root.DIR + "/scripts/engine.sh set " + id + " " + (on ? "1" : "0"));
             runOnUiThread(() -> {
-                sw.setEnabled(true);
-                original.put(id, on);
+ sw.setEnabled(true);
                 boolean live = Root.isActive();
                 // The option's own name, never the internal id: "Wi-Fi off
                 // enabled", not "wifi_off enabled".

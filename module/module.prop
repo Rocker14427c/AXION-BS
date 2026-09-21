@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.11
-versionCode=69
+version=v3.7.12
+versionCode=70
 author=Axion SPSM
-description=v3.7.11, from the owner's v3.7.10 log: the screen-off deep phase is wide (six at a time), reniced so the interface always wins the CPU, and runs detached from the daemon - no more seven-minute screen-offs, the core timer fires on schedule, and the navigation bar stops disappearing. The processor and graphics caps land LAST on the way in and lift FIRST on the way out (his own tip - the exit's 100-second app release runs at full speed now). Three-button navigation is built into the power-saving home option and the separate switch is gone. The tile now shows itself active (the app read the wrong marker path) and the app's button follows the mode. Suite: 615 checks, 0 failed.
+description=v3.7.12, from the owner's v3.7.11 log: the built-in three-button navigation now truly follows the power-saving home (a stale saved preference had silenced it - the option is gone, its old off value no longer counts); the launcher and every HOME-capable app are never suspended, which ends the false drift and the safety valves on every exit; the exit's last wide-open fan is bounded (the 103-second revert becomes seconds); and a full code audit removed the dead paths (the Low-Power write path, unused helpers and wrappers, the app's unused state map). Suite: 623 checks, 0 failed, twice.

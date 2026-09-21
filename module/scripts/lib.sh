@@ -365,7 +365,6 @@ norm() {
 }
 
 # ------------------------------------------------------------------ journal
-j_paths() { echo "$JOURNAL/$1.orig" "$JOURNAL/$1.applied" "$JOURNAL/$1.meta"; }
 
 j_write_meta() { # id kind target
   printf '%s\t%s\t%s\n' "$1" "$2" "$3" > "$JOURNAL/$1.meta"
@@ -902,12 +901,6 @@ safety_unlock() {
   [ "$_bl" -lt "$_dark" ] 2>/dev/null || return 0
   printf '%s\n' "$_lift" > "$(rp "$BL_PATH")" 2>/dev/null
   log "safety_unlock: backlight was still ours and unreadably dark (${_bl}/${_max}) - lifted to ${_lift}"
-}
-
-# How many knobs left a record behind? Zero means a revert has nothing to work
-# from.
-journal_entries() {
-  ls "$JOURNAL"/*.orig 2>/dev/null | wc -l | tr -d ' '
 }
 
 # Tidy the scratch dir the parallel reads use. Each read removes its own file as

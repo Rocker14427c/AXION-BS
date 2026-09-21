@@ -3858,6 +3858,53 @@ else
   ok "the navigation option is gone from the list"
 fi
 
+say "87. the built-in nav follows the home; the launcher is sacred; the exit fan is bounded"
+# The owner's v3.7.11 report, in his own log: the home came up and the nav bar
+# never did, because his config carried knob.nav_buttons=0 from an older
+# version and the built-in consulted it. The option is GONE - the built-in
+# follows the home switch alone. And the same log named his own launcher in
+# the block list: two HOME-role holders, suspended, with the exit ending in a
+# false drift and the safety valves every single session.
+make_tree; make_stubs; seed_stub_state
+enable_knobs home_swap
+echo "knob.nav_buttons=0" >> "$WORK/spsm/config"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "0" ]
+check "a stale saved 'nav off' cannot silence the built-in" $?
+grep -q "nav: the phone is on three-button navigation" "$WORK/spsm/spsm.log"
+check "and the bar is applied with the home, as the owner asked" $?
+run_engine deactivate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode" 2>/dev/null)" = "2" ]
+check "and it still goes back on exit" $?
+# Two launchers, both HOME-role holders, both known to the widening: neither
+# is ever suspended, and the exit ends clean instead of in the safety valves.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps block_system_apps
+printf 'com.android.launcher3/.Launcher\ncom.community.oneroom/.HomeActivity\n' > "$WORK/stub/home_query"
+printf 'com.android.launcher3\ncom.community.oneroom\n' >> "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.android.launcher3.suspended" ]
+check "the launcher is never suspended by the block list" $?
+[ ! -e "$WORK/stub/pkg/com.community.oneroom.suspended" ]
+check "and neither is a second launcher holding the role" $?
+run_engine deactivate >/dev/null 2>&1
+if grep -q "could not be restored" "$WORK/spsm/spsm.log"; then
+  bad "the exit ended clean - no false drift from the launcher"
+else
+  ok "the exit ended clean - no false drift from the launcher"
+fi
+if grep -q "forcing the safety valves" "$WORK/spsm/spsm.log"; then
+  bad "and the safety valves stayed holstered"
+else
+  ok "and the safety valves stayed holstered"
+fi
+# The exit's own revert fan was the last one running wide open - a dozen
+# knobs each re-reading themselves while the owner watched. Bounded six.
+sed -n "/^phase_session_revert()/,/^}/p" "$REPO/module/scripts/engine.sh" | grep -q "wait; _c=0"
+check "the session revert fan runs six at a time" $?
+
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" = "0" ] || exit 1

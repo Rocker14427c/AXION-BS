@@ -429,6 +429,15 @@ case "$CMD" in
           android.app.role.HOME) cat "$S/home_role" 2>/dev/null ;;
           *)                     cat "$S/role_$3" 2>/dev/null ;;
         esac ;;
+      "package query-activities")
+        # Every app that can answer the HOME category, one "pkg/Activity" per
+        # line - a test seeds $S/home_query to make this phone carry several
+        # launchers. Falls back to the configured home, like resolve-activity.
+        case "$*" in
+          *android.intent.category.HOME*)
+            cat "$S/home_query" 2>/dev/null || cat "$S/home_activity" 2>/dev/null \
+              || echo "com.android.launcher3/.Launcher" ;;
+        esac ;;
       "role add-role-holder")
         printf '%s\n' "$4" > "$S/home_role"
         [ "$4" = "dev.axion.spsm" ] && printf 'dev.axion.spsm/.SpsmHomeActivity\n' > "$S/home_activity"

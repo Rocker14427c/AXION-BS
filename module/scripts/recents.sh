@@ -83,25 +83,6 @@ task_is_front() { # task_is_front <task-id>
   [ -n "$_first" ] && [ "$_first" = "$1" ]
 }
 
-# The recents screen this ROM uses, as pkg/component.
-#
-# The dump names it: mRecentsComponent=ComponentInfo{com.android.launcher3/
-# com.android.quickstep.RecentsActivity}. That is the launcher, which is why a
-# swipe up anywhere starts it - and why the owner of this phone asked for it to
-# be switched off while the mode is on. Read from the phone, never assumed: a
-# ROM with a different recents screen names that one instead.
-recents_component() {
-  has dumpsys || return 0
-  dumpsys activity recents 2>/dev/null | awk '
-    /^mRecentsComponent=/ {
-      line = $0
-      sub(/^mRecentsComponent=ComponentInfo\{/, "", line)
-      sub(/\}.*$/, "", line)
-      if (line ~ /^[A-Za-z0-9._]+\/[A-Za-z0-9._$]+$/) print line
-      exit
-    }'
-}
-
 # Bring a task to the front.
 #
 # The task id comes from the list above, so it is checked to be digits: nothing
@@ -202,8 +183,6 @@ do_recents() {
   printf '%s recents: listed %s task(s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${_n:-0}" >> "$LOG" 2>/dev/null
   [ -n "$_out" ] && printf '%s\n' "$_out"
 }
-do_recents_switch() { recents_switch "$1" "$2"; }
-do_recents_remove() { recents_remove "$1" "$2"; }
 
 # ---------------------------------------------------------------- clear all
 # The owner's request: "add a clear all button in recents which force stop all

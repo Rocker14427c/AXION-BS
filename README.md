@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.11**.
+Current module: **v3.7.12**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,40 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.7.12 — the built-in that wasn't; the launcher made sacred; the audit
+
+His v3.7.11 log answered the "you removed the option and didn't add it by
+default" report precisely: the home came up and navigation_mode stayed 2 —
+the built-in nav had consulted its own saved preference, and his config
+carried `knob.nav_buttons=0` from an older version. The option is gone, so
+its ghost decided. The same log named his two launchers in the block list
+and ended every exit in a false drift plus the safety valves.
+
+* **The built-in nav follows the home switch, and nothing else.** No saved
+  preference can silence it now; with the home on, the bar is there; on
+  exit it goes back.
+* **Every HOME-capable app is protected** — by role holder *and* by the
+  HOME category query, so the launcher(s) that lost the role to this mode's
+  own home are still never suspended or restricted. This was silently
+  suspending his real launcher all along: it explains the drawer that never
+  showed suspended apps, the `WARN block_other_apps did not return` on
+  every exit, and "1 value(s) could not be restored - forcing the safety
+  valves" ending every session. All of it gone: exits now end clean.
+* **The exit's last wide-open fan is bounded.** The session revert ran a
+  dozen knobs at once, each re-reading itself to prove the revert — the
+  owner's block_revert alone spent 103 s losing that race. Six at a time,
+  reniced: seconds.
+* **The audit.** Dead code removed across the module and the app: the
+  Low-Power mode's write path (`set_power_mode`/`release_power_mode` — the
+  feature was removed in v3.7.5, the writer stayed), two unused journal
+  helpers, an unused recents-component reader, two dead recents wrappers
+  the engine never called, and the app's unused toggle-state map. Every
+  removal verified unused across scripts, app and tests before cutting.
+* Suite: **623 checks, 0 failed**, twice consecutively — including the new
+  case: a stale `nav_buttons=0` cannot silence the built-in; two seeded
+  launchers are never suspended; the exit ends clean with the valves
+  holstered.
 
 ## What changed in 3.7.11 — the log's seven minutes, paid back
 
