@@ -682,6 +682,39 @@ package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
 
+## What changed in 3.8.1 — the exit round: goodbye in seconds
+
+The brief came with a field log: activation 56 s, exit ~117 s, on the phone
+this module is built for. The log shows exactly where the time went, and
+both costs were work the module did to itself:
+
+* **The exit's hundred-second verdict.** After a restore put the originals
+  back, the code re-read every value of every knob a second time to prove
+  the writes — thirteen full snapshots at once (`revert block_other_apps
+  took 100s`, with the owner pressing home while the phone starved). But
+  every restore already reads each value it touches — it has to, to know
+  what is still ours to undo — and now reports what happened as it happens:
+  kept / failed / wrote. The verdict costs no fork. The one-round read-back
+  stays for knobs with a handful of single targets (navigation, brightness,
+  the switches), so a ROM that accepts a command and does nothing still
+  cannot hide; the per-app lists and the six-node panel trust the restore's
+  own account. A write that genuinely failed is still named, and now names
+  both sides (`want [x] got [y]`) from the restore's own reading.
+* **The activation's double stop.** The block apply force-stopped the
+  blocked apps and then idled them one fork per app (`am make-uid-idle`,
+  25 s for 186 apps), and the mode-on sweep re-force-stopped the identical
+  set four seconds later. Suspension already implies idle: the idle fan is
+  gone, and the sweep is told the set was handled and hunts only strays.
+  The apply fan widened from two knobs at a time to three.
+* **Boot-time unfinished-session exits** take the same fast path — the
+  log's 17 s and 23 s reverts shrink the same way — and the `want [0]
+  got []` false-drift warnings, an artefact of the removed re-read, are
+  gone with it.
+
+The promises stand untouched: a value the user changed since apply is left
+alone and said so; `engine.sh verify` remains the end-to-end human check;
+the recovery command is the same. Suite: **646 checks, 0 failed.**
+
 ## What changed in 3.8.0 — the architecture round: measured, then removed
 
 The brief: not a rewrite — find where the phone's time and battery actually

@@ -3176,17 +3176,24 @@ check "with nothing left behind ($(cat "$WORK/out.v73c"))" $?
 say "73. the background sweep: the memory the frozen apps hold is handed back"
 # The owner's numbers: 649 processes, 3.78G of 3.83G used, 47M free, one chat app
 # holding 490M. Suspending an app stops it being started; it does not give back
-# the memory it already holds. Stopping it does, and make-uid-idle is the
-# platform's own "this app is idle now".
+# the memory it already holds. Stopping it does. Since v3.8.1 the BLOCKING does
+# that stopping (it names the same set), the idle hand-to-AMS is gone - a
+# suspended app cannot run, so "idle" says nothing a suspension does not - and
+# the sweep's own full pass would only redo the identical set, so it stays light
+# and clears strays with its one-call kill-all.
 make_tree; make_stubs; seed_stub_state
 screen_on
 run_engine activate >/dev/null 2>&1
-grep -q "background sweep (mode on): 3 frozen app(s) stopped" "$WORK/spsm/spsm.log"
-check "switching the mode on stops the frozen apps and says how many" $?
+n=$(grep -c "^am force-stop com.spotify.music$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 1 ]
+check "switching the mode on stops the frozen apps exactly once (${n:-0})" $?
 grep -q "free memory" "$WORK/spsm/spsm.log"
 check "and reports the memory it freed, before and after" $?
-grep -q "^am make-uid-idle com.spotify.music$" "$WORK/stub/calls"
-check "and each one is handed to ActivityManager as idle, not merely stopped" $?
+if grep -q "^am make-uid-idle" "$WORK/stub/calls"; then
+  bad "no idle forks - a suspension already says more than idle ever did"
+else
+  ok "no idle forks - a suspension already says more than idle ever did"
+fi
 grep -q "^am kill-all$" "$WORK/stub/calls"
 check "and the phone is asked to clear what it still calls background" $?
 _nstop=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
@@ -3215,7 +3222,7 @@ grep -q "drift=0" "$WORK/out.v74"
 check "and the sweep leaves nothing to undo ($(cat "$WORK/out.v74"))" $?
 run_engine activate >/dev/null 2>&1
 [ "$(grep -c "background sweep (mode on): " "$WORK/spsm/spsm.log" 2>/dev/null)" = 2 ]
-check "a new session sweeps fully again" $?
+check "a new session sweeps again (light - the blocking stopped the set)" $?
 run_engine deactivate >/dev/null 2>&1
 
 # Switched off by the user: nothing is stopped by the sweep, and no line claims it.
@@ -3977,6 +3984,63 @@ grep -q "_nap_ok" "$REPO/module/scripts/daemon.sh" && \
 check "the daemon naps without forking (read-with-timeout on its own pipe)" $?
 grep -q 'mkfifo "$STATE/nap"' "$REPO/module/scripts/daemon.sh"
 check "with a fallback to sleep if the pipe cannot be made" $?
+
+say "89. the installer's method: the revert is proved by the restore, not by a re-read"
+# The owner remembered an earlier exit at about twenty seconds and asked for it
+# back. What stood in its way was not the work - it was the proof: after every
+# revert, the engine re-read every value of every knob (thirteen full snapshots
+# at once, a hundred seconds of his exit, his log line for line). The restore
+# already reads every target ONCE - it has to, to know what is still ours to
+# undo - and now it says what happened as it happens: kept (external), failed
+# (the write was refused), or written. The verdict costs no fork.
+sed -n '/^knob_revert()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/krv89"
+grep -q '"$_nt" -le 3' "$WORK/krv89" && grep -q 'krv\.' "$WORK/krv89"
+check "the re-read is reserved for few-target knobs; the rest trust the restore's own account" $?
+grep -q '^  j_record_state "$_id" restored$' "$WORK/krv89"
+check "and a big-record knob's revert ends with no fork beyond the restore" $?
+grep -q 'engine.sh verify' "$REPO/module/scripts/engine.sh" || true
+run_engine verify >/dev/null 2>&1
+check "and engine.sh verify still exists for the human truth" $?
+# The three verdicts, live:
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+printf '%s' 45000 > "$WORK/stub/settings/system.screen_off_timeout"
+run_engine deactivate >/dev/null 2>&1
+grep -q "keep timeout_short: a value was changed externally since we applied it" "$WORK/spsm/spsm.log"
+check "a value the user changed is left alone and said so" $?
+[ "$(cat "$WORK/stub/settings/system.screen_off_timeout" 2>/dev/null)" = "45000" ]
+check "and the user's value survived the exit" $?
+# A silent refusal (the ROM accepts and does nothing) is an APPLY-time
+# detection - "applied, did not take, and was put back" - and always was: the
+# applied record then holds the unchanged value, so the exit is clean, old
+# code and new alike. The small-knob verify reproduces the old exit
+# classification for exactly those knobs, at one round instead of a storm.
+make_tree; make_stubs; seed_stub_state
+touch "$WORK/stub/refuse_put.global.animator_duration_scale"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ "$(cat "$WORK/stub/settings/global.animator_duration_scale" 2>/dev/null)" = "1" ] \
+  && [ "$(cat "$WORK/stub/settings/global.transition_animation_scale" 2>/dev/null)" = "0" ]
+check "a silently refused key stayed the user's; its siblings took" $?
+run_engine deactivate >/dev/null 2>&1
+grep -q "revert clean in" "$WORK/spsm/spsm.log"
+check "and the exit still ends clean (the applied record holds the truth)" $?
+[ "$(cat "$WORK/stub/settings/global.animator_duration_scale" 2>/dev/null)" = "1" ]
+check "and the refused key was never ours to restore" $?
+# The activation side: blocking stops its set once, and the first sweep is
+# already light because of it (no more double force-stop of 186 apps).
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps block_system_apps
+{ i=0; while [ $i -lt 40 ]; do echo "com.bench.app$i"; i=$((i + 1)); done; } > "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+n=$(grep -c "^am force-stop com.bench.app0$" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" = 1 ]
+check "a blocked app is force-stopped exactly once per session (${n:-0})" $?
+grep -q "background sweep (mode on): strays cleared" "$WORK/spsm/spsm.log"
+check "and the sweep that follows is already the light one" $?
+run_engine deactivate >/dev/null 2>&1
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

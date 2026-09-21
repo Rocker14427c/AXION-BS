@@ -134,19 +134,54 @@ knob_revert() { # knob_revert id
   "$_fn" "$JOURNAL/$_id.orig" "$JOURNAL/$_id.applied"
   _rc=$?
 
-  _after=$("snapshot_$_id" 2>/dev/null)
-  case "$(revert_verdict "$_after" "$(j_orig "$_id")" "$(j_applied "$_id")")" in
-    restored)
-      j_record_state "$_id" restored ;;
-    kept)
-      j_record_state "$_id" left
-      log "keep $_id: a value was changed externally since we applied it" ;;
-    *)
-      j_record_state "$_id" restored-drift
-      # The values, not just the verdict. "did not return to its original value"
-      # from the device log was impossible to act on: which value, and to what?
-      log "WARN $_id did not return: $(drift_list "$_after" "$(j_orig "$_id")")" ;;
-  esac
+  # Few-target knobs keep the one-round verification, and it outranks the
+  # restore's own account: a knob with a handful of single targets (navigation,
+  # brightness, the switches whose silent failure is felt the moment it happens)
+  # gets the one-round read - the ROM that accepts a command and does nothing
+  # with it reports no failure, and only a read can catch it. The verdict also
+  # names both sides of a refused value, which the outcome file cannot know at
+  # write time. The scratch account is consumed either way - a file left in
+  # .tmp is a state diff for nothing.
+  _nt=$(grep -c "" "$JOURNAL/$_id.applied" 2>/dev/null)
+  if [ "${_nt:-0}" -gt 0 ] && [ "$_nt" -le 3 ]; then
+    rm -f "$SPSM_DIR/.tmp/krv.${KRV_TAG:-main}" 2>/dev/null
+    _after=$("snapshot_$_id" 2>/dev/null)
+    case "$(revert_verdict "$_after" "$(j_orig "$_id")" "$(j_applied "$_id")")" in
+      restored)
+        j_record_state "$_id" restored ;;
+      kept)
+        j_record_state "$_id" left
+        log "keep $_id: a value was changed externally since we applied it" ;;
+      *)
+        j_record_state "$_id" restored-drift
+        log "WARN $_id did not return: $(drift_list "$_after" "$(j_orig "$_id")")" ;;
+    esac
+    return $_rc
+  fi
+  # The installer's method for big records - the restore read every target
+  # once (it had to, to know what was still ours to undo) and wrote the
+  # originals back. Re-reading everything AGAIN to prove the write was the
+  # opposite of that was thirteen full snapshots at once on the exit, a
+  # hundred seconds of it, the phone starving while its owner pressed home.
+  # The restore says what happened as it happens (kept / failed / wrote),
+  # and the verdict costs no fork. `engine.sh verify` remains the end-to-end
+  # read for a human who wants it, and the safety valves still catch a
+  # genuinely refused write.
+  _ko="$SPSM_DIR/.tmp/krv.${KRV_TAG:-main}"
+  if [ -s "$_ko" ] && grep -q "^kept" "$_ko" 2>/dev/null; then
+    j_record_state "$_id" left
+    log "keep $_id: a value was changed externally since we applied it"
+    rm -f "$_ko" 2>/dev/null
+    return $_rc
+  fi
+  if [ -s "$_ko" ] && grep -q "^failed" "$_ko" 2>/dev/null; then
+    j_record_state "$_id" restored-drift
+    log "WARN $_id did not return: $(grep "^failed" "$_ko" 2>/dev/null | cut -f2 | tr '\n' ' ')"
+    rm -f "$_ko" 2>/dev/null
+    return $_rc
+  fi
+  j_record_state "$_id" restored
+  rm -f "$_ko" 2>/dev/null
   return $_rc
 }
 
@@ -191,7 +226,7 @@ phase_session() { # apply|revert
       [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
-    [ "$_c" -ge 2 ] && { wait; _c=0; }
+    [ "$_c" -ge 3 ] && { wait; _c=0; }
   done
   wait
   # The ordered tail, written out in full: blocking before the sweep (it hands

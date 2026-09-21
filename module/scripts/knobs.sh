@@ -167,6 +167,12 @@ restore_kv() {
 # same pid in every subshell, so two knobs reverting at once read each other's
 # values. The tag comes from the parallel runner; serial callers share "main".
   _ds=$SPSM_DIR/.tmp/w${KRV_TAG:-main}
+  # What the restore did, said while it does it - the caller's verdict comes
+  # from this file instead of a second full read of every value (which was
+  # thirteen knobs' worth of snapshots at once on the exit, a hundred seconds
+  # of the owner's life, for an answer the restore already had).
+  _out=$SPSM_DIR/.tmp/krv.${KRV_TAG:-main}
+  : > "$_out" 2>/dev/null
   _idx=0
   _list=''
   while IFS=$TAB read -r _t _v || [ -n "$_t" ]; do
@@ -199,12 +205,26 @@ restore_kv() {
       _cur=$(enc_val "$(kv_result "$_ds" "$_idx")")
       # Still ours to undo? If not, a newer value wins.
       if [ -n "$_was" ] && [ "$_cur" != "$_was" ]; then
+        # Not ours anymore - but check the other side before calling it kept:
+        # a value already sitting at the original (the screen-off phase undid
+        # it, the user set it back themselves) needs no write and is not an
+        # external change. Calling it kept made the whole knob a "left alone"
+        # and doze a false unmet promise.
+        if [ "$_cur" != "$_v" ]; then
+          printf 'kept\t%s\n' "$_t" >> "$_out" 2>/dev/null
+        fi
         rm -f "$_ds/$$.$_idx" "$_ds/$$.$_idx.part"
         _idx=$((_idx + 1))
         continue
       fi
     fi
-    ( kv_write "$_t" "$(unesc "$_v")" ) &
+    # The current value is read BEFORE the write is backgrounded - the parent
+    # deletes the scratch file the moment the job is spawned, and a failed
+    # record that raced it said "got []", naming half the story.
+    _got=$(kv_result "$_ds" "$_idx")
+    ( kv_write "$_t" "$(unesc "$_v")" 2>/dev/null \
+        && printf 'wrote\t%s\n' "$_t" >> "$_out" 2>/dev/null \
+        || printf 'failed\t%s: want [%s] got [%s]\n' "$_t" "$(unesc "$_v")" "$_got" >> "$_out" 2>/dev/null ) &
     rm -f "$_ds/$$.$_idx" "$_ds/$$.$_idx.part"
     _idx=$((_idx + 1))
   done < "$1"
@@ -1339,7 +1359,10 @@ apply_block_other_apps() {
   pm_batch suspend < "$_cand" > "$_r"
   rm -f "$_cand"
   # A suspended app holds memory until it is stopped: same as ever, six at a
-  # time, for exactly the apps this call confirmed.
+  # time, for exactly the apps this call confirmed. The idle hand-to-AMS is
+  # gone: a suspended app cannot run, so "idle" adds nothing a suspension
+  # does not already say - and it was a second fork per app, 186 of them, on
+  # min-frequency cores.
   sort -u "$_r" 2>/dev/null > "$_r.s"
   _c=0
   while read -r _p; do
@@ -1347,12 +1370,15 @@ apply_block_other_apps() {
     (
       bg_nice
       am force-stop "$_p" >/dev/null 2>&1
-      am make-uid-idle "$_p" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_p" >/dev/null 2>&1
     ) &
     _c=$((_c + 1))
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_r.s"
   wait
+  # This stopped set IS the sweep's set: the sweep's one full pass would only
+  # force-stop the same packages seconds later. Mark the full pass done -
+  # the sweep still clears strays with its one-call kill-all.
+  : > "$STATE/sweep_full" 2>/dev/null
   # One writer, in a stable order, as before.
   while read -r _p; do
     [ -n "$_p" ] || continue

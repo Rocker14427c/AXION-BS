@@ -48,6 +48,17 @@ NEW IN THIS BUILD (v3.7.7)
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
 
+FROM v3.8.1
+- GOODBYE IN SECONDS, NOT MINUTES. Leaving the mode no longer re-reads
+  every value it just put back to prove the phone listened - the restore
+  already knows what it did, so the exit that took two minutes now does
+  seconds of work. Entering skips a redundant second pass over the
+  blocked apps, too.
+- The promises stand: a value you changed yourself is left alone and said
+  so; knobs with only a few values are still read back, so a phone that
+  quietly refuses cannot hide; recovery and `verify` are exactly as before.
+- The full test rig passes 646 checks, 0 failed.
+
 FROM v3.8.0
 - THE SAME WORK, A FRACTION OF THE QUESTIONS. Blocking and releasing now
   asks the phone for forty apps per call instead of one call per app

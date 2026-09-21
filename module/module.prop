@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.8.0
-versionCode=71
+version=v3.8.1
+versionCode=72
 author=Axion SPSM
-description=v3.8.0, the architecture round: measured where the phone's time actually went and removed it. Package-manager work is batched - one pm call per forty packages instead of one fork per app (86 forks per session cycle became 4 on a 40-app phone; roughly 370 fewer forks on a 190-app phone); the daemon now naps with a read-timeout on its own pipe instead of forking sleep every tick (86400 forks a day became zero); the memory sweep no longer re-tells ActivityManager what it was told seconds ago. No feature, option, default, recovery path or workaround changed. Suite: 637 checks, 0 failed.
+description=v3.8.1, the exit round: goodbye in seconds, not minutes. The exit no longer re-reads every value of every knob a second time to prove the restores happened - each restore already reads what it touches and reports kept/failed/wrote as it goes, so the verdict costs no fork (the 100-second revert block in the field log is gone by construction). Activation no longer idles the blocked set it just force-stopped, and the sweep that follows hunts only strays (the 25-second apply block). Few-target knobs keep their read-back, a value you changed yourself is still left alone and said so, recovery is unchanged. Suite: 646 checks, 0 failed.
