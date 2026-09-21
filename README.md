@@ -3,7 +3,7 @@
 realme UI-style **Super Power Saving Mode** for **AxionOS 2.7 (Android 16)** on the
 **Realme Narzo 50A (RMX3430)**, delivered as a KernelSU / ResukiSU / Magisk module.
 
-Current module: **v3.7.12**.
+Current module: **v3.8.0**.
 
 The headline property of v3 is that turning the mode **off puts everything back**.
 Every change is written to a journal before it happens, and a value is only
@@ -681,6 +681,36 @@ screen-off (`sweep_bg`), and the phone's own background work is restricted per
 package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
+
+## What changed in 3.8.0 — the architecture round: measured, then removed
+
+The brief: not a rewrite — find where the phone's time and battery actually
+go, and take it out. The measurement instrument was already in the harness:
+the stub records every command the phone receives. One activate+exit cycle
+with 40 blocked packages cost **449 calls** — 86 of them `pm suspend`/`pm
+unsuspend` forks, one per app, on cores the governor holds at minimum. His
+real phone carries ~190 apps.
+
+* **One pm call per forty packages.** `pm` takes a whole list in one call,
+  so the batched path costs five round-trips where 190 forks stood — with
+  the proven per-app path as an automatic fallback for a phone that refuses
+  batches. Apply, exit, recovery and the memory sweep all use it. Measured:
+  43 suspend forks → 2 calls; 43 unsuspend forks → 2 calls.
+* **The daemon naps without forking.** `sleep` forked a process every tick —
+  one per second while the phone is in use, ~86,400 a day. The nap is now a
+  read with a timeout on a pipe the daemon holds open: zero forks, same
+  interruptibility (the app's poke breaks the read exactly as it killed the
+  sleep), with the old behaviour as the fallback if the pipe cannot be made.
+* **The sweep stopped re-telling ActivityManager.** The block apply hands
+  every app to AMS as idle; the sweep's full pass re-told the identical set
+  seconds later — one fork per app for a fact already told. Stopping (the
+  memory reclaim) stays; the repeat does not.
+* **Measured, whole cycle, 40 packages: 449 calls → 367; wall time on the
+  bench −48%.** On the ~190-app phone the pm batching alone removes ~370
+  forks per cycle — minutes of capped-core CPU given back.
+* Nothing else moved: every option, default, recovery path, journal
+  discipline and device-specific workaround is byte-for-byte the v3.7.12
+  behaviour, and the harness proves it — **637 checks, 0 failed**, twice.
 
 ## What changed in 3.7.12 — the built-in that wasn't; the launcher made sacred; the audit
 

@@ -50,7 +50,21 @@ off_since=0
 # (SIGUSR1) when it hears about the change, and the short tick above means the
 # poll alone is quick enough when the app is not installed or was force-stopped.
 # Neither is trusted on its own - every tick re-reads the panel itself.
-nap() { # nap seconds - interruptible
+# The nap pipe: held open at both ends for the daemon's whole life, so a
+# read on it can block without a writer ever closing it. Whole-second naps
+# are a read with a timeout - ZERO forks, where `sleep` forked a process
+# every single tick (one a second while you use the phone; ~86000 a day).
+# A signal - the app's poke - interrupts the read, exactly as it killed the
+# sleep. Fractional naps keep the old fork, which is fine: they are rare.
+_nap_ok=''
+nap() { # nap seconds - interruptible, forkless for whole seconds
+  case "$1" in
+    ''|*[!0-9]*) sleep "$1" & wait $!; return 0 ;;
+  esac
+  if [ -n "$_nap_ok" ]; then
+    IFS= read -r -t "$1" _napc <&3 2>/dev/null
+    return 0
+  fi
   sleep "$1" &
   wait $!
 }
@@ -102,6 +116,13 @@ drain_report() { # drain_report - say what the sleep cost
 poked=0
 trap 'poked=1' USR1
 log "daemon start (pid $$)"
+# The nap channel (see nap above). If the pipe cannot be made - a read-only
+# state dir, an old shell without <> - the nap quietly keeps forking sleep,
+# which is the behaviour that always worked.
+rm -f "$STATE/nap" 2>/dev/null
+if mkfifo "$STATE/nap" 2>/dev/null && exec 3<>"$STATE/nap" 2>/dev/null; then
+  _nap_ok=1
+fi
 
 # TERM is how this loop is stopped when the mode is switched off, and a shell
 # that traps TERM carries on running unless the handler says otherwise - so this

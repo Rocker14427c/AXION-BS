@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.7.12
-versionCode=70
+version=v3.8.0
+versionCode=71
 author=Axion SPSM
-description=v3.7.12, from the owner's v3.7.11 log: the built-in three-button navigation now truly follows the power-saving home (a stale saved preference had silenced it - the option is gone, its old off value no longer counts); the launcher and every HOME-capable app are never suspended, which ends the false drift and the safety valves on every exit; the exit's last wide-open fan is bounded (the 103-second revert becomes seconds); and a full code audit removed the dead paths (the Low-Power write path, unused helpers and wrappers, the app's unused state map). Suite: 623 checks, 0 failed, twice.
+description=v3.8.0, the architecture round: measured where the phone's time actually went and removed it. Package-manager work is batched - one pm call per forty packages instead of one fork per app (86 forks per session cycle became 4 on a 40-app phone; roughly 370 fewer forks on a 190-app phone); the daemon now naps with a read-timeout on its own pipe instead of forking sleep every tick (86400 forks a day became zero); the memory sweep no longer re-tells ActivityManager what it was told seconds ago. No feature, option, default, recovery path or workaround changed. Suite: 637 checks, 0 failed.

@@ -252,19 +252,29 @@ case "$CMD" in
         if [ "$_st" = "default" ] && [ ! -f "$S/pkg/$1.enabled" ]; then return 0; fi
         printf '%s\n' "$_st" > "$S/pkg/$1.enabled" ;;
       suspend|unsuspend)
-        # pm suspend [--user N] <pkg> - the --user form is what the module uses,
-        # so it has to be accepted here exactly as the real command accepts it.
+        # pm suspend [--user N] <pkg> [<pkg> ...] - the --user form is what the
+        # module uses, and the real command takes a WHOLE LIST of packages in
+        # one call (that is what the batched path relies on), so both shapes
+        # are accepted here exactly as the phone accepts them. A test can make
+        # this phone refuse multi-package calls (refuse_batch) to exercise the
+        # per-app fallback.
         _action=$1
         shift
         [ "$1" = "--user" ] && shift 2
-        _target=$1
-        if [ "$_action" = "suspend" ]; then
-          printf 'true\n' > "$S/pkg/$_target.suspended"
-          xml_suspend "$_target" true
-        else
-          rm -f "$S/pkg/$_target.suspended"
-          xml_suspend "$_target" false
+        if [ -f "$S/refuse_batch" ] && [ "$#" -gt 1 ]; then
+          echo "pm: multi-package calls refused" >&2
+          exit 1
         fi
+        for _target in "$@"; do
+          [ -n "$_target" ] || continue
+          if [ "$_action" = "suspend" ]; then
+            printf 'true\n' > "$S/pkg/$_target.suspended"
+            xml_suspend "$_target" true
+          else
+            rm -f "$S/pkg/$_target.suspended"
+            xml_suspend "$_target" false
+          fi
+        done
         ;;
       *) : ;;
     esac

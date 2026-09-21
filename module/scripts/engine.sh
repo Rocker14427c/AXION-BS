@@ -495,16 +495,11 @@ do_deactivate() {
   # persists suspensions; only an unsuspend clears them). Idempotent,
   # parallel, every single time.
   if [ -s "$STATE/blocked_by_us.tsv" ]; then
-    _freed=0
-    _c=0
-    while read -r _p; do
-      [ -n "$_p" ] || continue
-      ( bg_nice; unsuspend_app "$_p" ) &
-      _freed=$((_freed + 1))
-      _c=$((_c + 1))
-      [ "$_c" -ge 6 ] && { wait; _c=0; }
-    done < "$STATE/blocked_by_us.tsv"
-    wait
+    # One pm call per forty, from the record straight to the phone: the exit
+    # that spent 100s forking one release per app now answers in seconds.
+    _freed=$(grep -c "" "$STATE/blocked_by_us.tsv" 2>/dev/null)
+    [ -n "$_freed" ] || _freed=0
+    pm_batch unsuspend < "$STATE/blocked_by_us.tsv" >/dev/null 2>&1
     rm -f "$STATE/blocked_by_us.tsv"
     log "exit: released every suspended app ($_freed package(s))"
   fi
@@ -920,22 +915,12 @@ do_six_restore() {
   # Six at a time, like every other per-package fan: the owner's record held
   # 264 packages, and one-by-one that was minutes of pm calls in the exact
   # moment recovery is needed - the boot heal in service.sh waited on it too.
-  _n=0
-  _c=0
   _r="$SPSM_DIR/.tmp/restore.$$"
   mkdir -p "$SPSM_DIR/.tmp" 2>/dev/null
-  : > "$_r"
-  for _p in $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null) \
-            $(cat "$STATE/blocked_by_us.tsv" 2>/dev/null); do
-    [ -n "$_p" ] || continue
-    ( bg_nice; unsuspend_app "$_p" >/dev/null 2>&1 && echo x >> "$_r" ) &
-    _c=$((_c + 1))
-    [ "$_c" -ge 6 ] && { wait; _c=0; }
-  done
-  wait
-  _n=$(wc -l < "$_r" 2>/dev/null | tr -d ' ')
+  _n=$(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null "$STATE/blocked_by_us.tsv" 2>/dev/null | grep -c "")
   [ -n "$_n" ] || _n=0
-  rm -f "$_r"
+  cat "$SPSM_DIR/whitelist.txt" 2>/dev/null "$STATE/blocked_by_us.tsv" 2>/dev/null \
+    | pm_batch unsuspend >/dev/null 2>&1
   rm -f "$STATE/blocked_by_us.tsv" 2>/dev/null
   # The one honest caveat: with the mode still on, its next transition will
   # re-apply its own choices. Recovery still works - it must - but the log

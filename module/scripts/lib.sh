@@ -737,6 +737,43 @@ screen_state() { # screen_state - prints on|off
   printf '%s' "$SCREEN_STATE"
 }
 
+# One pm call for a whole batch of packages. The phone answers
+# `pm suspend --user 0 p1 p2 ... p40` exactly as it answers forty single
+# calls - so 186 packages cost five binder round-trips instead of 186 forks,
+# and the exit that spent 100s releasing the record drops to seconds. A
+# chunk the phone refuses falls back to the proven per-app path, which
+# reports only the packages that actually took. Packages that succeeded are
+# printed, one per line.
+pm_batch() { # pm_batch <suspend|unsuspend>  (package list on stdin)
+  _act=$1
+  _pb_acc=''
+  _pb_n=0
+  _pb_chunk() {
+    if su 2000 -c "pm $_act --user 0$_pb_acc" >/dev/null 2>&1 \
+       || pm "$_act" --user 0$_pb_acc >/dev/null 2>&1; then
+      printf '%s\n' $_pb_acc
+    else
+      for _p in $_pb_acc; do
+        if [ "$_act" = suspend ]; then
+          suspend_app "$_p" && printf '%s\n' "$_p"
+        else
+          unsuspend_app "$_p" && printf '%s\n' "$_p"
+        fi
+      done
+    fi
+    _pb_acc=''
+    _pb_n=0
+  }
+  while read -r _bp; do
+    [ -n "$_bp" ] || continue
+    _pb_acc="$_pb_acc $_bp"
+    _pb_n=$((_pb_n + 1))
+    [ "$_pb_n" -ge 40 ] && _pb_chunk
+  done
+  [ -n "$_pb_acc" ] && _pb_chunk
+  return 0
+}
+
 # ------------------------------------------------------- suspend, without root
 # Suspends an app through the shell uid (2000), not as root.
 #

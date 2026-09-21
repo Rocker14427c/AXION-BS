@@ -779,6 +779,8 @@ i=0
 while [ $i -lt 80 ] && ! boosts_off; do sleep 0.25; i=$((i + 1)); done
 boosts_off
 check "and the boost switches landed" $?
+i=0
+while [ $i -lt 8 ] && [ ! -f "$WORK/spsm/journal/order" ]; do sleep 0.25; i=$((i + 1)); done
 [ -f "$WORK/spsm/journal/order" ]; check "the knobs were journalled as they applied" $?
 # ...and waking up reverses it just as promptly.
 screen_on
@@ -3566,9 +3568,10 @@ grep -q "unsuspend_app" "$WORK/allow81" && \
   ! grep -q "suspended=true" "$WORK/allow81"
 check "do_allow frees on our record alone - no dumpsys gate left" $?
 sed -n '/^restore_block_other_apps()/,/^}/p' "$REPO/module/scripts/knobs.sh" > "$WORK/rb81"
-grep -q "unsuspend_app" "$WORK/rb81" && \
+grep -q "pm_batch unsuspend" "$WORK/rb81" && \
+  grep -q "BLOCKED_BY_US" "$WORK/rb81" && \
   ! grep -q "suspended=true" "$WORK/rb81"
-check "the exit's release runs for every package in the record" $?
+check "the exit's release runs for every package in the record (one pm call per forty)" $?
 # 2 - a slot swap while the phone is IN USE frees the added and blocks the
 #     removed, and re-records the journal so the exit still knows what is ours.
 make_tree; make_stubs; seed_stub_state
@@ -3784,8 +3787,8 @@ say "85. recovery: bounded, under the lock, and honest while the mode is on"
 sed -n '/^do_six_restore()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/sr85"
 grep -q "lock_acquire" "$WORK/sr85"
 check "the recovery command runs under the lock" $?
-grep -q "wait; _c=0" "$WORK/sr85"
-check "and unsuspends six packages at a time, not 264 one by one" $?
+grep -q "pm_batch unsuspend" "$WORK/sr85"
+check "and unsuspends the whole record in batches, not 264 one by one" $?
 make_tree; make_stubs; seed_stub_state
 enable_knobs block_other_apps
 screen_on
@@ -3819,7 +3822,9 @@ _b=$(grep -n "released every suspended app" "$REPO/module/scripts/engine.sh" | h
 [ -n "$_a" ] && [ -n "$_b" ] && [ "$_a" -lt "$_b" ]
 check "and the FIRST things undone on the way out (lines $_a, $_b)" $?
 # 2 - every fan worker runs at background priority: the interface wins the CPU.
-[ "$(grep -c "bg_nice" "$REPO/module/scripts/engine.sh")" -ge 7 ]
+# Five fan workers remain in the engine - the exit release and the recovery
+# fans became single batched pm calls in v3.8.0, and a batch needs no renice.
+[ "$(grep -c "bg_nice" "$REPO/module/scripts/engine.sh")" -ge 5 ]
 check "every engine fan worker is reniced" $?
 [ "$(grep -c "bg_nice" "$REPO/module/scripts/knobs.sh")" -ge 8 ]
 check "and every per-package loop too" $?
@@ -3904,6 +3909,74 @@ fi
 # knobs each re-reading themselves while the owner watched. Bounded six.
 sed -n "/^phase_session_revert()/,/^}/p" "$REPO/module/scripts/engine.sh" | grep -q "wait; _c=0"
 check "the session revert fan runs six at a time" $?
+
+say "88. the batching: one pm call per forty packages, the daemon's forkless nap"
+# v3.7.12's fork-count benchmark: one activate+exit with 40 blocked packages
+# cost the phone 43 pm suspend calls and 43 unsuspend calls - 86 forks of the
+# pm binary alone, on cores the governor holds at minimum. The real phone
+# carries ~190. pm takes a whole list in one call, so the batched path costs
+# one call per forty, with the proven per-app path as the fallback.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps block_system_apps
+{
+  i=0
+  while [ $i -lt 40 ]; do echo "com.bench.app$i"; i=$((i + 1)); done
+} > "$WORK/stub/pkgs_sys"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.bench.app0.suspended" ] && [ -e "$WORK/stub/pkg/com.bench.app39.suspended" ]
+check "every one of 40 batched apps really is suspended" $?
+[ -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "and the ordinary per-app block still works beside it" $?
+n=$(grep -c "^pm suspend" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" -le 4 ]
+check "in ${n:-0} pm calls, not 43 forks" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.bench.app0.suspended" ] && [ ! -e "$WORK/stub/pkg/com.bench.app39.suspended" ]
+check "and the exit releases all 40 in one piece" $?
+n=$(grep -c "^pm unsuspend" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" -le 4 ]
+check "with ${n:-0} unsuspend calls, not 43 forks" $?
+# A phone that refuses multi-package calls falls back to the per-app path,
+# and nothing is lost by the fallback.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps block_system_apps
+{
+  i=0
+  while [ $i -lt 5 ]; do echo "com.bench.app$i"; i=$((i + 1)); done
+} > "$WORK/stub/pkgs_sys"
+touch "$WORK/stub/refuse_batch"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.bench.app4.suspended" ]
+check "a phone that refuses batches still gets every app blocked" $?
+n=$(grep -c "^pm suspend --user 0 com.bench" "$WORK/stub/calls" 2>/dev/null || true)
+[ "${n:-0}" -ge 5 ]
+check "by the per-app path (${n:-0} single calls)" $?
+run_engine deactivate >/dev/null 2>&1
+[ ! -e "$WORK/stub/pkg/com.bench.app4.suspended" ]
+check "and released again by the same fallback" $?
+# Recovery batches too.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps
+screen_on
+run_engine activate >/dev/null 2>&1
+[ -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "the session suspended the record" $?
+run_engine six-restore > "$WORK/out.s88" 2>&1
+grep -q "^released=" "$WORK/out.s88"
+check "recovery still answers with what it freed" $?
+[ ! -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "and recovery really freed it (batched)" $?
+run_engine deactivate >/dev/null 2>&1
+# The daemon's nap: a read with a timeout on a held-open pipe - zero forks
+# per tick, where sleep forked one process a second while the phone was in
+# use. The pipe is the mechanism; the timer cases above prove the timing.
+grep -q "_nap_ok" "$REPO/module/scripts/daemon.sh" && \
+  grep -q 'read -r -t "$1" _napc <&3' "$REPO/module/scripts/daemon.sh"
+check "the daemon naps without forking (read-with-timeout on its own pipe)" $?
+grep -q 'mkfifo "$STATE/nap"' "$REPO/module/scripts/daemon.sh"
+check "with a fallback to sleep if the pipe cannot be made" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

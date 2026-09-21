@@ -1,6 +1,6 @@
 HOW TO USE - Axion Super Power Saving
 =====================================
-ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.7.12.
+ResukiSU (KernelSU). RMX3430 / AxionOS 2.7. Release v3.8.0.
 
 HOW IT WORKS
 - Every change is written down before it is made, and put back on exit.
@@ -47,6 +47,15 @@ NEW IN THIS BUILD (v3.7.7)
   clean ROM leave it off. "Restrict the ROM's background services" was already
   device-adaptive - it reads its candidates off whichever phone it runs on,
   every screen-off.
+
+FROM v3.8.0
+- THE SAME WORK, A FRACTION OF THE QUESTIONS. Blocking and releasing now
+  asks the phone for forty apps per call instead of one call per app
+  (hundreds of forks per cycle became a handful), and the daemon sleeps
+  without starting a process every second. Everything feels the same -
+  it just stops spending your CPU on overhead.
+- No option, default or behaviour changed. This round is pure efficiency.
+- The full test rig passes 637 checks, 0 failed.
 
 FROM v3.7.12
 - THE BUILT-IN NAVIGATION WORKS NOW. v3.7.11 made it part of

@@ -1322,33 +1322,43 @@ apply_block_other_apps() {
     _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
   rm -f "$_suspf"
-  _c=0
+  # Who is a candidate at all: blockable, minus what somebody else already
+  # suspended (never ours to take over, and never ours to release).
+  _cand="$_d/cand.$$"
+  : > "$_cand"
   for _p in $(blockable_packages); do
+    [ -n "$_p" ] || continue
+    if [ -n "$_susp" ]; then
+      case "$_susp" in *" $_p "*) continue ;; esac
+    fi
+    printf '%s\n' "$_p" >> "$_cand"
+  done
+  # One pm call per forty packages - 186 suspensions cost five round-trips,
+  # not 186 forks on min-frequency cores. Only what the phone confirmed lands
+  # in the record.
+  pm_batch suspend < "$_cand" > "$_r"
+  rm -f "$_cand"
+  # A suspended app holds memory until it is stopped: same as ever, six at a
+  # time, for exactly the apps this call confirmed.
+  sort -u "$_r" 2>/dev/null > "$_r.s"
+  _c=0
+  while read -r _p; do
     [ -n "$_p" ] || continue
     (
       bg_nice
-      # An app that is already suspended is somebody else's decision - the user's,
-      # or another tool's. Never ours to take over, and never ours to release.
-      if [ -n "$_susp" ]; then
-        case "$_susp" in *" $_p "*) exit 0 ;; esac
-      else
-        dumpsys package "$_p" 2>/dev/null | grep -q 'suspended=true' && exit 0
-      fi
-      if suspend_app "$_p"; then
-        am force-stop "$_p" >/dev/null 2>&1
-        printf '%s\n' "$_p" >> "$_r"
-      fi
+      am force-stop "$_p" >/dev/null 2>&1
+      am make-uid-idle "$_p" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_p" >/dev/null 2>&1
     ) &
     _c=$((_c + 1))
     [ "$_c" -ge 6 ] && { wait; _c=0; }
-  done
+  done < "$_r.s"
   wait
   # One writer, in a stable order, as before.
-  sort -u "$_r" 2>/dev/null | while read -r _p; do
+  while read -r _p; do
     [ -n "$_p" ] || continue
     grep -qxF "$_p" "$BLOCKED_BY_US" 2>/dev/null || printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
-  done
-  rm -f "$_r"
+  done < "$_r.s"
+  rm -f "$_r" "$_r.s"
 }
 
 restore_block_other_apps() {
@@ -1358,15 +1368,9 @@ restore_block_other_apps() {
   # to stand in front of each release did not match this phone's output, and
   # the v3.7.5 log shows what that cost - an exit that skipped every release
   # and left the apps suspended through a re-flash and a reboot. Our record
-  # is the authorisation; unsuspend_app is idempotent.
-  _c=0
-  while read -r _p; do
-    [ -n "$_p" ] || continue
-    ( bg_nice; unsuspend_app "$_p" ) &
-    _c=$((_c + 1))
-    [ "$_c" -ge 6 ] && { wait; _c=0; }
-  done < "$BLOCKED_BY_US"
-  wait
+  # is the authorisation; the release is idempotent - and now batched: one
+  # pm call per forty, instead of 186 forks on the way out.
+  pm_batch unsuspend < "$BLOCKED_BY_US" >/dev/null 2>&1
   rm -f "$BLOCKED_BY_US"
 }
 
@@ -1686,9 +1690,10 @@ sweep_background() { # sweep_background <why>
       (
         bg_nice
         am force-stop "$_p" >/dev/null 2>&1
-        # A suspended app cannot have been started by the user, so telling the
-        # phone it is idle is a statement of fact.
-        am make-uid-idle "$_p" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_p" >/dev/null 2>&1
+        # The idle hand-to-ActivityManager happened in the block apply, for
+        # this very set, seconds ago - repeating it here was a fork per app
+        # for a fact already told. Stopping is what frees the memory; that
+        # is this pass's whole job.
       ) &
       _c=$((_c + 1))
       [ "$_c" -ge 6 ] && { wait; _c=0; }
