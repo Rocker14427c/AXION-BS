@@ -127,13 +127,17 @@ Two facts fall out of this immediately:
 
 ### 3.2 The arithmetic that decides the architecture
 
-* Battery ≈ 5000 mAh ≈ **19.3 Wh**.
-* Target 0–1 % over 6–7 h ⇒ 50 mAh ≈ 0.19 Wh over 6.5 h ⇒ **≈29 mW average**.
+The numbers come from this phone's own fuel gauge, which also pins the scale of
+`charge_counter`: **25 % ↔ 1 500 000 µAh** and **16 % ↔ 960 000 µAh**, so full ≈ **6 000 000 µAh**
+and **1 % = 60 000 µAh**. That makes 1 % per 6.5 h equal 9 230 µAh/h.
+
+* Target 0–1 % over 6–7 h ⇒ up to ~60 000 µAh over 6.5 h ⇒ **≈9 mA average** ⇒ **≈33 mW**.
 * MTK's own power model says the CPU domain alone draws **816 mW** with all eight cores at their
-  lowest OPP — i.e. *awake at minimum frequency*.
-* 816 mW ÷ 29 mW ≈ **28×.** So a phone that merely runs at low frequency can never reach the
-  target: it must be **suspended for roughly 96 %+ of the window**.
-* Meanwhile the measured screen-on draw is ~2.7 W, ~93× the standby target.
+  lowest OPP — i.e. *awake at minimum frequency*, and that is the floor, not a peak.
+* 816 mW ÷ 33 mW ≈ **25×.** A phone that merely runs at low frequency can never reach the target:
+  it must spend **~96 % of the window actually suspended**.
+* Meanwhile the measured screen-on draw is **12 mAh/min = 720 mA ≈ 2.7 W**, about **80×** the
+  standby target — and, notably, identical in the active and idle screen-on windows.
 
 **This is the quantitative proof of the owner's rule**: the goal is fewer wakeups and more true
 suspend, not a lower frequency ceiling. It also explains realme's 0–1 %: their SPSM keeps the AP
