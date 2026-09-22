@@ -53,17 +53,37 @@ There are exactly two ways `phase_deep` applies nothing:
 1. every deep knob is disabled in `/data/adb/spsm/config`; or
 2. `DEEP_ONCE` suppressed them because `deep_report` already existed.
 
-(2) is ruled out by the same log: suppression logs `idle: <knob> is already in
-place from this idle period`, and no such line appears. That leaves (1).
+**Both are now ruled out, and the cause is still unknown.**
 
-**So: on the owner's phone, Doze is never forced, background apps are never
-restricted, the ROM's background services are never stopped, and the GPU boost
-hints are never cleared — because those knobs are switched off in the config.**
-The `docs/OPTIMISATION.md` work made the *transitions* fast. The *savings* were
-not running.
+(2) is excluded by the log: suppression logs `idle: <knob> is already in place
+from this idle period`, and no such line appears.
 
-This is a configuration state, not a code bug, which is why no test caught it.
-It is also the single most important thing to confirm before changing anything
+(1) was the conclusion this document used to draw, and it was **wrong**. It was
+checked against the real device: the config contains no `knob.deep_doze`,
+`app_restrict`, `rom_bg_off`, `ged_boost_off` or `cores_sleep` line at all, and
+an absent knob takes its default, which for all of these is *on*. So the deep
+set is not switched off. See `docs/DEVICE-FINDINGS.md`.
+
+A third explanation was also tried and is equally dead: that the phone runs a
+different build than this repository. It does not — `scripts=v3.8.1
+module=v3.8.1 code=v3.8.1`, 31 knobs, identical to the repo. The
+`knob.cpu_offline_big=1` and `knob.cap_always=1` lines that suggested otherwise
+appear zero times in the installed `knobs.sh`; they are inert leftovers in a
+config file that never prunes removed knobs.
+
+**So the deep phase applying nothing is unexplained.** Do not adopt either
+explanation above. The next step is to measure the device live — suspend
+accounting, wakeup sources and Doze state with the screen off — rather than to
+reason further from this log. Two confident conclusions have already been drawn
+from this file's reasoning and both were false, which is the argument for
+measuring.
+
+What *is* still true from the log: on the owner's phone Doze was never forced,
+background apps were never restricted, the ROM's background services were never
+stopped, and the GPU boost hints were never cleared. Those savings did not run.
+The `docs/OPTIMISATION.md` work made the *transitions* fast; it did not make the
+savings happen. Why they did not run is the open question, and it is the single
+most important thing to establish before changing anything
 else, and the profiler reports it explicitly.
 
 ### 1.2 What *was* applied is a screen-on saver, not a standby saver
