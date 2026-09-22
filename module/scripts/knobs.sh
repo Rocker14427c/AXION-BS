@@ -650,6 +650,65 @@ radio_set() { # radio_set wifi|bt|nfc on|off
   return 0
 }
 
+# ---------------------------------------------------------- netpolicy state
+# Data Saver ("restrict background") is not a Settings key on this ROM:
+# `settings get global data_saver_on` answers null, so an @global target would
+# be recorded as (MISSING) - and apply_kv would then, correctly, refuse to
+# change it. The truth lives in the netpolicy service, so it is read from there
+# and put back through the same command that set it. `data_saver_idle` uses this
+# to stop background network work while the screen is off: measured on the
+# device, Wi-Fi accounted for 2451 of the wakeups in the battery-stats ledger
+# and cellular data another 739 (docs/POWER-ANALYSIS-2026-09-22.md).
+#
+# Calls and SMS are untouched by this: it restricts apps' background *data*,
+# not the modem's registration, which is the one thing that must keep working.
+data_saver_state() { # -> true|false, prints nothing when it cannot be read
+  if has cmd; then
+    _o=$(cmd netpolicy get restrict-background 2>/dev/null | tr -d '\r' | head -1)
+    case "$_o" in true|false) printf '%s' "$_o"; return ;; esac
+  fi
+  if has dumpsys; then
+    _o=$(dumpsys netpolicy 2>/dev/null | sed -n 's/^ *Restrict background: *\(true\|false\).*/\1/p' | head -1)
+    case "$_o" in true|false) printf '%s' "$_o"; return ;; esac
+  fi
+}
+
+data_saver_set() { # data_saver_set on|off
+  case "$1" in
+    on)  has cmd && cmd netpolicy set restrict-background true  >/dev/null 2>&1 ;;
+    off) has cmd && cmd netpolicy set restrict-background false >/dev/null 2>&1 ;;
+  esac
+  return 0
+}
+
+meta_data_saver_idle() {
+  echo "Connectivity|Background data paused while asleep|While the screen is off, apps may not use the network in the background, so their push messages and syncs wait for the next time the phone wakes instead of waking it themselves. Calls and SMS keep arriving. Notifications can be a little late, and everything resumes the moment you pick the phone up.|1|deep|battery"
+}
+
+snapshot_data_saver_idle() {
+  printf 'netpolicy:restrict-background\t%s\n' "$(enc_val "$(data_saver_state)")"
+}
+
+apply_data_saver_idle() {
+  # Never change a value that could not be read: with no reading on record there
+  # is nothing the exit could put back, and a restriction with no way to lift it
+  # is how a power mode strands a phone with no network.
+  [ -n "$(data_saver_state)" ] || { log "skip data saver: the netpolicy state could not be read, so it is not ours to change"; return 0; }
+  data_saver_set on
+}
+
+restore_data_saver_idle() { # restore_data_saver_idle <orig-file> [<applied-file>]
+  _want=$(unesc "$(sed -n 's/^netpolicy:restrict-background\t//p' "$1" 2>/dev/null | head -1)")
+  case "$_want" in
+    true)  data_saver_set on ;;
+    false) # only lift what is still ours: if something else turned Data Saver
+           # on after we did, that is not ours to undo either
+           [ "$(data_saver_state)" = true ] && data_saver_set off ;;
+    '')    log "data saver: the original was never read, leaving it exactly as it is" ;;
+  esac
+  return 0
+}
+
 snapshot_wifi_off() { snap_kv @global:wifi_on @global:wifi_scan_always_enabled; }
 # What the probe should look at for this option.
 #
@@ -2111,6 +2170,7 @@ app_restrict
 rom_bg_off
 freeze_google
 deep_doze
+data_saver_idle
 sync_off
 battery_saver
 blur_off
