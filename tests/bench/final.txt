@@ -1,0 +1,10 @@
+activate	2620	1841	1836
+deactivate	2023	1270	1068
+screen-off (deep phase on)	1031	862	592
+screen-on  (deep phase off)	459	337	243
+status (the app polls this)	287	84	165
+status again	287	84	165
+dump-knobs	45	6	21
+verify	100	48	81
+daemon idle 10s, screen on	166	59	10000
+daemon idle 10s, screen off	25	22	10000

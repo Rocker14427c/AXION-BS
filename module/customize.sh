@@ -29,6 +29,21 @@ mkdir -p "$SPSMD/scripts" "$SPSMD/state" "$SPSMD/journal"
 cp -af "$MODPATH/scripts/"*.sh "$SPSMD/scripts/" 2>/dev/null
 chmod 755 "$SPSMD/scripts/"*.sh 2>/dev/null
 echo "$MODPATH" > "$SPSMD/moddir"
+
+# --- native helpers -----------------------------------------------------------
+# The screen monitor, for whichever ABI this phone can actually run. Optional by
+# design: if none of the shipped builds load, the daemon polls the panel exactly
+# as it always has, and the module is fully functional either way.
+if [ -d "$MODPATH/bin" ]; then
+  set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
+  # shellcheck source=/dev/null
+  . "$SPSMD/scripts/lib.sh" 2>/dev/null && publish_native "$MODPATH"
+  if [ -x "$SPSMD/bin/spsm-screenmon" ]; then
+    ui_print "  Screen monitor: event-driven ($(cat "$SPSMD/state/native_abi" 2>/dev/null))"
+  else
+    ui_print "  Screen monitor: polling (no native build runs on this device)"
+  fi
+fi
 # Which scripts are on this phone, written where the app and the log can see it.
 mkdir -p "$SPSMD/state" 2>/dev/null
 printf '%s\n' "$_VERSION" > "$SPSMD/state/script_version" 2>/dev/null

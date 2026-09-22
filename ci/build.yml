@@ -19,6 +19,15 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq dash zip
           sh tests/run.sh
           sh tests/run-install.sh
+          # The codec/helper equivalence suite: pins the optimised esc/unesc/
+          # cmp_val/snap_get/cfg against verbatim copies of what they replaced,
+          # so a faster implementation cannot quietly change an answer.
+          sh tests/run-codec.sh
+          # The daemon's waiting behaviour: that it does not spin, that a screen
+          # change still lands, and that the native monitor is a real saving and
+          # is never required. This is where the busy loop would have been
+          # caught, and a CPU-time assertion is the only thing that catches it.
+          sh tests/run-daemon.sh
 
       - uses: actions/setup-java@v4
         with:

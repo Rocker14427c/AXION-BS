@@ -91,15 +91,135 @@ sync_scripts() {
   log "scripts updated: this phone was running ${_have:-nothing}, the module is $_want - the new code takes effect from the next switch"
 }
 
+# ------------------------------------------------------------------ native
+# The native helpers, and which build of them this phone can run.
+#
+# The module ships arm64-v8a and armeabi-v7a (see native/build.sh) because it
+# does not get to choose the phone it lands on. The ABI is asked of the device
+# rather than guessed, and the answer is verified by RUNNING the binary: a
+# helper that is the wrong ABI, or that a kernel refuses, must be found out
+# here - at install and at boot - and not by the daemon at two in the morning.
+#
+# Nothing in the module requires these to exist. If none can run, the binary is
+# simply not published and the daemon polls exactly as it always did.
+SPSM_BIN="$SPSM_DIR/bin"
+
+# Which ABI directory suits this phone, most specific first.
+native_abi_list() {
+  _a1=$(getprop ro.product.cpu.abi 2>/dev/null)
+  _a2=$(getprop ro.product.cpu.abilist 2>/dev/null)
+  case "$_a1$_a2" in
+    *arm64*) printf 'arm64-v8a armeabi-v7a' ;;
+    *armeabi*|*armv7*) printf 'armeabi-v7a' ;;
+    *x86_64*) printf 'x86_64 host' ;;
+    # An unknown or unreadable ABI is not a reason to give up: try both, and
+    # let the exec test below decide. A wrong guess costs one failed exec.
+    *) printf 'arm64-v8a armeabi-v7a' ;;
+  esac
+}
+
+# Copy the helpers this phone can actually run into $SPSM_BIN. Called by the
+# installer and by service.sh on every boot, so a module update replaces them.
+publish_native() { # publish_native <module dir>
+  _md=$1
+  [ -d "$_md/bin" ] || return 0
+  mkdir -p "$SPSM_BIN" 2>/dev/null
+  for _abi in $(native_abi_list); do
+    [ -d "$_md/bin/$_abi" ] || continue
+    _ok=1
+    for _f in "$_md/bin/$_abi/"*; do
+      [ -f "$_f" ] || continue
+      _b=${_f##*/}
+      cp -f "$_f" "$SPSM_BIN/$_b.new" 2>/dev/null || { _ok=''; break; }
+      chmod 755 "$SPSM_BIN/$_b.new" 2>/dev/null
+      mv -f "$SPSM_BIN/$_b.new" "$SPSM_BIN/$_b" 2>/dev/null || { _ok=''; break; }
+    done
+    [ -n "$_ok" ] || continue
+    # Proof, not faith: a binary that cannot be executed on this phone is worse
+    # than none, because the daemon would start it and get nothing back. It is
+    # asked to run with no arguments, which it answers with a usage line and
+    # status 2 - enough to prove the kernel loaded it and ran its main().
+    #
+    # The status is captured straight off the call. Reading `$?` after an
+    # intervening `if` reads the `if`'s status, not the program's - which would
+    # have made this test say yes to a binary that never ran at all.
+    "$SPSM_BIN/spsm-screenmon" >/dev/null 2>&1
+    _rc=$?
+    # 126/127 are the shell's "cannot execute" and "not found"; anything else
+    # means the image loaded.
+    if [ "$_rc" != 126 ] && [ "$_rc" != 127 ] && [ -x "$SPSM_BIN/spsm-screenmon" ]; then
+      log "native helpers: $_abi"
+      printf '%s\n' "$_abi" > "$STATE/native_abi" 2>/dev/null
+      return 0
+    fi
+  done
+  rm -f "$SPSM_BIN/spsm-screenmon" 2>/dev/null
+  log "native helpers: none of the shipped builds run here - the daemon will poll"
+  return 0
+}
+
 # /data/adb/spsm must exist before anything else references it.
-mkdir -p "$SPSM_DIR" "$ORIG_DIR" "$STATE" 2>/dev/null
+#
+# Guarded, because this line runs on every single sourcing of lib.sh and the
+# engine sources it from every subshell it fans out - so a directory that has
+# existed since installation was costing a fork per worker. `mkdir -p` on an
+# existing tree is a no-op that still pays for a process; the test is free.
+[ -d "$STATE" ] && [ -d "$ORIG_DIR" ] ||
+  mkdir -p "$SPSM_DIR" "$ORIG_DIR" "$STATE" 2>/dev/null
 
 # ------------------------------------------------------------------ logging
 LOG_MAX=400000
+# Is there a way to get the time without forking?
+#
+# `date` is a fork per log line, measured at ~1.4ms, and an activation writes
+# dozens of lines while the user is waiting for the mode to come on. Android's
+# /system/bin/sh is mksh, whose printf understands the %(...)T time format, as
+# does bash; dash does not. Probed once at load, not once per line.
+if printf '%(%Y)T' -1 >/dev/null 2>&1; then
+  _STAMP_FMT='%(%Y-%m-%d %H:%M:%S)T'
+  now_stamp() { printf "$_STAMP_FMT" -1; }
+  # The same trick for the epoch seconds the engine uses for every duration,
+  # timeout and age check. `date +%s` was 112 execs in one activation.
+  #
+  # With one exception, and it matters: the test suite injects a FAKE clock by
+  # putting a `date` stub on PATH, so that an hourly drain rate can be asserted
+  # without the test sleeping for an hour. A printf builtin reads the kernel
+  # directly and would sail straight past that stub - the module would keep
+  # working while every time-travel test quietly measured real time instead.
+  #
+  # So the builtin is used only when no such stub is present. On a phone there
+  # is none and this is a pure saving; under the suite the fork comes back and
+  # the injected clock still works. A faster implementation that defeats the
+  # tests which prove it correct is not a good trade.
+  if command -v date >/dev/null 2>&1 &&
+     case $(command -v date) in /system/bin/date|/bin/date|/usr/bin/date|/xbin/date) false ;; *) true ;; esac
+  then
+    now_epoch() { date +%s; }
+  else
+    now_epoch() { printf '%(%s)T' -1; }
+  fi
+else
+  now_stamp() { date '+%Y-%m-%d %H:%M:%S'; }
+  now_epoch() { date +%s; }
+fi
+
 log() {
-  _line="$(date '+%Y-%m-%d %H:%M:%S') $*"
+  _line="$(now_stamp) $*"
   echo "$_line" >> "$LOG" 2>/dev/null
-  echo "SPSM: $*" > /dev/kmsg 2>/dev/null
+  # The kernel log, for the lines that matter when a phone will not boot and
+  # the module's own log is on a partition nobody can reach yet.
+  #
+  # This used to be written for EVERY line. /dev/kmsg is a real device write -
+  # it is not free, it is serialised against every other kernel log writer on
+  # the system, and the module's chatter is not what anyone is reading dmesg
+  # for. It is also usually not writable at all outside early boot, so most of
+  # those writes were a failed open per line. It is kept for the session
+  # headers and the failures, which is what it was for, and skipped for the
+  # routine narration.
+  case "$*" in
+    *WARN*|*FAIL*|*fail*|*error*|*ERROR*|*panic*|*recover*|*"daemon start"*|*"=== "*)
+      echo "SPSM: $*" > /dev/kmsg 2>/dev/null ;;
+  esac
   # The size check is a fork (`wc`), and it ran on every single line: an
   # activation writes dozens of lines, so dozens of forks went into answering a
   # question whose answer moves by a few hundred bytes. It is asked every
@@ -174,7 +294,7 @@ lock_acquire() {
       case "$_mt" in
         ''|*[!0-9]*) ;;
         *)
-          _age=$(($(date +%s) - _mt))
+          _age=$(($(now_epoch) - _mt))
           if [ "$_age" -gt 600 ] 2>/dev/null; then
             log "WARN stale lock (${_age}s, pid ${_p:-unknown}) - taking it"
             rm -rf "$LOCK"
@@ -218,11 +338,48 @@ lock_release() { rm -rf "$LOCK" 2>/dev/null; }
 # The escaped form keeps a trailing "\n" escape AND a real newline, because a
 # file whose last line has no terminator loses that last line to `while read` -
 # which silently skipped the final value of every restore.
+#
+# The common case is answered without a process. Almost every value this module
+# handles is a short, ordinary one - "1", "0", "schedutil", "1800000",
+# "com.android.launcher3/.Launcher" - with no backslash and no newline in it, and
+# for those the escaped form is just the value with a "\n" on the end. Deciding
+# that costs one `case`; the sed|tr pipeline that used to answer it costs two
+# processes, and it ran once per target, on every snapshot, of every knob.
+#
+# Anything with a backslash or a newline in it still goes down the original
+# pipeline, unchanged - correctness is not what is being traded here, only the
+# forks for the values that never needed them.
 esc() {
+  case "$1" in
+    # The empty value is NOT the fast path: sed reads no lines from empty input
+    # and so emits nothing at all, where the obvious shortcut would write "\n".
+    # The equivalence suite (tests/run-codec.sh) caught exactly this, which is
+    # why that suite exists - an empty reading is a real thing here (a Settings
+    # row that is unset), and encoding it differently from the implementation
+    # this replaced would put a value into the journal that was never there.
+    '') printf '\n'; return ;;
+    *\\*|*'
+'*) ;;
+    *) printf '%s\\n\n' "$1"; return ;;
+  esac
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/$/\\n/' | tr -d '\n'
   printf '\n'
 }
 unesc() {
+  # The exact inverse of esc's fast path, and just as forkless: a value that
+  # esc could encode without a process is one whose encoding is the value plus
+  # a trailing "\n" and no other backslash. Stripping that suffix is a
+  # parameter expansion. The awk below is the general case and is still what
+  # decides anything with a backslash left in it.
+  case "$1" in
+    *\\n)
+      _ue=${1%'\n'}
+      case "$_ue" in
+        *\\*) ;;                      # a real backslash: the general case owns it
+        *) printf '%s\n' "$_ue"; return ;;
+      esac
+      ;;
+  esac
   # One left-to-right pass. A backslash is only special together with the
   # character after it, so \\ is a real backslash and \n is a newline - which
   # is what esc wrote. Two chained seds looked equivalent but were not: the
@@ -248,6 +405,10 @@ unesc() {
 # IFS='\t' looks the same in a diff but makes the shell split records on a
 # backslash and a letter t, which quietly corrupts every line it parses.
 TAB=$(printf '\t')
+# A carriage return, as a value a `case` pattern can test against. The comparison
+# helpers below use it to recognise - without forking `tr` - the values that
+# genuinely need the slow, general cleanup.
+CR=$(printf '\r')
 
 # Canonical encoding for a value inside snapshot text.
 #
@@ -268,8 +429,38 @@ enc_val() {
 }
 
 # Value of one target inside a snapshot text ("target<TAB>value" lines).
+# Two processes per lookup, and the verdict loops ask for a value once per
+# target per pass - so this was the most-forked helper in a revert. A snapshot
+# is a handful of short lines held in a variable, and walking it in the shell
+# costs no process at all.
+#
+# The split is done by setting IFS to a newline and reusing the positional
+# parameters, which keeps the work in THIS shell: a `while read` fed by a pipe
+# would run in a subshell (another fork, and in some shells the result would be
+# lost with it).
 snap_get() {
-  printf '%s\n' "$1" | awk -F"	" -v t="$2" '$1==t{print $2; exit}'
+  _sg_want=$2
+  _sg_old=$IFS
+  IFS='
+'
+  # shellcheck disable=SC2086
+  set -- $1
+  IFS=$_sg_old
+  for _sg_line in "$@"; do
+    case "$_sg_line" in
+      "$_sg_want$TAB"*)
+        _sg_v=${_sg_line#*$TAB}
+        # awk's $2 ends at the NEXT separator, so a record that somehow holds a
+        # second tab yields only the field between them. Matching that exactly
+        # matters: the equivalence suite compares the two implementations
+        # byte-for-byte, and "everything after the first tab" is a different
+        # function. (Values are encoded to be tab-free, so this is about being
+        # provably identical rather than about a case that should occur.)
+        printf '%s' "${_sg_v%%$TAB*}"
+        return ;;
+    esac
+  done
+  return 0
 }
 # One target's value straight out of a snapshot FILE, still encoded; snap_file_val
 # decodes it. Restore functions that look up a single row must use these rather
@@ -291,7 +482,27 @@ snap_file_val() { # snap_file_val <file> <target> -> decoded value
 # a shell command is not a value that failed to come back. The device log once
 # reported a knob as unrestored while printing the same value on both sides of
 # the sentence, which is a thing nobody can act on.
+# Three processes per call, and the revert verdict asks it up to five times per
+# target - so a knob with six values spent thirty processes deciding whether
+# anything had moved. The overwhelmingly common value ("1", "0", "powersave",
+# a frequency) has no backslash, no carriage return and no trailing space, and
+# for that value this function is the identity: one `case` answers it.
+#
+# The general path is kept verbatim underneath and still handles every value the
+# fast path declines, so what a comparison MEANS is unchanged.
 cmp_val() { # cmp_val <encoded>
+  case "$1" in
+    *\\n)
+      _cv=${1%'\n'}
+      case "$_cv" in
+        *\\*|*"$CR"*|*' '|*"$TAB") ;;   # needs the real thing
+        *) printf '%s' "$_cv"; return ;;
+      esac
+      ;;
+    '')  printf ''; return ;;
+    *\\*|*"$CR"*|*' '|*"$TAB") ;;
+    *) printf '%s' "$1"; return ;;
+  esac
   printf '%s' "$(unesc "$1")" | tr -d '\r' | sed -e 's/[[:space:]]*$//'
 }
 
@@ -306,6 +517,10 @@ drift_list() { # drift_list now-text orig-text
     _ov=$(cmp_val "$_o")
     _nv=$(cmp_val "$_n")
     [ "$_nv" = "$_ov" ] && continue
+    # Same rule as revert_verdict: a target the current reading does not mention
+    # has left the knob's scope (an app moved into the six slots), and naming it
+    # as a value that "did not return" is a false alarm about a deliberate act.
+    [ -z "$_n" ] && continue
     printf '%s: want [%s] got [%s]; ' "$_t" "$_ov" "$_nv"
   done
   return 0
@@ -325,6 +540,21 @@ revert_verdict() { # revert_verdict now-text orig-text applied-text
     [ "$(cmp_val "$_o")" = "(MISSING)" ] && continue
     _n=$(snap_get "$_now" "$_t")
     [ "$(cmp_val "$_n")" = "$(cmp_val "$_o")" ] && continue
+    # A target the CURRENT snapshot does not mention at all is not a value that
+    # failed to come back - it is a target that has left this knob's scope, and
+    # there is nothing on the device to compare.
+    #
+    # The case that proved it: an app moved into one of the six slots. The slots
+    # are the keep-working list, so `allow` frees the app and it stops being a
+    # blockable package - the next snapshot simply has no row for it. Comparing
+    # that absence against its recorded "0" read as "want [0] got []", and every
+    # exit after a slot change reported a phantom unrestored value, naming an app
+    # the module had deliberately and correctly released.
+    #
+    # An absent row is skipped. The knob's own restore still handles anything it
+    # really did change, and a value that is genuinely still ours is still in the
+    # snapshot to be caught.
+    [ -z "$_n" ] && continue
     _a=$(snap_get "$_applied" "$_t")
     if [ -n "$_a" ] && [ "$(cmp_val "$_n")" != "$(cmp_val "$_a")" ]; then
       _kept=$((_kept + 1))
@@ -356,8 +586,35 @@ snap_diff() { # snap_diff <before> <after>
 
 # Every target mentioned by either snapshot - the diff above must not miss a
 # target that only exists on one side.
+# Same reasoning: three processes to list the names in two short texts. The
+# de-duplication is a substring test against what has already been emitted,
+# which is exact because every name is bounded by newlines on both sides.
 snap_targets() {
-  printf '%s\n%s\n' "$1" "$2" | awk -F"\t" 'NF>=2{print $1}' | awk '!seen[$0]++'
+  _st_old=$IFS
+  IFS='
+'
+  # shellcheck disable=SC2086
+  set -- $1 $2
+  IFS=$_st_old
+  _st_seen='
+'
+  for _st_line in "$@"; do
+    case "$_st_line" in
+      *"$TAB"*) ;;
+      *) continue ;;
+    esac
+    _st_t=${_st_line%%$TAB*}
+    [ -n "$_st_t" ] || continue
+    case "$_st_seen" in
+      *"
+$_st_t
+"*) continue ;;
+    esac
+    _st_seen="$_st_seen$_st_t
+"
+    printf '%s\n' "$_st_t"
+  done
+  return 0
 }
 
 norm() {
@@ -416,7 +673,7 @@ j_reset() {
         rm -f "$JOURNAL/$_id.orig" "$JOURNAL/$_id.applied" "$JOURNAL/$_id.meta" "$JOURNAL/$_id.state" ;;
     esac
   done
-  mkdir -p "$ORIG_DIR" 2>/dev/null
+  [ -d "$ORIG_DIR" ] || mkdir -p "$ORIG_DIR" 2>/dev/null
   if [ "$_kept" = "0" ]; then
     # Nothing carried over, so the per-package sub-journals are finished too -
     # and the records of what we suspended and which radios we found on belong to
@@ -431,10 +688,60 @@ j_reset() {
 
 # ------------------------------------------------------------------ config
 # config is a flat key=value file the APK writes and the user can hand-edit.
+# Three processes per lookup - a subshell, a sed and a tail - against a file of
+# a few dozen short lines, and the engine asks it once per knob per loop. The
+# status the app polls spent 36 seds and 32 tails here and nowhere else.
+#
+# The file is read ONCE into a variable instead, and every later lookup walks
+# that variable. "Once" is per shell: each engine invocation, and each subshell
+# of a parallel fan, loads it the first time it asks. The config is written by
+# the app between runs rather than during one, and the one writer inside a run
+# (do_set) calls cfg_invalidate after it writes, so a live change is still seen.
+#
+# The last assignment for a key wins, exactly as `tail -1` made it.
+_CFG_CACHE=''
+_CFG_LOADED=''
+
+cfg_load() {
+  _CFG_CACHE=''
+  if [ -f "$CONFIG" ]; then
+    while IFS= read -r _cfg_line || [ -n "$_cfg_line" ]; do
+      case "$_cfg_line" in
+        *=*) _CFG_CACHE="$_CFG_CACHE$_cfg_line
+" ;;
+      esac
+    done < "$CONFIG"
+  fi
+  _CFG_LOADED=1
+}
+
+# Anything that writes the config calls this, so the next read sees the write.
+cfg_invalidate() { _CFG_LOADED=''; }
+
 cfg() { # cfg key default
-  _v=$(sed -n "s/^$1=//p" "$CONFIG" 2>/dev/null | tail -1)
-  [ -n "$_v" ] && { printf '%s' "$_v"; return; }
-  printf '%s' "$2"
+  [ -n "$_CFG_LOADED" ] || cfg_load
+  _cfg_key=$1
+  _cfg_def=$2
+  _cfg_hit=''
+  _cfg_rest=$_CFG_CACHE
+  # Walked as a string rather than with `set --`: the positional parameters are
+  # how the key and the default arrived, and overwriting them here is how the
+  # first version of this function lost track of what it was looking for.
+  while [ -n "$_cfg_rest" ]; do
+    _cfg_line=${_cfg_rest%%
+*}
+    case "$_cfg_rest" in
+      *"
+"*) _cfg_rest=${_cfg_rest#*"
+"} ;;
+      *) _cfg_rest='' ;;
+    esac
+    case "$_cfg_line" in
+      "$_cfg_key="*) _cfg_hit=${_cfg_line#*=} ;;   # keep the last one
+    esac
+  done
+  [ -n "$_cfg_hit" ] && { printf '%s' "$_cfg_hit"; return; }
+  printf '%s' "$_cfg_def"
 }
 
 # Is a knob turned on? Default comes from the knob's own metadata.
@@ -639,7 +946,7 @@ screen_decide() {
           _mk=''
           [ -f "$SCREEN_MARK" ] && IFS= read -r _mk < "$SCREEN_MARK" 2>/dev/null
           if [ "$_mk" = "on" ]; then
-            _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
+            _age=$(($(now_epoch) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
             if [ "$_age" -le "$SCREEN_MARK_GRACE" ] 2>/dev/null; then
               SCREEN_STATE=on
               SCREEN_SRC="app-grace(${_age}s)"
@@ -664,7 +971,7 @@ screen_decide() {
   # A marker that is only seconds old is a real event - the app saw the screen
   # change - so it is the best answer available, even ahead of dumpsys.
   if [ "$_mk" = "on" ] || [ "$_mk" = "off" ]; then
-    _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
+    _age=$(($(now_epoch) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
     if [ "$_age" -le "$SCREEN_MARK_GRACE" ] 2>/dev/null; then
       SCREEN_STATE=$_mk
       SCREEN_SRC="app-grace(${_age}s)"
@@ -705,7 +1012,7 @@ screen_decide() {
 SCREEN_DUMP_CACHE=$(cfg screen_dump_cache 15)
 screen_dumpsys() { # prints on|off, from the cache when it is fresh
   if [ -f "$STATE/screen_dump" ]; then
-    _age=$(($(date +%s) - $(stat -c %Y "$STATE/screen_dump" 2>/dev/null || echo 0)))
+    _age=$(($(now_epoch) - $(stat -c %Y "$STATE/screen_dump" 2>/dev/null || echo 0)))
     if [ "$_age" -le "$SCREEN_DUMP_CACHE" ] 2>/dev/null; then
       cat "$STATE/screen_dump" 2>/dev/null
       return
@@ -728,7 +1035,7 @@ marker_word() {
   [ -f "$SCREEN_MARK" ] || { printf '%s' '-'; return; }
   _mk=''
   IFS= read -r _mk < "$SCREEN_MARK" 2>/dev/null
-  _age=$(($(date +%s) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
+  _age=$(($(now_epoch) - $(stat -c %Y "$SCREEN_MARK" 2>/dev/null || echo 0)))
   printf '%s@%ss' "${_mk:--}" "$_age"
 }
 
@@ -793,7 +1100,9 @@ pm_batch() { # pm_batch <suspend|unsuspend>  (package list on stdin)
 # never lose the suspension itself over the nicer name.
 suspend_app() { # suspend_app <package>
   _d="$SPSM_DIR/.tmp"
-  mkdir -p "$_d" 2>/dev/null
+  # Per package, so the fork is worth avoiding: these run in a loop over every
+  # app on the phone.
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _sf="$_d/su2000"
   [ -f "$_sf" ] || {
     if su 2000 -c true >/dev/null 2>&1; then printf '1\n' > "$_sf"; else printf '0\n' > "$_sf"; fi
@@ -814,7 +1123,7 @@ suspend_app() { # suspend_app <package>
 # and an exit that skipped every release). An app in the six slots is usable.
 unsuspend_app() { # unsuspend_app <package>
   _d="$SPSM_DIR/.tmp"
-  mkdir -p "$_d" 2>/dev/null
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _sf="$_d/su2000"
   [ -f "$_sf" ] || {
     if su 2000 -c true >/dev/null 2>&1; then printf '1\n' > "$_sf"; else printf '0\n' > "$_sf"; fi

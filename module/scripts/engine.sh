@@ -220,9 +220,9 @@ phase_session() { # apply|revert
     esac
     ( KRV_TAG=$_k
       bg_nice
-      _kt0=$(date +%s)
+      _kt0=$(now_epoch)
       knob_apply "$_k"
-      _d=$(( $(date +%s) - _kt0 ))
+      _d=$(( $(now_epoch) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
@@ -247,9 +247,9 @@ phase_session() { # apply|revert
       *)
         knob_enabled "$_k" "$(knob_default "$_k")" || continue ;;
     esac
-    _kt0=$(date +%s)
+    _kt0=$(now_epoch)
     knob_apply "$_k"
-    _d=$(( $(date +%s) - _kt0 ))
+    _d=$(( $(now_epoch) - _kt0 ))
     [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
   done
 }
@@ -283,9 +283,9 @@ phase_session_revert() { # <knob list, deep already excluded>
     esac
     ( KRV_TAG=$_k
       bg_nice
-      _kt0=$(date +%s)
+      _kt0=$(now_epoch)
       knob_revert "$_k"
-      _d=$(( $(date +%s) - _kt0 ))
+      _d=$(( $(now_epoch) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
@@ -293,9 +293,9 @@ phase_session_revert() { # <knob list, deep already excluded>
   done
   wait
   for _k in $_tail; do
-    _kt0=$(date +%s)
+    _kt0=$(now_epoch)
     knob_revert "$_k"
-    _d=$(( $(date +%s) - _kt0 ))
+    _d=$(( $(now_epoch) - _kt0 ))
     [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
   done
 }
@@ -335,9 +335,9 @@ phase_deep() { # apply|revert
     # while it works.
     ( KRV_TAG=$_k
       bg_nice
-      _kt0=$(date +%s)
+      _kt0=$(now_epoch)
       knob_apply "$_k"
-      _d=$(( $(date +%s) - _kt0 ))
+      _d=$(( $(now_epoch) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: apply $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
@@ -361,9 +361,9 @@ phase_deep_revert() {
     [ "$(knob_scope "$_k")" = "deep" ] || continue
     ( KRV_TAG=$_k
       bg_nice
-      _kt0=$(date +%s)
+      _kt0=$(now_epoch)
       knob_revert "$_k"
-      _d=$(( $(date +%s) - _kt0 ))
+      _d=$(( $(now_epoch) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
@@ -430,7 +430,7 @@ do_activate() {
     return 0
   fi
 
-  _on_t0=$(date +%s)
+  _on_t0=$(now_epoch)
   sync_scripts
   j_reset
   rm -f "$STATE/sweep_full"
@@ -465,7 +465,7 @@ do_activate() {
   fi
   progress "On"
   rm -f "$PROGRESS"
-  log "SPSM ON: $(applied_count) knobs applied in $(( $(date +%s) - _on_t0 ))s"
+  log "SPSM ON: $(applied_count) knobs applied in $(( $(now_epoch) - _on_t0 ))s"
   lock_release
   return 0
 }
@@ -479,7 +479,7 @@ do_deactivate() {
   # the last knob it reverted, and the log reported a few seconds for an exit
   # that had taken a minute and a half. The owner asked for a faster exit; the
   # first thing it needed was an honest number to measure it by.
-  _exit_t0=$(date +%s)
+  _exit_t0=$(now_epoch)
   sync_scripts
   log "===== SPSM v3 OFF (scripts $(scripts_stamp), module $(spsm_version)) ====="
   progress "Restoring"
@@ -576,7 +576,7 @@ do_deactivate() {
   # answered milliseconds earlier. `engine.sh verify` is still the honest
   # end-to-end read, and it is what a human runs when they want the truth.
   DRIFT=$(drift_from_journal)
-  _took=$(( $(date +%s) - _exit_t0 ))
+  _took=$(( $(now_epoch) - _exit_t0 ))
   if [ "$(pending_knobs)" = "0" ]; then
     log "exit: nothing of ours is left in place, so nothing needs forcing"
   elif [ "${DRIFT:-0}" != "0" ]; then
@@ -669,9 +669,9 @@ do_screen_on() {
     [ "$_k" = cores_sleep ] && continue
     ( KRV_TAG=$_k
       bg_nice
-      _kt0=$(date +%s)
+      _kt0=$(now_epoch)
       knob_revert "$_k"
-      _d=$(( $(date +%s) - _kt0 ))
+      _d=$(( $(now_epoch) - _kt0 ))
       [ "$_d" -ge 2 ] && log "  slow: revert $_k took ${_d}s"
     ) &
     _c=$((_c + 1))
@@ -700,6 +700,11 @@ do_set() { # do_set knob 0|1
   else
     echo "knob.$_k=$_v" >> "$CONFIG"
   fi
+  # cfg() answers from a copy of the file taken the first time it was asked, so
+  # the write above is invisible to this very run until the copy is dropped.
+  # This is the only place inside a run that changes the config, and everything
+  # after it here - the apply, the revert, the knob's own default - reads it.
+  cfg_invalidate
   if [ -f "$ACTIVE" ]; then
     lock_acquire || return 0
     if [ "$_v" = "1" ]; then
@@ -951,7 +956,7 @@ do_six_restore() {
   # 264 packages, and one-by-one that was minutes of pm calls in the exact
   # moment recovery is needed - the boot heal in service.sh waited on it too.
   _r="$SPSM_DIR/.tmp/restore.$$"
-  mkdir -p "$SPSM_DIR/.tmp" 2>/dev/null
+  [ -d "$SPSM_DIR/.tmp" ] || mkdir -p "$SPSM_DIR/.tmp" 2>/dev/null
   _n=$(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null "$STATE/blocked_by_us.tsv" 2>/dev/null | grep -c "")
   [ -n "$_n" ] || _n=0
   cat "$SPSM_DIR/whitelist.txt" 2>/dev/null "$STATE/blocked_by_us.tsv" 2>/dev/null \

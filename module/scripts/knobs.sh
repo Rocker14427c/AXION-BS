@@ -85,7 +85,7 @@ kv_write() { # kv_write target value
 # rather than recorded as empty.
 kv_read_many() { # kv_read_many <dir> <target>...
   _d=$1; shift
-  mkdir -p "$_d" 2>/dev/null
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _n=0
   for _t in "$@"; do
     ( kv_read "$_t" > "$_d/$$.$_n.part" && mv -f "$_d/$$.$_n.part" "$_d/$$.$_n" 2>/dev/null ) &
@@ -579,14 +579,57 @@ radio_remember() { # radio_remember <radio>
   # is still unreadable a fifth of a second later, so nothing is masked.
   [ -n "$_v" ] || { sleep 0.2 2>/dev/null || :; _v=$(radio_enabled "$1") || return 1; }
   [ -n "$_v" ] || return 1
+  # Under the same lock as radio_forget: an append that lands while a sibling is
+  # rewriting the file is an append into a temp that is about to be overwritten.
+  _rr_lock="$RADIO_STATE.lock"
+  _rr_i=0
+  while ! mkdir "$_rr_lock" 2>/dev/null; do
+    _rr_i=$((_rr_i + 1))
+    [ "$_rr_i" -gt 20 ] && { rm -rf "$_rr_lock" 2>/dev/null; break; }
+    sleep 0.1 2>/dev/null || sleep 1
+  done
   printf '%s\t%s\n' "$1" "$_v" >> "$RADIO_STATE"
+  rmdir "$_rr_lock" 2>/dev/null
   return 0
 }
 radio_was() { snap_file_val "$RADIO_STATE" "$1"; }
 radio_forget() { # radio_forget <radio> - after it was put back
   [ -f "$RADIO_STATE" ] || return 0
-  grep -v "^$1	" "$RADIO_STATE" > "$RADIO_STATE.tmp" 2>/dev/null
-  mv -f "$RADIO_STATE.tmp" "$RADIO_STATE" 2>/dev/null
+  # Serialised, and through a PRIVATE temp file.
+  #
+  # This is a read-modify-write on one file, and wifi, bluetooth and nfc are all
+  # session knobs - so they revert together in the same bounded parallel fan,
+  # three processes rewriting the same file at once. With a shared "$RADIO_STATE
+  # .tmp" they also clobbered each other's temp. The observed result was an
+  # intermittent failure where the whole file came back EMPTY: a radio's
+  # remembered state vanished before its own restore had read it, so the radio
+  # was never switched back on and the device did not come back byte for byte.
+  # It reproduced perhaps one run in three, always on whichever radio lost.
+  #
+  # $$ makes the temp private to this process; the lock makes the whole
+  # read-modify-write atomic against its siblings. Both are needed - a private
+  # temp alone still loses an update when two rewrites interleave.
+  _rf_lock="$RADIO_STATE.lock"
+  _rf_i=0
+  while ! mkdir "$_rf_lock" 2>/dev/null; do
+    _rf_i=$((_rf_i + 1))
+    # Never block a revert on a lock: after ~2s take it. A stale lock here can
+    # only come from a killed sibling, and losing one row is better than not
+    # restoring the radios at all.
+    [ "$_rf_i" -gt 20 ] && { rm -rf "$_rf_lock" 2>/dev/null; break; }
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+  _rf_tmp="$RADIO_STATE.$$"
+  if grep -v "^$1	" "$RADIO_STATE" > "$_rf_tmp" 2>/dev/null; then
+    mv -f "$_rf_tmp" "$RADIO_STATE" 2>/dev/null
+  else
+    # grep exits non-zero when nothing is left, which is a legitimate outcome
+    # (the last radio being forgotten) and must still be written.
+    [ -f "$_rf_tmp" ] && mv -f "$_rf_tmp" "$RADIO_STATE" 2>/dev/null
+  fi
+  rm -f "$_rf_tmp" 2>/dev/null
+  rmdir "$_rf_lock" 2>/dev/null
+  return 0
 }
 
 radio_set() { # radio_set wifi|bt|nfc on|off
@@ -1058,7 +1101,7 @@ apply_app_restrict() {
   # collected afterwards so the file is built the same way and in the same order
   # as before.
   _d=$SPSM_DIR/.tmp
-  mkdir -p "$_d" 2>/dev/null
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _r="$_d/restrict.$$_${KRV_TAG:-main}"
   : > "$_r"
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
@@ -1245,14 +1288,37 @@ apply_deep_doze() {
   # and what the phone did with it is read back rather than assumed.
   touch "$STATE/doze_forced" 2>/dev/null
   ( has dumpsys && timeout 30 dumpsys deviceidle force-idle deep >/dev/null 2>&1 ) &
-  _i=0
-  while [ "$_i" -lt 6 ]; do
-    _f=$(timeout 5 dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
-    [ "$_f" = true ] && { log "deep sleep: the phone has been told to go idle now"; return 0; }
-    _i=$((_i + 1))
-    sleep 0.5 2>/dev/null || sleep 1
-  done
-  log "deep sleep: asked the phone to go idle now; it enters when it can"
+
+  # The confirmation runs DETACHED, and this returns at once.
+  #
+  # It used to poll up to six times, half a second apart, waiting to see
+  # mForceIdle=true - and its entire product was one log line. Everything else
+  # about the knob (the journal entry, the note in `status`, note_deep_doze's
+  # reading) is derived later from the phone itself, so nothing downstream ever
+  # depended on this loop having finished.
+  #
+  # What it did depend on was the user's time. This is the FIRST thing applied
+  # when the screen goes off, and the rest of the idle sequence queues behind
+  # it, so on a phone that never reports the flag - which is most of them; the
+  # note text "this phone does not report its idle state" exists for exactly
+  # that case - every single screen-off paid a flat three seconds before any
+  # other saving was applied. Measured on the fixture: screen-off 3298ms, of
+  # which `apply deep_doze took 3s`.
+  #
+  # Backgrounding it keeps the log line for the phones that do answer, and
+  # hands the three seconds back to every phone that does not. The work itself
+  # was already asynchronous - this only stops the shell standing around
+  # watching it.
+  (
+    _i=0
+    while [ "$_i" -lt 6 ]; do
+      _f=$(timeout 5 dumpsys deviceidle 2>/dev/null | sed -n 's/.*mForceIdle=\([a-z]*\).*/\1/p' | head -1)
+      [ "$_f" = true ] && { log "deep sleep: the phone has been told to go idle now"; exit 0; }
+      _i=$((_i + 1))
+      sleep 0.5 2>/dev/null || sleep 1
+    done
+    log "deep sleep: asked the phone to go idle now; it enters when it can"
+  ) &
   return 0
 }
 note_deep_doze() {
@@ -1332,7 +1398,7 @@ apply_block_other_apps() {
   # screen-off) must not re-record anything: the list is what we suspended, once.
   [ -f "$BLOCKED_BY_US" ] || : > "$BLOCKED_BY_US"
   _d=$SPSM_DIR/.tmp
-  mkdir -p "$_d" 2>/dev/null
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _r="$_d/block.$$"
   : > "$_r"
   # Who is already suspended, read once above rather than asked once per app.
@@ -1810,7 +1876,7 @@ apply_rom_bg_off() {
   # would restore our own value as if it were the user's.
   [ -f "$_list" ] || : > "$_list"
   _d=$SPSM_DIR/.tmp
-  mkdir -p "$_d" 2>/dev/null
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _pkgfile="$_d/rombg.pkgs.$$"
   _r="$_d/rombg.$$"
   : > "$_r"
@@ -2030,12 +2096,26 @@ knob_meta() { # knob_meta id -> category|label|desc|default|scope|tags
   fi
 }
 
-knob_scope() {
-  knob_meta "$1" | awk -F'|' '{print $5}'
+# A subshell and an awk each, to take one field out of a six-field line that is
+# already in memory. Every knob loop in the engine calls both for every knob -
+# the status the app polls spent 31 awks on nothing else - so the field is cut
+# with parameter expansion instead. Same metadata, same fields, no process.
+#
+# meta is category|label|description|default|scope|tags.
+knob_field() { # knob_field <id> <1-based field number>
+  _kf=$(knob_meta "$1")
+  _kn=$2
+  while [ "$_kn" -gt 1 ]; do
+    case "$_kf" in
+      *'|'*) _kf=${_kf#*|} ;;
+      *) printf ''; return ;;      # fewer fields than asked for: nothing to give
+    esac
+    _kn=$((_kn - 1))
+  done
+  printf '%s' "${_kf%%|*}"
 }
-knob_default() {
-  knob_meta "$1" | awk -F'|' '{print $4}'
-}
+knob_scope()   { knob_field "$1" 5; }
+knob_default() { knob_field "$1" 4; }
 
 # ------------------------------------------------------------------ app list
 # Which packages are we allowed to restrict? Third-party apps, minus anything

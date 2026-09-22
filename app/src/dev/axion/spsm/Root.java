@@ -53,7 +53,17 @@ final class Root {
         // and the signal means it starts now instead of at the next poll. If it
         // is not running, do the work here - the screen change must never leave
         // a CPU cap behind for even a few seconds.
+        // The screen monitor is poked as well as the daemon, when there is one.
+        //
+        // The daemon spends its wait blocked reading the monitor's pipe, and
+        // whether a USR1 trap can break a blocking read is shell-dependent:
+        // dash returns and runs the trap, bash restarts the read and the
+        // handler does not run until data actually arrives. Waking the monitor
+        // makes it write a line, and the line unblocks the daemon on every
+        // shell - so the poke is delivered by the pipe, not by the signal.
         exec("mkdir -p " + DIR + "/state && echo " + state + " > " + DIR + "/state/screen; "
+           + "m=$(cat " + DIR + "/state/monitor.pid 2>/dev/null); "
+           + "[ -n \"$m\" ] && [ -d \"/proc/$m\" ] && kill -USR1 \"$m\" 2>/dev/null; "
            + "p=$(cat " + DIR + "/daemon.pid 2>/dev/null); "
            + "if [ -n \"$p\" ] && [ -d \"/proc/$p\" ]; then "
            + "  kill -USR1 \"$p\" 2>/dev/null; "

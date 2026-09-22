@@ -260,16 +260,64 @@ journal_entries_states() {
 # harness kills by command line instead, asks again, and then insists - a live
 # daemon mid-test acts on this case's files, and a test that measures work while
 # a second process is doing the same work is measuring noise.
+# One process's command line, or nothing if it has already exited.
+#
+# `tr ... < /proc/N/cmdline 2>/dev/null` does NOT silence this: a redirection
+# that cannot be opened is the shell's own error, reported before tr is ever
+# started, and the 2>/dev/null applies to tr. Scanning /proc always races with
+# processes exiting, so every scan printed a line of noise per pid that had
+# gone. Running it in a subshell with stderr closed is what actually contains
+# it, and it is written once here rather than at each call site.
+proc_cmdline() { # proc_cmdline /proc/<pid>
+  ( tr '\0' ' ' < "$1/cmdline" ) 2>/dev/null
+}
+
 stop_daemons() {
   _p=$(cat "$WORK/spsm/daemon.pid" 2>/dev/null)
   [ -n "$_p" ] && kill "$_p" 2>/dev/null
   for _try in 1 2 3; do
     for _d in /proc/[0-9]*; do
-      case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
-        *"$WORK/spsm/scripts/daemon.sh"*)
-          [ "$_try" = 3 ] && kill -9 "$(basename "$_d")" 2>/dev/null || kill "$(basename "$_d")" 2>/dev/null ;;
+      # The glob names pids that may be gone by the time the redirection runs,
+      # and a redirection that fails is the SHELL's error, not the command's -
+      # `2>/dev/null` on `tr` never silenced it. That printed a line of noise
+      # per exited process on every call, which is most of the stderr this
+      # suite produced. Skipping a pid that has already gone is the fix.
+      # The daemon is not the only thing that has to go. It runs its screen
+      # transitions DETACHED (daemon.sh: `engine.sh screen-off &`), and an
+      # engine child outlives the daemon that started it - so killing only
+      # daemon.sh left a worker writing into the tree the next case was about
+      # to build. That is a case failing because of the case before it, which
+      # is the worst kind of test: it moves when anything changes the timing.
+      # Both are ended here.
+      # Matching on $WORK alone, not on a script name. The engine fans out
+      # parallel workers and per-package loops, and those grandchildren carry
+      # neither "daemon.sh" nor "engine.sh" in their command line - they are
+      # subshells, or the stubs the fixture put on PATH. Naming the scripts
+      # therefore left the deepest and longest-running workers alive, which is
+      # precisely what kept writing into the next case's tree.
+      #
+      # Every process whose command line mentions this workflow's directory
+      # belongs to this workflow and has to go.
+      _pid=$(basename "$_d")
+      # Never the suite itself, and never this shell's own children: $WORK
+      # appears in the runner's command line too, and a test harness that kills
+      # itself half way through reports success for everything it never ran.
+      [ "$_pid" = "$$" ] && continue
+      case "$(proc_cmdline "$_d")" in
+        *"$WORK"*)
+          [ "$_try" = 3 ] && kill -9 "$_pid" 2>/dev/null || kill "$_pid" 2>/dev/null ;;
       esac
     done
+    # Killing is asynchronous. Returning here - as this used to - hands the next
+    # case a tree that a dying worker is still writing to, and `seed_stub_state`
+    # does `rm -rf` then recreates, so a single late write lands in the fresh
+    # tree and the NEXT case fails. Wait until nothing is left before returning.
+    _left=0
+    for _d in /proc/[0-9]*; do
+      [ "$(basename "$_d")" = "$$" ] && continue
+      case "$(proc_cmdline "$_d")" in *"$WORK"*) _left=1; break ;; esac
+    done
+    [ "$_left" = 0 ] && return 0
     sleep 0.3 2>/dev/null || sleep 1
   done
   return 0
@@ -280,7 +328,7 @@ stop_daemons() {
 daemons_alive() {
   _n=0
   for _d in /proc/[0-9]*; do
-    case "$(tr '\0' ' ' < "$_d/cmdline" 2>/dev/null)" in
+    case "$(proc_cmdline "$_d")" in
       *"$WORK/spsm/scripts/daemon.sh"*) _n=$((_n + 1)) ;;
     esac
   done
@@ -2236,6 +2284,19 @@ check "and the module keeps no record of apps it blocked" $?
 run_engine verify > "$WORK/out.v60" 2>&1
 grep -q "drift=0" "$WORK/out.v60"
 check "with no drift ($(cat "$WORK/out.v60"))" $?
+# And the reason that number used to be wrong, pinned on its own: a target that
+# has LEFT a knob's scope is not a value that failed to come back.
+#
+# Moving an app into the six slots frees it and removes it from the blockable
+# set, so the next reading has no row for it at all. The verdict compared that
+# absence against the recorded original and read it as "want [0] got []" - so
+# every exit after a slot change reported drift, and named an app the module had
+# deliberately and correctly released. The rule now is that an absent row is
+# skipped; a value still in place is still present, and still caught.
+grep -q "block_other_apps did not return" "$WORK/spsm/spsm.log"
+[ "$?" != 0 ]
+check "an app that left the knob's scope is not reported as unrestored" $?
+
 # Suspension by the user is still theirs: we do not release it on the way out.
 make_tree; make_stubs; seed_stub_state
 printf 'com.example.game\n' > "$WORK/stub/pkgs3"
@@ -3669,7 +3730,13 @@ run_engine core-sleep >/dev/null 2>&1
 check "the timer firing while the phone is awake touches no core" $?
 # 2 - the deep phase applies side by side, and the wake releases side by side
 #     with the cores FIRST.
-grep -q "KRV_TAG=$_k" <(sed -n '/^phase_deep()/,/^}/p' "$REPO/module/scripts/engine.sh")
+# A pipe, not a process substitution: `<(...)` is bash, and this suite runs
+# under dash (and under the phone's own sh). The bashism did not fail loudly -
+# it was a SYNTAX error, so dash aborted the whole file here and every case
+# after this line silently never ran. `$_k` was also a leftover from a loop that
+# no longer exists, which made the pattern "KRV_TAG=" plus whatever happened to
+# be in scope; the literal is what the assertion means.
+sed -n '/^phase_deep()/,/^}/p' "$REPO/module/scripts/engine.sh" | grep -q "KRV_TAG="
 check "the deep phase applies its knobs side by side" $?
 sed -n '/^do_screen_on()/,/^}/p' "$REPO/module/scripts/engine.sh" > "$WORK/so82"
 _a=$(grep -n "knob_revert cores_sleep" "$WORK/so82" | head -1 | cut -d: -f1)
@@ -3836,8 +3903,18 @@ check "every engine fan worker is reniced" $?
 [ "$(grep -c "bg_nice" "$REPO/module/scripts/knobs.sh")" -ge 8 ]
 check "and every per-package loop too" $?
 # 3 - the daemon hands the deep phase its own process and keeps ticking.
-grep -q 'engine.sh" screen-off >>"$LOG" 2>&1 &' "$REPO/module/scripts/daemon.sh"
+# The property, not the byte sequence. This used to grep for the whole line
+# verbatim, which broke the moment the redirections changed (the engine children
+# now close fds 3 and 4 so they cannot steal the daemon's monitor events). What
+# actually matters is that the screen-off run is BACKGROUNDED - the daemon must
+# keep ticking while the deep phase works - so that is what is asserted.
+grep -q 'engine.sh" screen-off .*&[[:space:]]*$' "$REPO/module/scripts/daemon.sh"
 check "the screen-off work runs detached from the daemon's loop" $?
+# And the engine children must not inherit the daemon's nap/monitor pipes: a
+# child holding the read end competes for the monitor's lines, and a line
+# delivered to the child is a screen change the daemon never sees.
+[ "$(grep -c 'engine.sh" .*3<&- 4<&-' "$REPO/module/scripts/daemon.sh")" -ge 4 ]
+check "and every engine child closes the daemon's private descriptors" $?
 grep -q "until sh \"\$SCRIPT_DIR/engine.sh\" screen-on" "$REPO/module/scripts/daemon.sh"
 check "and a wake waits its turn instead of giving up" $?
 # 4 - functional: the exit really does lift the caps before the record goes.

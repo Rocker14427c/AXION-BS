@@ -31,6 +31,15 @@ chmod 755 "$SPSM_DIR/scripts/"*.sh 2>/dev/null
 _VERSION=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | head -1)
 [ -n "$_VERSION" ] && printf '%s\n' "$_VERSION" > "$SPSM_DIR/state/script_version" 2>/dev/null
 
+# The native helpers, refreshed on every boot for the same reason the scripts
+# are: a module update must not leave the phone running the previous version's
+# binary. publish_native verifies the ABI by executing it, and does nothing at
+# all if none of the shipped builds run here.
+if [ -d "$MODDIR/bin" ]; then
+  # shellcheck source=/dev/null
+  . "$SPSM_DIR/scripts/lib.sh" 2>/dev/null && publish_native "$MODDIR"
+fi
+
 ENGINE="$SPSM_DIR/scripts/engine.sh"
 [ -f "$ENGINE" ] || ENGINE="$MODDIR/scripts/engine.sh"
 

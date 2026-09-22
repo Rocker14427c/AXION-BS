@@ -35,7 +35,7 @@ command -v zip >/dev/null || { echo "zip not installed" >&2; exit 1; }
 
 ( cd "$MOD" && zip -qr "$ZIP" \
     META-INF module.prop customize.sh service.sh post-fs-data.sh action.sh \
-    uninstall.sh scripts system system.prop app README.md HOW_TO_USE.txt 2>/dev/null )
+    uninstall.sh scripts bin system system.prop app README.md HOW_TO_USE.txt 2>/dev/null )
 
 echo "==> $ZIP ($(du -h "$ZIP" | cut -f1))"
 python3 - "$ZIP" <<'PY'
@@ -47,4 +47,9 @@ for must in ("module.prop", "customize.sh", "system.prop", "META-INF/com/google/
     print("  %-46s %s" % (must, "ok" if must in names else "MISSING"))
 apk = [n for n in names if n.endswith("AxionSPSM.apk")]
 print("  %-46s %d" % ("bundled APKs", len(apk)))
+# The native helper is optional - the daemon polls without it - so a missing
+# one is reported rather than fatal. Which ABIs made it in is worth printing:
+# a zip that quietly carries none would silently ship the slow path.
+nat = sorted({n.split("/")[1] for n in names if n.startswith("bin/") and n.count("/") >= 2})
+print("  %-46s %s" % ("native screen monitor", ", ".join(nat) if nat else "none (daemon will poll)"))
 PY

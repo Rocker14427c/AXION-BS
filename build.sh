@@ -228,3 +228,13 @@ esac
 
 say "APK: $OUT/AxionSPSM.apk ($(du -h "$OUT/AxionSPSM.apk" | cut -f1)) v$VNAME ($VCODE)"
 say "staged into module/app/ and module/system/app/AxionSPSM/"
+
+# -------------------------------------------------- 6. the native helpers
+# The event-driven screen monitor (native/spsm-screenmon.c). Deliberately NOT
+# fatal if it cannot be built: it is an optimisation, the daemon falls back to
+# polling without it, and a contributor with no cross-compiler must still be
+# able to build a working module. native/build.sh says which it did.
+# bash, not sh: native/build.sh uses arrays and pipefail. Invoking it with `sh`
+# made it fail instantly on a dash host, which is exactly the machine that most
+# needs to be told the helper was not built.
+bash "$ROOT/native/build.sh" || true

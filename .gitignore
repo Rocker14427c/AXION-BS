@@ -7,3 +7,7 @@ sdk/
 *.iml
 __pycache__/
 .DS_Store
+
+# Benchmark shims are built on demand from the .c next to them; the objects are
+# host-specific and must not be committed.
+tests/bench/*.so

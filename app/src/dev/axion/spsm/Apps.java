@@ -197,11 +197,22 @@ final class Apps {
         // than "every app the package manager felt like mentioning".
         String listing = Root.exec("pm list packages 2>/dev/null");
         if (listing != null) {
+            // The packages only root can see, gathered first so their APK paths
+            // can be fetched in ONE root call rather than one per package. On a
+            // phone with a few hundred packages this is the difference between
+            // the picker opening and the picker appearing to hang.
+            List<String> unseen = new ArrayList<>();
             for (String line : listing.split("\n")) {
                 line = line.trim();
                 if (!line.startsWith("package:")) continue;
                 String pkg = line.substring("package:".length()).trim();
                 if (pkg.isEmpty() || "dev.axion.spsm".equals(pkg)) continue;
+                if (seen.contains(pkg)) continue;
+                unseen.add(pkg);
+            }
+            primePaths(unseen);
+
+            for (String pkg : unseen) {
                 if (!seen.add(pkg)) continue;
                 // Label and icon through root, so a package this app cannot
                 // query still looks like an app instead of a package name with a
@@ -333,6 +344,32 @@ final class Apps {
             fillFromArchive(pm, pkg, r);
         }
         if (r.component == null) {
+            // Ask the framework first. This used to go straight to
+            // `su -c cmd package resolve-activity`, once PER PACKAGE, from a
+            // method called in a loop over every installed package - so opening
+            // the app picker on a phone with 279 packages could fork hundreds of
+            // root shells, each paying su's authentication handshake, before the
+            // list would draw. PackageManager answers the same question in
+            // process, with no fork and no root, for every package this app can
+            // see - which is nearly all of them.
+            //
+            // Root remains the fallback for the packages PackageManager will not
+            // admit to (a hidden root manager), which is the handful of cases the
+            // shell call was really added for.
+            try {
+                Intent mainIntent = new Intent(Intent.ACTION_MAIN)
+                        .addCategory(Intent.CATEGORY_LAUNCHER)
+                        .setPackage(pkg);
+                List<ResolveInfo> ris = pm.queryIntentActivities(mainIntent, 0);
+                if (ris != null && !ris.isEmpty()) {
+                    ResolveInfo ri = ris.get(0);
+                    if (ri.activityInfo != null && ri.activityInfo.name != null) {
+                        r.component = pkg + "/" + ri.activityInfo.name;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (r.component == null) {
             String out = Root.exec(
                     "cmd package resolve-activity --brief -a android.intent.action.MAIN "
                   + "-c android.intent.category.LAUNCHER " + pkg + " 2>/dev/null | tail -1");
@@ -374,9 +411,52 @@ final class Apps {
         return r;
     }
 
+    /**
+     * APK paths for several packages in ONE root call.
+     *
+     * fillFromArchive needs a package's APK path, and asked for it with its own
+     * `su -c pm path`. That is fine once; it is not fine in a loop over every
+     * package the framework could not describe, which is how the app picker used
+     * it. Each su costs an authentication handshake and a shell, and they were
+     * paid strictly one after another while the user watched an empty list.
+     *
+     * Priming this map costs a single root shell for the whole set.
+     */
+    private static final java.util.Map<String, String> PATHS = new java.util.HashMap<>();
+
+    static void primePaths(java.util.Collection<String> pkgs) {
+        StringBuilder sb = new StringBuilder();
+        int n = 0;
+        for (String p : pkgs) {
+            synchronized (PATHS) { if (PATHS.containsKey(p)) continue; }
+            // `pm path` prints "package:/data/app/...". Prefixing each with the
+            // package name keeps the reply parseable in one pass.
+            sb.append("echo -n '").append(p).append(" '; pm path ")
+              .append(p).append(" 2>/dev/null | head -1; ");
+            n++;
+        }
+        if (n == 0) return;
+        String out = Root.exec(sb.toString());
+        if (out == null) return;
+        synchronized (PATHS) {
+            for (String line : out.split("\n")) {
+                int sp = line.indexOf(' ');
+                if (sp <= 0) continue;
+                String pkg = line.substring(0, sp).trim();
+                String path = line.substring(sp + 1).trim();
+                if (path.startsWith("package:")) path = path.substring("package:".length()).trim();
+                if (!pkg.isEmpty()) PATHS.put(pkg, path);
+            }
+        }
+    }
+
     /** Label and icon read straight out of the APK, for a package we cannot query. */
     private static void fillFromArchive(PackageManager pm, String pkg, Resolved r) {
-        String path = Root.exec("pm path " + pkg + " 2>/dev/null | head -1");
+        String path;
+        synchronized (PATHS) { path = PATHS.get(pkg); }
+        // Not primed (a single resolve() outside the picker's batch): ask for
+        // just this one, exactly as before.
+        if (path == null) path = Root.exec("pm path " + pkg + " 2>/dev/null | head -1");
         if (path == null) return;
         path = path.trim();
         if (path.startsWith("package:")) path = path.substring("package:".length()).trim();
