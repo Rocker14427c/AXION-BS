@@ -132,3 +132,37 @@ from `dumpsys batterystats`. Because the counters are cumulative, only the diffe
 
 **Precondition that is not optional:** no wake lock may be held during a window, and the tunnel must
 be down. `termux-wake-unlock` before starting, or the whole exercise measures the tunnel.
+
+---
+
+## 7. Shipped this session, and verified on the device
+
+**`data_saver_idle`** (deep scope, default on) — change plan item 1/2 combined, chosen because Wi-Fi and
+cellular data are the two largest measured wakers. Verified live, through the engine itself, on the
+owner's phone:
+
+```
+after activate  : false    screen on - deep knobs correctly not run yet
+screen off +60s : true     Data Saver ON in long idle
+deep_report     : little_max=1800000 big_max=2000000 governor=schedutil doze=forced held_by=mixed
+screen back on  : false    released on wake
+after exit      : false    clean restore
+```
+
+with the log line `snap data_saver_idle: netpolicy:restrict-background false` confirming the snapshot
+path, and the refusal path tested separately: a state that cannot be read is never changed, and a Data
+Saver the owner had already switched on stays on.
+
+Two portability traps paid for while writing it, both the same class as the `knob_field` bug:
+
+* `cmd netpolicy get restrict-background` answers `Restrict background status: enabled|disabled` on this
+  ROM, not `true|false` - both shapes are now parsed.
+* the first version read the state with a GNU-sed alternation `\(true\|false\)`. **toybox sed does not
+  honour `\|`**, so it matched nothing and the knob read an empty state. Replaced with `grep -m1 | awk`.
+
+Test suites after the change: `tests/run.sh` **657 passed / 0 failed**, `tests/run-codec.sh`
+**252 / 0**, `tests/run-install.sh` **22 / 0**.
+
+**Still unmeasured:** whether it actually saves energy. The knob is proven *functional*, not yet proven
+*beneficial* - that is what `tools/remote/ab.sh` is for, and the next change should not be made until
+its two windows have been read.

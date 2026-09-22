@@ -665,10 +665,18 @@ radio_set() { # radio_set wifi|bt|nfc on|off
 data_saver_state() { # -> true|false, prints nothing when it cannot be read
   if has cmd; then
     _o=$(cmd netpolicy get restrict-background 2>/dev/null | tr -d '\r' | head -1)
-    case "$_o" in true|false) printf '%s' "$_o"; return ;; esac
+    case "$_o" in
+      true|false) printf '%s' "$_o"; return ;;
+      # this ROM answers "Restrict background status: enabled|disabled"
+      *disabled*) printf 'false'; return ;;
+      *enabled*)  printf 'true';  return ;;
+    esac
   fi
   if has dumpsys; then
-    _o=$(dumpsys netpolicy 2>/dev/null | sed -n 's/^ *Restrict background: *\(true\|false\).*/\1/p' | head -1)
+    # grep + awk, not a sed alternation: toybox sed does not honour GNU \| and
+    # would silently match nothing - the same class of failure as the bare-pipe
+    # parameter expansion that made the deep phase apply nothing.
+    _o=$(dumpsys netpolicy 2>/dev/null | grep -m1 -i 'restrict background' | awk '{print $NF}' | tr -d '\r')
     case "$_o" in true|false) printf '%s' "$_o"; return ;; esac
   fi
 }
