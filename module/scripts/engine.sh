@@ -522,9 +522,19 @@ do_deactivate() {
   # phone's own speed from its first moment. A knob that was never applied
   # is skipped by the revert itself.
   if [ "$_was_on" = 1 ]; then
+    _cap_t0=$(now_epoch)
     KRV_TAG=gov_powersave knob_revert gov_powersave
     KRV_TAG=gpu_cap knob_revert gpu_cap
-    log "exit: the caps are off first - the rest of the exit runs at full speed"
+    # The v3.8.1 field log has four unaccounted seconds between "daemon
+    # stopped" and this line. Everything in that window is stop_daemon plus
+    # these two reverts, and nothing in it is logged - so the next log says
+    # which. Only printed when it is slow enough to be worth knowing.
+    _cap_d=$(( $(now_epoch) - _cap_t0 ))
+    if [ "$_cap_d" -ge 2 ] 2>/dev/null; then
+      log "exit: the caps are off first - the rest of the exit runs at full speed (caps took ${_cap_d}s)"
+    else
+      log "exit: the caps are off first - the rest of the exit runs at full speed"
+    fi
   fi
 
   # The hard guarantee behind the six slots, and it comes FIRST - before any

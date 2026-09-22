@@ -1401,6 +1401,13 @@ apply_block_other_apps() {
   [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null
   _r="$_d/block.$$"
   : > "$_r"
+  # Phase timing. The v3.8.1 field log showed this one knob taking 7 of the 13
+  # startup seconds - 54% of the whole start - but "apply block_other_apps took
+  # 7s" cannot say WHICH of its four phases that was. These stamps cost one
+  # now_epoch each (a builtin when the clock is real) and turn the next log
+  # into an attribution instead of a guess. They only print when the knob is
+  # slow enough to matter, so a normal run's log is unchanged.
+  _bo_t0=$(now_epoch)
   # Who is already suspended, read once above rather than asked once per app.
   _susp=''
   _suspf="$_d/susp.$$_${KRV_TAG:-main}"
@@ -1408,6 +1415,7 @@ apply_block_other_apps() {
     _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
   rm -f "$_suspf"
+  _bo_t1=$(now_epoch)
   # Who is a candidate at all: blockable, minus what somebody else already
   # suspended (never ours to take over, and never ours to release).
   _cand="$_d/cand.$$"
@@ -1422,8 +1430,10 @@ apply_block_other_apps() {
   # One pm call per forty packages - 186 suspensions cost five round-trips,
   # not 186 forks on min-frequency cores. Only what the phone confirmed lands
   # in the record.
+  _bo_t2=$(now_epoch)
   pm_batch suspend < "$_cand" > "$_r"
   rm -f "$_cand"
+  _bo_t3=$(now_epoch)
   # A suspended app holds memory until it is stopped: same as ever, six at a
   # time, for exactly the apps this call confirmed. The idle hand-to-AMS is
   # gone: a suspended app cannot run, so "idle" adds nothing a suspension
@@ -1441,16 +1451,48 @@ apply_block_other_apps() {
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_r.s"
   wait
+  _bo_t4=$(now_epoch)
   # This stopped set IS the sweep's set: the sweep's one full pass would only
   # force-stop the same packages seconds later. Mark the full pass done -
   # the sweep still clears strays with its one-call kill-all.
   : > "$STATE/sweep_full" 2>/dev/null
-  # One writer, in a stable order, as before.
+  # One writer, in a stable order, as before - but the duplicate check is done
+  # in the shell instead of with a grep per package.
+  #
+  # On the owner's phone this loop runs 187 times, and `grep -qxF` is a fork
+  # AND a full scan of a file that grows to 187 lines on each pass. Measured
+  # standalone: 226 ms for 187 packages against 5 ms for the shell test - 45x -
+  # and that was on a desktop; this runs on little cores held at their minimum
+  # frequency by the governor knob that has already been applied by this point.
+  #
+  # The existing record is read once into a space-delimited string and tested
+  # with `case`, which is the same technique blockable_packages already uses
+  # for its keep-list. Output order and content are unchanged.
+  _bu_seen=" "
+  if [ -s "$BLOCKED_BY_US" ]; then
+    while IFS= read -r _bl; do
+      [ -n "$_bl" ] && _bu_seen="$_bu_seen$_bl "
+    done < "$BLOCKED_BY_US"
+    # `read` returns false on a last line with no trailing newline, which would
+    # drop that entry from the seen-set and duplicate it in the record.
+    [ -n "$_bl" ] && _bu_seen="$_bu_seen$_bl "
+  fi
   while read -r _p; do
     [ -n "$_p" ] || continue
-    grep -qxF "$_p" "$BLOCKED_BY_US" 2>/dev/null || printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
+    case "$_bu_seen" in
+      *" $_p "*) continue ;;
+    esac
+    _bu_seen="$_bu_seen$_p "
+    printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
   done < "$_r.s"
   rm -f "$_r" "$_r.s"
+  # Attribution, only when this knob was actually slow. The four numbers are
+  # the phases in order: reading who is already suspended, choosing candidates,
+  # the batched pm suspend, and the force-stops.
+  _bo_t5=$(now_epoch)
+  if [ "$((_bo_t5 - _bo_t0))" -ge 2 ] 2>/dev/null; then
+    log "  block_other_apps phases: suspended-read=$((_bo_t1 - _bo_t0))s candidates=$((_bo_t2 - _bo_t1))s pm-suspend=$((_bo_t3 - _bo_t2))s force-stop=$((_bo_t4 - _bo_t3))s record=$((_bo_t5 - _bo_t4))s"
+  fi
 }
 
 restore_block_other_apps() {
