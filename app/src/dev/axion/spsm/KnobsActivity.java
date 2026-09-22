@@ -229,8 +229,10 @@ public class KnobsActivity extends Activity {
         final int[] lastCount = {0};
         new Thread(() -> {
             while (probing) {
-                String n = Root.exec("wc -l < " + Root.DIR + "/state/probe.tsv 2>/dev/null");
-                String p = Root.exec("cat " + Root.DIR + "/state/progress 2>/dev/null");
+                // Two short reads every 2 s for the length of a probe; both
+                // go down the shared shell rather than spawning two su.
+                String n = Root.read("wc -l < " + Root.DIR + "/state/probe.tsv 2>/dev/null");
+                String p = Root.progress();
                 final int count = (n == null) ? 0 : parseIntOr(n.trim(), -1);
                 if (count > lastCount[0]) {
                     lastCount[0] = count;

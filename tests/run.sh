@@ -1460,6 +1460,13 @@ run_engine deactivate >/dev/null 2>&1
 check "and the session still reverts cleanly afterwards" $?
 
 say "38. a full turn of the mode is not a subprocess marathon"
+# Every case shares one $WORK tree, and case 37 deliberately leaves a daemon
+# running. A daemon on the same tree keeps issuing its own stubbed commands
+# into the very counter this case reads, so the total measured here was
+# whatever the scheduler happened to deliver - it read 331 standalone and 434
+# in a full run, and the difference was another case's background work, not
+# this one's cost. Quiesce first so the number is this turn's and nothing else.
+stop_daemons
 make_tree; make_stubs; seed_stub_state
 screen_on
 : > "$WORK/stub/calls"
@@ -3695,9 +3702,53 @@ check "and the whitelist writer de-duplicates on its own" $?
 grep -q "with_timeout" "$REPO/module/scripts/engine.sh" && \
   grep -q "with_timeout 90 knob_apply" "$REPO/module/scripts/engine.sh"
 check "every probe step runs under a timeout lid" $?
-grep -q "state/progress" "$REPO/app/src/dev/axion/spsm/KnobsActivity.java" && \
-  grep -q "knobs_probing_n" "$REPO/app/src/dev/axion/spsm/KnobsActivity.java"
+# The progress READ now lives in Root.progress() - the knobs screen polls it
+# rather than spelling the path out a second time, so the assertion follows the
+# behaviour (this screen shows the engine's live progress text) instead of the
+# literal string it used to be written with. Root.progress() is still required
+# to name the file, so the path is asserted where it actually is.
+grep -q "Root.progress()" "$REPO/app/src/dev/axion/spsm/KnobsActivity.java" && \
+  grep -q "knobs_probing_n" "$REPO/app/src/dev/axion/spsm/KnobsActivity.java" && \
+  grep -q "state/progress" "$REPO/app/src/dev/axion/spsm/Root.java"
 check "the Check button shows which option it is on" $?
+# 6b - the shared root shell. The app used to spawn a whole `su -c` for every
+# poll: the setup screen reads progress every 400 ms, the tile re-reads state
+# every 2500 ms through a transition, the knobs screen polls twice every 2 s
+# while probing. These assert the properties that make one long-lived shell
+# safe to substitute for hundreds of one-shot ones.
+grep -q "static String read(String cmd)" "$REPO/app/src/dev/axion/spsm/Root.java"
+check "short root reads go down a shared session" $?
+# A subshell, not a brace group: several callers end with `exit 0`, which in a
+# brace group would kill the session shell itself.
+grep -q 'sessionIn.write("(' "$REPO/app/src/dev/axion/spsm/Root.java"
+check "and each command runs in a subshell so an exit cannot kill the session" $?
+# </dev/null, or a command that reads (a bare cat) eats the next command off
+# the pipe and the request/response protocol desyncs for ever after.
+grep -q '</dev/null' "$REPO/app/src/dev/axion/spsm/Root.java"
+check "a reading command cannot swallow the next one off the pipe" $?
+# The marker must be unguessable, or output containing it would end the read early.
+grep -q '"__SPSM_" + Long.toHexString' "$REPO/app/src/dev/axion/spsm/Root.java"
+check "the response marker is per-session, not a fixed string" $?
+# A root shell held open for ever is a liability; it must be reaped when idle.
+grep -q "IDLE_MS" "$REPO/app/src/dev/axion/spsm/Root.java" && \
+  grep -q "closeSessionLocked" "$REPO/app/src/dev/axion/spsm/Root.java"
+check "an idle root session is closed rather than held open" $?
+# A wedged shell must not hang a worker for ever, and must not be reused after.
+grep -q "READ_TIMEOUT_MS" "$REPO/app/src/dev/axion/spsm/Root.java"
+check "a wedged session times out instead of hanging the caller" $?
+# Failure must fall back to the old one-shot path, so a caller is never worse off.
+grep -q "return exec(cmd, 10);" "$REPO/app/src/dev/axion/spsm/Root.java"
+check "and a failed session falls back to a one-shot su" $?
+# The long jobs must NOT use the session: one shell serialises everything sent
+# down it, so a minute-long enter would block every status read behind it.
+grep -q 'static String enter() {' "$REPO/app/src/dev/axion/spsm/Root.java" && \
+  ! sed -n '/static String enter() {/,/}/p' "$REPO/app/src/dev/axion/spsm/Root.java" | grep -q "read("
+check "long jobs keep their own su so they cannot block a poll" $?
+# The polls themselves must not fork a cat/subshell to read one small file.
+! grep -q 'cat \$p 2>/dev/null' "$REPO/app/src/dev/axion/spsm/SpsmTileService.java" && \
+  grep -q "read p < " "$REPO/app/src/dev/axion/spsm/SpsmTileService.java"
+check "the tile reads progress with a builtin, not a forked cat" $?
+
 # 7 - the icon: the battery on BLACK, on any launcher, via an adaptive icon.
 [ -f "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" ] && \
   grep -q "@color/ic_launcher_background" "$REPO/app/res/mipmap-anydpi-v26/ic_launcher.xml" && \

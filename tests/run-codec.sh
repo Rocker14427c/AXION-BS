@@ -265,6 +265,7 @@ printf '\n\033[1;36m== %s\033[0m\n' "the radio record survives three radios reve
 # above keep running against lib.sh alone.
 # shellcheck source=/dev/null
 . "$REPO/module/scripts/knobs.sh" 2>/dev/null
+ok_if() { [ "$1" = 0 ] && ok || bad "$2"; }
 _rs="$SPSM_DIR/radio_race.tsv"
 _lost=0
 _i=0
@@ -281,6 +282,57 @@ while [ "$_i" -lt 15 ]; do
 done
 [ "$_lost" = 0 ] && ok || bad "radio_forget lost an update in $_lost of 15 concurrent trials"
 rm -f "$_rs" "$_rs".* 2>/dev/null
+
+printf '\n\033[1;36m== %s\033[0m\n' "the protected-package list is built once per run, not three times"
+# protected_packages costs eight binder round trips (three role lookups, two
+# settings reads, the home holder, the HOME role, query-activities) and three
+# callers rebuild it inside one activation. It is cached per engine run.
+#
+# The cache MUST be a file: every caller invokes this inside $(...), which runs
+# in a forked subshell, so a shell variable assigned there dies with it. That
+# is the bug this test would have caught.
+SPSM_RUN_ID="codec-test-$$"
+export SPSM_RUN_ID
+rm -f "${TMPDIR:-/tmp}/.spsm-protected.$$" 2>/dev/null
+_a=$(_protected_packages_build)
+_b=$(protected_packages)
+_c=$(protected_packages)
+[ "$_a" = "$_b" ]
+ok_if $? "the cached answer equals a fresh build"
+[ "$_b" = "$_c" ]
+ok_if $? "and repeated calls stay identical"
+# The cache must actually be warm after the first call - otherwise it is doing
+# the work three times and merely agreeing with itself.
+[ -s "${TMPDIR:-/tmp}/.spsm-protected.$$" ]
+ok_if $? "the cache survives the subshell each caller runs it in"
+# A build that yields nothing must never be published: a cached empty list
+# means "nothing is protected", and the dialer and launcher get suspended.
+printf '#%s\n' "$SPSM_RUN_ID" > "${TMPDIR:-/tmp}/.spsm-protected.$$"
+_d=$(protected_packages)
+[ -n "$_d" ]
+ok_if $? "a stamp-only cache file is rebuilt rather than read as empty"
+# A file left by an earlier run with the same pid must not be trusted.
+printf '#stale-other-run\nbogus.package\n' > "${TMPDIR:-/tmp}/.spsm-protected.$$"
+_e=$(protected_packages)
+case "$_e" in *bogus.package*) false ;; *) true ;; esac
+ok_if $? "and a cache from a different run is not reused"
+# Six parallel builders, the way screen-on reverts its deep knobs: `( ... ) &`
+# six at a time. They all share $$, which is what lets them share the cache -
+# but it also means a single shared temp name. The first version used
+# "$cache.tmp" for all of them: they truncated each other's file and five of
+# six `mv`s failed on a temp another had already renamed away. Measured 6/6
+# misses in a six-way race, and the cache that was meant to SAVE eight binder
+# calls per caller instead added forty-five to screen-on.
+rm -f "${TMPDIR:-/tmp}/.spsm-protected.$$" 2>/dev/null
+_perr=$( { for _n in 1 2 3 4 5 6; do ( protected_packages >/dev/null ) & done; wait; } 2>&1 )
+[ -z "$_perr" ]
+ok_if $? "six parallel builders produce no errors (got: $_perr)"
+# Whoever won, the published cache must be a complete, usable list - not a
+# half-written file from a builder that was truncated mid-write.
+_pw=$(protected_packages)
+case "$_pw" in *com.android.dialer*) true ;; *) false ;; esac
+ok_if $? "and the surviving cache is a complete list"
+rm -f "${TMPDIR:-/tmp}"/.spsm-protected.* 2>/dev/null
 
 printf '\n  %d checks, %d failed\n\n' "$((PASS + FAIL))" "$FAIL"
 [ "$FAIL" = 0 ] || exit 1

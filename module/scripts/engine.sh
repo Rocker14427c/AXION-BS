@@ -20,6 +20,12 @@
 # not actually apply.
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+# Identifies THIS engine run to the per-process caches (see
+# protected_packages in knobs.sh). It must be set before the libraries are
+# sourced so anything they cache at source time belongs to this run. $$ alone
+# is not enough - pids are reused - so the start time goes in too.
+SPSM_RUN_ID="$$-$(date +%s 2>/dev/null || echo 0)"
+export SPSM_RUN_ID
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck source=/dev/null

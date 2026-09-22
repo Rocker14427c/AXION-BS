@@ -39,6 +39,28 @@ elif [ -x "$ROOT/sdk/zig/zig" ]; then
   PATH="$ROOT/sdk/zig:$PATH"
 fi
 
+# The host build only needs a plain cc, so it is done BEFORE the cross-toolchain
+# check rather than after it. It used to sit at the bottom of the file, which
+# meant that on a machine with gcc but no NDK and no zig the script exited early
+# and never produced it - and tests/run-daemon.sh, which drives the real binary
+# through build/native/host, quietly skipped fourteen of its nineteen checks
+# reporting "no host compiler". There was a host compiler; the build for it was
+# just unreachable. A test that silently tests less is worse than one that
+# fails, so the two builds are now independent.
+build_host() {
+  local prog
+  local hout="$ROOT/build/native/host"
+  command -v cc >/dev/null 2>&1 || { warn "no host cc: the suite's native checks will skip"; return 0; }
+  mkdir -p "$hout"
+  for prog in "${PROGRAMS[@]}"; do
+    # Deliberately NOT under module/bin - that whole directory is packed into
+    # the flashable zip, and a host x86 binary has no business on a phone.
+    cc -Os -Wall -Wextra -o "$hout/$prog" "$SRC/$prog.c" || { warn "host build of $prog failed"; return 0; }
+    say "host/$prog"
+  done
+}
+[ "${1:-}" = "--host" ] && build_host
+
 if [ -z "$CC_KIND" ]; then
   warn "no NDK and no zig: the native screen monitor will not be built."
   warn "the module still works - the daemon falls back to polling the panel."
@@ -76,19 +98,6 @@ if [ "$CC_KIND" = ndk ]; then
 else
   build_one arm64-v8a  aarch64-linux-musl
   build_one armeabi-v7a arm-linux-musleabi
-fi
-
-# A host build, so the test suite can exercise the same source the phone runs
-# rather than a description of it. It is deliberately NOT under module/bin -
-# that whole directory is packed into the flashable zip, and a host x86 binary
-# has no business on a phone.
-if [ "${1:-}" = "--host" ]; then
-  OUT="$ROOT/build/native"
-  mkdir -p "$OUT/host"
-  for prog in "${PROGRAMS[@]}"; do
-    cc -Os -Wall -Wextra -o "$OUT/host/$prog" "$SRC/$prog.c"
-    say "host/$prog"
-  done
 fi
 
 say "native helpers staged into module/bin/"

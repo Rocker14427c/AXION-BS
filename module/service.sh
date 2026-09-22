@@ -56,6 +56,14 @@ if [ ! -f "$SPSM_DIR/state/active" ] && [ -s "$SPSM_DIR/state/blocked_by_us.tsv"
   sh "$ENGINE" six-restore >> "$SPSM_DIR/spsm.log" 2>&1
 fi
 
+# --- stale per-run caches ----------------------------------------------------
+# protected_packages caches its eight binder lookups in a pid-scoped file for
+# the length of one engine run. The run's own stamp means a leftover can never
+# be read as valid, so this is housekeeping rather than correctness - but on a
+# phone whose tmp survives, one file per run would otherwise accumulate for
+# ever. Boot is the one moment no engine run is in flight.
+rm -f "${TMPDIR:-/tmp}"/.spsm-protected.* 2>/dev/null
+
 # --- crash / reboot recovery -------------------------------------------------
 if [ -f "$SPSM_DIR/state/needs_restore" ] || { [ -d "$SPSM_DIR/journal" ] && [ -f "$SPSM_DIR/state/active" ]; }; then
   RESUME=$(sed -n 's/^resume_on_boot=//p' "$SPSM_DIR/config" 2>/dev/null | tail -1)

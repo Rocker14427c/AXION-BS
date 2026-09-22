@@ -279,6 +279,93 @@ The lesson is the inverse of the `stop_daemons` one, and worth holding both at
 once: *an intermittent failure is not evidence of a flaky test.* Reproduce the
 mechanism before deciding which it is.
 
+## Round two: the app's root calls, and a list built three times
+
+### Hundreds of `su` spawns to read two small files
+
+Every `Root.exec()` spawns a whole `su -c`: a fork, the su daemon handshake, a
+new shell, teardown. Paid once for a transition that is nothing. But the app
+also **polls** - the setup screen reads the progress file every 400 ms while
+the engine works, the tile re-reads state every 2500 ms through a transition,
+the knobs screen polls twice every 2 s while probing. Those are hundreds of
+root handshakes to read a few bytes, and the user pays for every one in latency
+and battery.
+
+Short reads now go down **one shell that stays open**; a command is a line
+written to its stdin. Measured 1.15 ms -> 0.04 ms per call for the round trip
+itself (28x), and a real `su` is far heavier than the `sh` used to measure it.
+
+The properties that make this safe are the whole design, and each is pinned by
+a test:
+
+  - **a subshell, not a brace group** - several callers end with `exit 0`,
+    which in a brace group would terminate the session shell itself;
+  - **`</dev/null`** - a command that reads (a bare `cat`) would otherwise
+    swallow the next command off the pipe and desync the protocol for ever;
+  - **a per-session random marker** - so output containing the marker text
+    cannot end a read early;
+  - **an idle reaper** - a root shell is not held open indefinitely;
+  - **a bounded read** that closes the session on timeout rather than reusing a
+    shell whose output may now be out of step;
+  - **a one-shot fallback**, so a caller is never worse off than before.
+
+Long jobs (`enter`, `exit`, `probe`, `pm list`) deliberately keep their own
+`su`. One shell serialises everything sent down it, so a minute-long transition
+would block every status read behind it, and the existing timeout - which works
+by destroying the process - cannot bound one command without killing the
+session.
+
+A first version spawned a watchdog *thread per read*; that measured slower than
+the `su` it replaced once the spawn was gone. One pump thread per session
+feeding a queue costs nothing per call.
+
+With the spawn gone, the command itself became the cost: `$(cat ...)` forks a
+subshell and a `cat`. The `read` builtin does the same job for **1.42 ms ->
+0.26 ms**, byte-identical across all ten active/progress states.
+
+### A list of eight binder calls, built three times per activation
+
+`protected_packages()` - the list of apps that must never be suspended
+(dialer, SMS, emergency, keyboards, every launcher) - costs eight binder round
+trips, and three callers rebuild it inside a single activation. Nothing it
+reads can change during one engine run, so it is cached per run: **18 -> 8 role
+lookups, 137 -> 121 stubbed commands per activate.**
+
+Getting it right took three corrections, each caught by measurement rather than
+by reading the code:
+
+1. **A shell variable cannot cache this.** Every caller invokes it inside
+   `$(...)`, which runs in a forked subshell, so an assignment there dies with
+   it - verified in dash, sh and bash. It has to be a file.
+2. **The hit path must not fork.** `head -1` to check the stamp and `tail -n +2`
+   to print the body cost two forks per call; on screen-on, which builds the
+   list once, that was pure loss - **+49 forks**. Reading the stamp with `read`
+   and streaming the body with a redirection costs no process, and is 7x faster
+   than `tail` even counted alone.
+3. **`read` drops a final line with no trailing newline.** The build's last
+   producer is `home_holder`, which ends with `printf '%s'`. Without an
+   explicit flush of the pending line the cached answer silently omitted **the
+   launcher** - precisely the package that must never be suspended.
+
+Then the same lost-update shape as `radio_forget`, in a new place: screen-on
+reverts its deep knobs `( ... ) &` **six at a time**, and every subshell shares
+`$$`. With one shared `.tmp` name the six builders truncated each other's file
+and five of six renames failed - **6/6 cache misses**, and a cache meant to
+save binder calls instead added forty-five forks. The temp is now private per
+subshell, keyed on the real pid read from `/proc/self/stat` (no fork; `$$` is
+the parent's in every subshell, and `$!` is empty in most of them).
+
+### A test that had been silently testing less
+
+`tests/run-daemon.sh` drives the real compiled monitor through
+`build/native/host/`. That host build only needs a plain `cc`, but it sat at
+the bottom of `native/build.sh`, below the cross-toolchain check - so on a
+machine with gcc but no NDK and no zig the script exited early and never built
+it, and the suite skipped **fourteen of its nineteen checks** reporting "no
+host compiler". There was a host compiler. The two builds are now independent.
+
+A test that quietly tests less is worse than one that fails.
+
 ## Results
 
 | | before | after |
@@ -297,20 +384,21 @@ mechanism before deciding which it is.
 | `date +%s` 300 calls | 540 ms | 117 ms |
 | suite | 572 checks (aborted early) | 649, 0 fail |
 
-Whole-benchmark comparison (`tests/bench/run.sh --cmp baseline final`), forks
+Whole-benchmark comparison (`tests/bench/run.sh --cmp baseline final3`), forks
 counted inside the measured tree, not from `/proc/stat`:
 
 | | baseline | final | change |
 |---|---|---|---|
-| activate | 2963 f / 2298 ms | 2620 f / 1836 ms | -12% f / **-20% ms** |
-| deactivate | 3011 f / 1874 ms | 2023 f / 1068 ms | -33% f / **-43% ms** |
-| screen-off | 1189 f / 3405 ms | 1031 f / 592 ms | -13% f / **-83% ms** |
-| screen-on | 552 f / 366 ms | 459 f / 243 ms | -17% f / **-34% ms** |
-| status | 414 f / 282 ms | 287 f / 165 ms | -31% f / **-41% ms** |
-| verify | 135 f / 101 ms | 100 f / 81 ms | -26% f / -20% ms |
+| activate | 2963 f / 2298 ms | 2554 f / 1560 ms | -14% f / **-32% ms** |
+| deactivate | 3011 f / 1874 ms | 2032 f / 1076 ms | -33% f / **-43% ms** |
+| screen-off | 1189 f / 3405 ms | 850 f / 428 ms | -29% f / **-87% ms** |
+| screen-on | 552 f / 366 ms | 468 f / 248 ms | -15% f / **-32% ms** |
+| status | 414 f / 282 ms | 292 f / 151 ms | -29% f / **-46% ms** |
+| dump-knobs | 51 f / 27 ms | 50 f / 23 ms | -2% f / -15% ms |
+| verify | 135 f / 101 ms | 105 f / 75 ms | -22% f / -26% ms |
 | daemon idle 10 s, on | 30,827 f | 166 f | **-99%** |
 | daemon idle 10 s, off | 23,003 f | 25 f | **-100%** |
-| **total** | **62,559 f / 28,630 ms** | **7,043 f / 24,171 ms** | **-89% f / -16% ms** |
+| **total** | **62,559 f / 28,630 ms** | **6,834 f / 23,712 ms** | **-89% f / -17% ms** |
 
 Every operation improved on both axes; nothing regressed.
 

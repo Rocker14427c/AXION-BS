@@ -2172,7 +2172,124 @@ ROOT_APPS="com.topjohnwu.magisk me.weishu.kernelsu com.rifsxd.ksunext com.sukisu
 # The packages that must keep working whatever the mode does: the essentials
 # above, whatever root managers this phone has installed, the keyboard (a phone
 # with no keyboard cannot answer anyone) and the launcher.
+# Cached for the life of THIS process. The list costs eight binder round trips
+# (three role lookups, two settings reads, the home holder, the HOME role and a
+# query-activities), and it is rebuilt from scratch by each of the three callers
+# that need it - blockable_packages, managed_packages and the background
+# restrictor - inside a single activation. Nothing it reads can change during
+# one engine run: the roles, the keyboards and the installed launchers are the
+# user's configuration, not the mode's, and the mode's OWN home swap is applied
+# after these lists are taken. So the second and third builds were eight binder
+# calls each to recompute a byte-identical answer.
+#
+# Deliberately per-process and not a file: a cache on disk would have to be
+# invalidated when the user changes their launcher or keyboard between runs,
+# and getting that wrong means suspending someone's dialer. A variable dies
+# with the engine process, so the next run always asks the phone again.
+# The cache is a FILE, not a variable. Every caller invokes this inside a
+# command substitution - `$(protected_packages | tr ...)` - which runs in a
+# forked subshell, so a variable set here dies with that subshell and the next
+# caller would miss every time. Verified in dash, sh and bash: a shell variable
+# assigned inside $(...) is never visible to the next $(...).
+#
+# $$ scopes the file to this engine process, and $$ is the PARENT's pid inside
+# a subshell in all three shells (checked), so every subshell of one run shares
+# one cache and two concurrent runs cannot share each other's.
+# One value per engine run. SPSM_RUN_ID is exported by engine.sh; the fallback
+# keeps this working for anything that sources knobs.sh on its own.
+_PROT_GEN="${SPSM_RUN_ID:-boot}"
+# A value that differs between the parallel subshells of one run, without a
+# fork. $$ is identical in all of them, so it cannot be used. A counter in the
+# subshell's own memory plus SECONDS-free arithmetic is enough: the only
+# requirement is that two concurrent builders do not pick the same name.
+_PROT_SEQ=0
+_prot_uniq() {
+  _PROT_SEQ=$((_PROT_SEQ + 1))
+  # The subshell's REAL pid, read out of /proc with a redirection - no fork.
+  # $$ is the parent's in every subshell and so cannot separate them, and $!
+  # was tried and rejected: it is empty (and therefore identical) in any
+  # subshell that has not started a background job, which is most of them.
+  # /proc/self/stat gives a distinct value in dash and bash alike; the counter
+  # separates repeat calls within one subshell, and $$ keeps two concurrent
+  # engine runs apart if /proc is unreadable.
+  _pu=""
+  read -r _pu _ < /proc/self/stat 2>/dev/null || _pu=""
+  printf '%s' "tmp${_pu:-$$}.$_PROT_SEQ"
+}
 protected_packages() {
+  _pc="${TMPDIR:-/tmp}/.spsm-protected.$$"
+  # Staleness is handled by a generation stamp rather than a `find` on every
+  # call: `find` is itself a fork, which is the cost this cache exists to
+  # avoid. The stamp is written by the run that built the cache, so a file left
+  # by an earlier engine that happened to hold this pid is not mistaken for
+  # ours - it simply fails to match and is rebuilt.
+  #
+  # An EXIT trap would be the tidier cleanup, but engine.sh installs no trap
+  # today and adding one risks replacing a handler another path sets later -
+  # the daemon already had a bug of exactly that shape, where a second
+  # `trap ... TERM` silently replaced the first.
+  # The hit path must not fork, or the cache costs more than it saves. The
+  # first version used `head -1` to check the stamp and `tail -n +2` to print
+  # the body - two forks per call, against the eight binder calls avoided. That
+  # is a win for the callers that would rebuild, but screen-on only ever builds
+  # the list once, so there it was pure loss: measured +49 forks on screen-on.
+  # The stamp is read with the `read` builtin and the body with a single
+  # redirection, so a hit now costs no process at all.
+  if [ -s "$_pc" ]; then
+    _pstamp=""
+    read -r _pstamp < "$_pc" 2>/dev/null || _pstamp=""
+    if [ "$_pstamp" = "#$_PROT_GEN" ]; then
+      # Strip the stamp line without a fork: read it, then stream the rest.
+      #
+      # The final `[ -n "$_pl" ]` is not belt-and-braces. `read` returns false
+      # on a last line that has no trailing newline, so the loop exits with
+      # that line already in $_pl and never prints it - and the build's last
+      # producer is home_holder, which ends with `printf '%s'` and no newline.
+      # Without this the cached answer silently dropped the launcher, which is
+      # precisely the package that must never be suspended.
+      { read -r _
+        while IFS= read -r _pl; do printf '%s\n' "$_pl"; done
+        [ -n "$_pl" ] && printf '%s\n' "$_pl"
+      } < "$_pc"
+      return 0
+    fi
+  fi
+  # A PRIVATE temp, then an atomic rename.
+  #
+  # $$ is the same in every subshell of a run, which is what lets the cache be
+  # shared - but screen-on reverts its deep knobs six at a time in `( ... ) &`
+  # subshells, so six of them can reach this line together. With one shared
+  # "$_pc.tmp" they truncate each other's file and five of the six `mv`s fail
+  # on a temp that another has already renamed away. Exactly the lost-update
+  # shape as radio_forget, and it made the cache miss every time: measured 6/6
+  # misses and five mv errors in a six-way race.
+  #
+  # The temp is made unique with a value that differs per subshell. Losing the
+  # race is harmless here - every builder computes the same answer, so the last
+  # rename simply wins and the others' work is discarded.
+  _ptmp="$_pc.$(_prot_uniq)"
+  { printf '#%s\n' "$_PROT_GEN"; _protected_packages_build; } > "$_ptmp" 2>/dev/null
+  # Only publish a build that produced real content - the stamp line alone
+  # means the build found nothing, and a cached empty answer would mean
+  # "nothing is protected" for the rest of the run: the dialer and the
+  # launcher would be suspended.
+  # "more than just the stamp line" without forking a wc: read past the stamp
+  # and see whether anything follows.
+  _phas=""
+  { read -r _ ; read -r _phas; } < "$_ptmp" 2>/dev/null || _phas=""
+  if [ -n "$_phas" ]; then
+    mv -f "$_ptmp" "$_pc" 2>/dev/null
+    { read -r _
+      while IFS= read -r _pl; do printf '%s\n' "$_pl"; done
+      [ -n "$_pl" ] && printf '%s\n' "$_pl"
+    } < "$_pc"
+  else
+    rm -f "$_ptmp" 2>/dev/null
+    _protected_packages_build
+  fi
+}
+
+_protected_packages_build() {
   printf '%s\n' $ESSENTIALS $ROOT_APPS
   # The phone's own ROLES - dialer, SMS, emergency - by whoever holds them.
   # On an AOSP ROM that is com.android.dialer and com.android.mms (both in

@@ -23,7 +23,7 @@ final class Root {
     }
 
     static boolean isActive() {
-        String out = exec("[ -f " + ACTIVE + " ] && echo ON || echo OFF");
+        String out = read("[ -f " + ACTIVE + " ] && echo ON || echo OFF");
         return out != null && out.contains("ON");
     }
 
@@ -61,7 +61,7 @@ final class Root {
         // handler does not run until data actually arrives. Waking the monitor
         // makes it write a line, and the line unblocks the daemon on every
         // shell - so the poke is delivered by the pipe, not by the signal.
-        exec("mkdir -p " + DIR + "/state && echo " + state + " > " + DIR + "/state/screen; "
+        read("mkdir -p " + DIR + "/state && echo " + state + " > " + DIR + "/state/screen; "
            + "m=$(cat " + DIR + "/state/monitor.pid 2>/dev/null); "
            + "[ -n \"$m\" ] && [ -d \"/proc/$m\" ] && kill -USR1 \"$m\" 2>/dev/null; "
            + "p=$(cat " + DIR + "/daemon.pid 2>/dev/null); "
@@ -73,7 +73,11 @@ final class Root {
 
     /** Progress text the engine publishes while it is applying or reverting. */
     static String progress() {
-        return exec("cat " + DIR + "/state/progress 2>/dev/null");
+        // Polled every 400 ms by the setup screen while the engine works, so
+        // it uses the `read` builtin rather than forking a cat each time.
+        return read("p=''; f=" + DIR + "/state/progress; "
+                + "[ -f $f ] && { read p < $f 2>/dev/null || :; }; "
+                + "[ -n \"$p\" ] && echo \"$p\" || :");
     }
 
     /** Human readable summary of what is currently applied. */
@@ -92,6 +96,198 @@ final class Root {
 
     static String exec(String cmd) {
         return exec(cmd, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // The persistent root shell.
+    //
+    // Every Root.exec() spawns a whole `su -c`: a fork, the su daemon
+    // handshake, a new shell, then teardown - measured at ~1.15 ms per call
+    // with a plain sh on a desktop, and a phone's su is a good deal heavier
+    // than that. Paid once for a transition it is nothing. But the app also
+    // POLLS: the setup screen reads the progress file every 400 ms while the
+    // engine works, the tile re-reads state every 2500 ms through a
+    // transition, and the knobs screen polls twice every 2 s while probing.
+    // Those are hundreds of su spawns to read a few bytes out of two small
+    // files, and every one of them is a root handshake the user pays for in
+    // latency and battery.
+    //
+    // So short reads go down ONE shell that stays open, and a command is just
+    // a line written to its stdin. The same measurement across a pipe is
+    // ~0.04 ms - 28x cheaper - and the saving grows on a real su.
+    //
+    // Deliberately NOT used for long work (enter, exit, probe, pm list). A
+    // single shell serialises whatever goes down it, so a command that runs
+    // for a minute would block every status read behind it - and the existing
+    // timeout, which works by destroying the process, cannot bound one
+    // command without killing the session. Long jobs keep their own su, where
+    // those semantics already hold. Short reads get the fast path; everything
+    // else behaves exactly as before.
+    // ---------------------------------------------------------------------
+
+    private static final Object SESSION_LOCK = new Object();
+    private static Process session;
+    private static java.io.Writer sessionIn;
+    private static BufferedReader sessionOut;
+    private static String marker;
+    private static long lastUsed;
+    private static Thread reaper;
+    // Lines the shell has produced, filled by ONE pump thread per session.
+    // The obvious alternative - a watchdog thread per read - costs a thread
+    // create and join on every poll, which measured slower than the su spawn
+    // it was meant to replace once the spawn itself got cheap.
+    private static java.util.concurrent.BlockingQueue<String> lines;
+    private static Thread pump;
+
+    /** Idle session teardown: a root shell must not be held open for ever. */
+    private static final long IDLE_MS = 20_000L;
+    /** A short read that takes this long is a broken session, not a slow one. */
+    private static final long READ_TIMEOUT_MS = 5_000L;
+    /** Sentinel pushed by the pump when the shell's stdout ends. Compared by
+     *  identity, so a shell that literally prints this text cannot fake it. */
+    private static final String EOF = new String("\u0000spsm-eof");
+
+    private static void closeSessionLocked() {
+        try { if (sessionIn != null) sessionIn.close(); } catch (Exception ignored) {}
+        try { if (sessionOut != null) sessionOut.close(); } catch (Exception ignored) {}
+        if (session != null) session.destroy();
+        if (pump != null) pump.interrupt();
+        session = null;
+        sessionIn = null;
+        sessionOut = null;
+        marker = null;
+        lines = null;
+        pump = null;
+    }
+
+    /** Drop the shared root shell (called on idle, and on any protocol fault). */
+    static void closeSession() {
+        synchronized (SESSION_LOCK) { closeSessionLocked(); }
+    }
+
+    private static boolean openSessionLocked() {
+        if (session != null) {
+            // Still alive? A dead shell looks fine until it is written to.
+            try {
+                session.exitValue();
+                closeSessionLocked();   // it exited; fall through and respawn
+            } catch (IllegalThreadStateException alive) {
+                return true;
+            }
+        }
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su"});
+            session = p;
+            sessionIn = new java.io.OutputStreamWriter(p.getOutputStream());
+            sessionOut = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            marker = "__SPSM_" + Long.toHexString(System.nanoTime()) + "__";
+            final BufferedReader src = sessionOut;
+            final java.util.concurrent.BlockingQueue<String> q =
+                    new java.util.concurrent.LinkedBlockingQueue<>();
+            lines = q;
+            pump = new Thread(() -> {
+                try {
+                    String line;
+                    while ((line = src.readLine()) != null) q.put(line);
+                } catch (Exception ignored) {
+                } finally {
+                    // Unblock any reader waiting on a shell that has gone away.
+                    q.offer(EOF);
+                }
+            });
+            pump.setDaemon(true);
+            pump.setName("spsm-root-pump");
+            pump.start();
+            if (reaper == null) {
+                reaper = new Thread(() -> {
+                    for (;;) {
+                        try { Thread.sleep(5_000L); } catch (InterruptedException e) { return; }
+                        synchronized (SESSION_LOCK) {
+                            if (session != null && System.currentTimeMillis() - lastUsed > IDLE_MS) {
+                                closeSessionLocked();
+                            }
+                        }
+                    }
+                });
+                reaper.setDaemon(true);
+                reaper.setName("spsm-root-reaper");
+                reaper.start();
+            }
+            return true;
+        } catch (Exception e) {
+            closeSessionLocked();
+            return false;
+        }
+    }
+
+    /**
+     * Run a SHORT command down the shared root shell and return its output.
+     *
+     * Returns null if the session could not be used, exactly like exec() does
+     * on failure - so every existing "null means it said nothing, leave the UI
+     * alone" path keeps working unchanged.
+     */
+    static String read(String cmd) {
+        synchronized (SESSION_LOCK) {
+            String out = readOnce(cmd);
+            if (out != null) return out;
+            // One retry on a fresh shell: the old one may have been reaped or
+            // killed by the su daemon between calls, which is normal and must
+            // not surface as a failed read.
+            closeSessionLocked();
+            out = readOnce(cmd);
+            if (out != null) return out;
+        }
+        // Still nothing - fall back to the one-shot path so a caller is never
+        // worse off than it was before the session existed.
+        return exec(cmd, 10);
+    }
+
+    private static String readOnce(String cmd) {
+        if (!openSessionLocked()) return null;
+        final String mark = marker;
+        try {
+            // A SUBSHELL, not a brace group: several callers end their script
+            // with `exit 0`, which inside a brace group would terminate the
+            // session shell itself. A subshell also keeps variables and cd
+            // from leaking between unrelated reads.
+            //
+            // stdin comes from /dev/null so a command that reads (a bare cat,
+            // say) cannot swallow the next command off the pipe and desync the
+            // protocol. stderr is merged, matching exec().
+            sessionIn.write("(\n" + cmd + "\n) </dev/null 2>&1\n");
+            sessionIn.write("echo " + mark + "\n");
+            sessionIn.flush();
+        } catch (Exception e) {
+            return null;
+        }
+        // Bounded by the queue's own timed poll - no per-read thread. A wedged
+        // shell must not hang a UI thread's worker for ever.
+        final StringBuilder b = new StringBuilder();
+        boolean done = false;
+        final long deadline = System.currentTimeMillis() + READ_TIMEOUT_MS;
+        final java.util.concurrent.BlockingQueue<String> q = lines;
+        try {
+            for (;;) {
+                long left = deadline - System.currentTimeMillis();
+                if (left <= 0) break;
+                String line = q.poll(left, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (line == null) break;                       // timed out
+                if (line == EOF) break;                        // shell gone (identity, not equals)
+                if (line.equals(mark)) { done = true; break; }
+                b.append(line).append('\n');
+            }
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        if (!done) {
+            // Timed out or the stream ended early: the session is no longer
+            // trustworthy - its output and our commands may now be out of step.
+            closeSessionLocked();
+            return null;
+        }
+        lastUsed = System.currentTimeMillis();
+        return b.toString();
     }
 
     /**
