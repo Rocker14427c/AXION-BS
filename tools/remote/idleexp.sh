@@ -39,6 +39,7 @@ VARIANT=${1:-control}
 WIN=${2:-23400}
 CHK=${3:-1800}
 GRACE=${4:-150}
+LOW_BAT=${5:-15}   # stop the window and restore the phone below this capacity
 ENGINE=/data/adb/spsm/scripts/engine.sh
 STATE=/data/adb/spsm/state
 CFG=/data/adb/spsm/config
@@ -148,8 +149,12 @@ restore_all() {
     cmd wifi set-scan-always-available enabled >/dev/null 2>&1
     settings put global wifi_scan_always_enabled 1 >/dev/null 2>&1
   fi
-  [ -n "${ORIG_SLEEP:-}" ] && [ "${ORIG_SLEEP}" != "null" ] && settings put global wifi_sleep_policy "$ORIG_SLEEP" >/dev/null 2>&1
-  [ -n "${ORIG_WAKEUP:-}" ] && [ "${ORIG_WAKEUP}" != "null" ] && settings put global wifi_wakeup_enabled "$ORIG_WAKEUP" >/dev/null 2>&1
+  # Only write back values that are actually values: a settings read can fail with
+  # "cmd: Failure calling service settings..." and writing that string back would
+  # corrupt the setting we were trying to preserve.
+  case "${ORIG_SLEEP:-}" in ''|*[!0-9]*) : ;; *) settings put global wifi_sleep_policy "$ORIG_SLEEP" >/dev/null 2>&1 ;; esac
+  case "${ORIG_WAKEUP:-}" in ''|*[!0-9]*) : ;; *) settings put global wifi_wakeup_enabled "$ORIG_WAKEUP" >/dev/null 2>&1 ;; esac
+  case "${ORIG_WIFI_ON:-}" in ''|*[!0-9]*) : ;; *) ;; esac
   if [ "${ORIG_GMS_EXEMPT:-1}" = "1" ]; then
     dumpsys deviceidle whitelist +com.google.android.gms >/dev/null 2>&1
     dumpsys deviceidle whitelist +com.android.vending >/dev/null 2>&1
@@ -280,8 +285,15 @@ IRQ0=$(irqs)
 
 END=$(deadline_in "$WIN")
 CP=$(( $(now) + CHK ))
+EARLY=""
 while [ "$(now)" -lt "$END" ]; do
   sleep 5
+  _b=$(cap)
+  if [ -n "$_b" ] && [ "$_b" -le "$LOW_BAT" ]; then
+    EARLY="battery fell to ${_b}% (guard at ${LOW_BAT}%)"
+    echo "  !! $_EARLY — ending the window early and restoring the phone"
+    break
+  fi
   if [ "$(now)" -ge "$CP" ]; then
     _tp=$(awk '/touchpanel/ {s=0; for(i=2;i<=NF;i++) if ($i ~ /^[0-9]+$/) s+=$i; print s; exit}' /proc/interrupts 2>/dev/null)
     chk "cp$(($(now) - BOOT0))s"
@@ -322,6 +334,7 @@ awk -v d=$((BOOT1 - BOOT0)) -v s=$((SUS1 - SUS0)) -v f=$((FAIL1 - FAIL0)) 'BEGIN
   if (d<1) d=1;
   printf "    suspends/min %.2f   failures/min %.2f\n", s*60/d, f*60/d
 }'
+if [ -n "$EARLY" ]; then echo "  !! window ended EARLY: $EARLY"; fi
 echo "  -- validity --"
 case "$END_SCREEN" in Asleep|Dozing) _sc=ok ;; *) _sc="BAD:screen was [$_END_SCREEN]" ;; esac
 case "$END_WIFI" in *enabled) _wf=ok ;; *) _wf="BAD:[$END_WIFI]" ;; esac
