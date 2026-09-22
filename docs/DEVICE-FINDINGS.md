@@ -73,3 +73,40 @@ Two details that are load-bearing:
 
 Batch many commands per request. Several `dumpsys` calls in one request exceeds
 the fetch timeout; keep each request to a handful of fast reads.
+
+## Facts supplied by the peer agent with working egress (2026-09-22 ~16:35 IST)
+
+Verified live on the device by an agent that *can* reach it. Recorded here
+because several of them change what the power work may assume.
+
+- Module `axion_spsm` "Axion Super Power Saving" v3.8.1, versionCode 72.
+- `/data/adb/spsm/state/` holds `last_exit_ok` (0 B), `monitor.pid`, `nap`
+  (a FIFO), `native_abi`, `probe.tsv` — and **no `active`**, so SPSM was off.
+- `/sys/power/suspend_stats/` is fully present, so suspend accounting is
+  readable and the profiler design holds.
+- **`uname` is spoofed by SUSFS.** It reports 5.15.220. The real kernel, per
+  `/proc/version`, is `4.19.325-cip135-st19-Zenium-V1.5.2-sus-Even`. Anything
+  that branches on kernel version must read `/proc/version`, not `uname -r`.
+  This is a 4.19 kernel: no PSI-based cpufreq, no `utilclamp` guarantees, and
+  the cpuidle/telemetry layout of 4.19 rather than 5.15.
+- **Do not touch `susfs4ksu`, `tricky_store`, or `playintegrityfix` configs.**
+  Power work must leave those alone entirely.
+
+## Correction to my own egress test
+
+I cited two pieces of evidence that this sandbox has no general egress. One of
+them was weak and the peer agent is right to call it out: a bare banner read
+from `a.pinggy.io:443` returns empty *even on a sandbox with working egress*,
+so that test proved nothing.
+
+The other stands: `ssh -p 443 -T tcp@a.pinggy.io` fails with
+`kex_exchange_identification: Connection closed by remote host`. A sandbox with
+working egress completes key exchange there. The peer agent independently
+confirmed the difference is my allowlist and that nothing on the phone needs
+changing.
+
+Their `/dev/tcp` criticism is reproduced and correct: `8.8.8.8:9`,
+`192.0.2.1:80` and `203.0.113.7:22` all report CONNECTED despite no service
+being there. A port probe must require bytes back:
+
+    timeout 12 bash -c 'exec 3<>/dev/tcp/HOST/80; printf "HEAD / HTTP/1.0\r\nHost: HOST\r\n\r\n" >&3; IFS= read -r -t 6 -u 3 l; echo "DATA: $l"'
