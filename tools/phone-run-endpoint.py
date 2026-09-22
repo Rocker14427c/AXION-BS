@@ -18,7 +18,7 @@
 # Why fetch from GitHub: the repo is public and the phone has normal internet,
 # so new probes are delivered by pushing them. The endpoint never changes and
 # the operator never pastes again.
-import http.server, socketserver, subprocess, sys, os, urllib.parse, urllib.request
+import http.server, socketserver, subprocess, sys, os, threading, urllib.parse, urllib.request
 
 T = sys.argv[1]
 P = int(sys.argv[2]) if len(sys.argv) > 2 else 8099
@@ -37,10 +37,49 @@ def fetch(name):
 
 
 def start(name):
+    """Kick off a probe and answer immediately.
+
+    The download and the run both happen on a worker thread. Doing the download
+    inline is what made the relay report "# no tunnel here": the request sat
+    waiting on a GitHub round trip from the phone, outlasted the relay's
+    patience, and looked exactly like a dead tunnel even though the server was
+    fine and answering other paths.
+    """
+    tag = name.replace("/", "_")
+    out = "%s/remote-%s.out" % (TMP, tag)
+    threading.Thread(target=_run, args=(name, tag, out), daemon=True).start()
+    return "started %s\noutput will be at %s\n" % (name, out)
+
+
+def _run(name, tag, out):
     try:
         src = fetch(name)
     except Exception as e:
-        return "FETCH ERROR %s: %r" % (name, e)
+        _append(out, "FETCH ERROR %s: %r\n[done rc=99]\n" % (name, e))
+        return
+    script = "%s/remote-%s.sh" % (TMP, tag)
+    try:
+        with open(script, "w") as fh:
+            fh.write(src)
+    except Exception as e:
+        _append(out, "WRITE ERROR: %r\n[done rc=98]\n" % e)
+        return
+    cmd = "sh %s > %s 2>&1; echo \"[done rc=$?]\" >> %s" % (script, out, out)
+    try:
+        subprocess.Popen([SU, "-c", cmd])
+    except Exception as e:
+        _append(out, "EXEC ERROR: %r\n[done rc=97]\n" % e)
+
+
+def _append(path, text):
+    try:
+        with open(path, "a") as fh:
+            fh.write(text)
+    except Exception:
+        pass
+
+
+def _unused_start(name):
     tag = name.replace("/", "_")
     script = "%s/remote-%s.sh" % (TMP, tag)
     out = "%s/remote-%s.out" % (TMP, tag)
