@@ -384,7 +384,7 @@ A test that quietly tests less is worse than one that fails.
 | `date +%s` 300 calls | 540 ms | 117 ms |
 | suite | 572 checks (aborted early) | 649, 0 fail |
 
-Whole-benchmark comparison (`tests/bench/run.sh --cmp baseline final3`), forks
+Whole-benchmark comparison (`tests/bench/run.sh --cmp baseline current`), forks
 counted inside the measured tree, not from `/proc/stat`:
 
 | | baseline | final | change |
