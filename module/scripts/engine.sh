@@ -1191,12 +1191,17 @@ case "$CMD" in
   recents-remove) recents_remove "$2" "$3" ;;
   version)    echo "scripts=$(scripts_stamp) module=$(spsm_version) code=$SPSM_CODE_VERSION" ;;
   status)     do_status ;;
+  # Read-only power measurement. Nothing here changes a setting; it exists
+  # because "why is the phone still drawing current with the screen off" can
+  # only be answered by counters read twice across a known interval, not by
+  # the battery percentage.
+  power)      shift; sh "$SCRIPT_DIR/power-profile.sh" "$@" ;;
   dump-knobs) do_dump_knobs ;;
   start-daemon) start_daemon ;;
   stop-daemon)  stop_daemon ;;
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|status|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|status|power [snapshot|window <s> <tag>|compare A B]|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac
