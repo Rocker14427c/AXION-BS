@@ -2149,12 +2149,12 @@ knob_field() { # knob_field <id> <1-based field number>
   _kn=$2
   while [ "$_kn" -gt 1 ]; do
     case "$_kf" in
-      *'|'*) _kf=${_kf#*|} ;;
+      *'|'*) _kf=${_kf#*"|"} ;;
       *) printf ''; return ;;      # fewer fields than asked for: nothing to give
     esac
     _kn=$((_kn - 1))
   done
-  printf '%s' "${_kf%%|*}"
+  printf '%s' "${_kf%%"|"*}"
 }
 knob_scope()   { knob_field "$1" 5; }
 knob_default() { knob_field "$1" 4; }
