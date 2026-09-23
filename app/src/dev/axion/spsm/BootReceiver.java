@@ -11,6 +11,11 @@ public class BootReceiver extends BroadcastReceiver {
         // bring the 6-app home up after unlock.
         // Start listening for screen changes for as long as this process lives.
         ScreenReceiver.install(context);
+
+        // The precision readout comes back after a reboot like everything else
+        // the owner left on. It is zero-cost while the screen is off (see the
+        // service), so there is no reason it should need a manual start.
+        if (PrecisionService.enabled(context)) PrecisionService.start(context);
         new Thread(() -> {
             if (!Root.available() || !Root.isActive()) return;
             try {

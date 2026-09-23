@@ -77,6 +77,20 @@
             android:textColor="@color/white"
             android:textSize="15sp" />
 
+        <!-- The precision battery readout: on/off. On means the two-decimal
+             number is in the status bar (it is the notification own icon) and
+             in the shade as a silent ongoing notification. -->
+        <Button
+            android:id="@+id/btn_precision"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_button_off"
+            android:text="@string/precision_on"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            android:textSize="15sp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -29,7 +29,7 @@ Consequences to design around:
 | repo | `Rewrite` at `416c910` (v3.8.2 zip committed on top of `7e88cb6`) |
 | GitHub release | **v3.8.2** published; zip asset rebuilt with the drop_line fix (asset replaced) |
 | APK | `module/app/AxionSPSM.apk` = v3.8.2 (73), 105 355 bytes, md5 `3deaffa2d0a568d8a3219c1e4af00fd5` |
-| phone | **v3.8.2 + drop_line fix is installed** (running + both module APK copies + version stamp); keep-list empty, owner picks his apps in the app |
+| phone | scripts **v3.8.2 + drop_line fix** (frozen until after tonight run), app **v3.8.3 (74)** with precision battery live; keep-list empty |
 | suites | 674/0 main, 252/0 codec, 22/0 install (single-entry remove now asserted) |
 | connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly; NEVER retry a dead host - re-fetch first |
 
