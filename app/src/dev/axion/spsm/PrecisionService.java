@@ -42,16 +42,26 @@ import java.util.Locale;
  *      -249 000..-429 000 discharging. The sign is still reconciled against the
  *      battery status each tick, so a kernel that reports magnitudes behaves.
  *
- * The owner's acceptance test, given as a correction the first hour: when the
- * phone battery says 43, this readout must say 43.xx - never 42.xx. So the
- * model refines the system percentage instead of replacing it: the whole number
- * is ALWAYS the gauge own level, and the hundredths are the position inside that
- * one-percent bucket, walked by the integrated current (one bucket = 60 000
- * uAh). At every gauge step the number re-seats on the new whole percent - the
- * small snap is the gauge own tick - and a plug or unplug turns the smoothed
- * current over instantly so the number never walks the wrong way while the
- * average catches up. The first build here kept an independent coulomb count
- * and the owner found it showing 42.xx against a system 43; he was right.
+ * The instrument the owner asked for, after two corrections:
+ *
+ *   1. "42.xx against a system 43 means the battery is lower than 43" - a fine
+ *      reading that disagrees with the rounded integer is INFORMATION, not a
+ *      bug. Never lock the whole number to the integer.
+ *   2. The decimals must move with real usage and charge at a predictable,
+ *      constant-per-current rate ("if xx go randomly there is no need for it").
+ *      The first build's decimals crawled and stuck at .00 because its scale
+ *      was 20% wrong (60 000 uAh/% design vs the battery's learned 49 790).
+ *
+ * The device was researched before this rewrite. The MTK fuel gauge prints its
+ * own 0.01% SOC to the kernel log (fuelgauged: "ui_soc:4145" = 41.45%, the very
+ * value the system integer is cut from), charge_full holds the learned capacity
+ * (4 979 000 uAh - it moves with aging and is re-read from the gauge print),
+ * and current_now is signed and live. So: the gauge's own ui_soc is the anchor,
+ * live current integration carries the number between gauge prints (it responds
+ * to load and charger instantly, and the slope is exactly I/charge_full), and a
+ * fresh anchor is blended in at 0.02%/tick so a read glitch can never jump the
+ * display. The detail line predicts the next whole percent from the actual
+ * slope: "41 in 5 min" - the owner's reason for wanting decimals at all.
  *
  * Zero cost, by construction: no wake locks, no alarms, no timers of any kind.
  * The tick loop is a plain Handler that runs only while the screen is on (the
@@ -65,8 +75,9 @@ public class PrecisionService extends Service {
     static final String PREF = "precision_battery";
     private static final String CHANNEL = "precision";
     private static final int NOTIF_ID = 4071;
-    /** uAh per one percent, measured on this device (level x 60000 == counter). */
-    private static final double Q_PCT = 60000.0;
+    /** The kernel counter reports level x 60 000 (design scale) - presentation
+     *  only. The learned capacity (charge_full, ~4 979 000 uAh) is the real
+     *  scale and lives in perPct below. */
     private static final long TICK_MS = 1500;
 
     private final Handler h = new Handler();
@@ -74,15 +85,17 @@ public class PrecisionService extends Service {
     private NotificationManager nm;
     private PowerManager pm;
 
-    /**
-     * How far through the current 1% bucket, from its top: 0 = just entered (the
-     * number sits at level + 0.995), 1 = exhausted (the number sits at level).
-     * Signed current walks it. Re-seated at every gauge step so the whole number
-     * always equals the system battery percentage.
-     */
-    private double fill = 0.5;
+    /** continuous estimate in %, -1 until first anchored */
+    private double pct = -1;
+    /** where a fresh gauge print wants the number to be (%); NaN = none pending */
+    private double slewTarget = Double.NaN;
     /** smoothed current in uA, + = charging */
     private double emaI = 0;
+    /** uAh per one percent: the battery's LEARNED capacity / 100 (researched:
+     *  49 790 here - the design 60 000 is 20% wrong and makes the decimals lie) */
+    private double perPct = 49790.0;
+    /** the last gauge print seen in dmesg; identical text = not a fresh read */
+    private String lastGaugeLine = "";
     private long lastCc = Long.MIN_VALUE;
     private long lastMs = 0;
     private boolean ticking;
@@ -203,6 +216,7 @@ public class PrecisionService extends Service {
 
     private long cc = Long.MIN_VALUE;
     private long iNow = 0;
+    private int pollN = 0;
     private int level = -1;
     private boolean charging = false;
 
@@ -214,7 +228,7 @@ public class PrecisionService extends Service {
             int st = b.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
             charging = st == BatteryManager.BATTERY_STATUS_CHARGING
                     || st == BatteryManager.BATTERY_STATUS_FULL;
-            long counter = level >= 0 ? (long) (level * Q_PCT) : Long.MIN_VALUE;
+            long counter = level >= 0 ? (long) (level * perPct) : Long.MIN_VALUE;
             try {
                 long v = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER);
                 if (v != Long.MIN_VALUE && v > 0) counter = v;
@@ -231,23 +245,62 @@ public class PrecisionService extends Service {
             if (!charging && iNow > 0) iNow = -iNow;
             cc = counter;
             integrate();
+            if (++pollN % 8 == 0) anchorFromGauge();
             post();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Anchor search: the MTK fuel gauge prints "ui_soc:NNNN" (0.01%) to the
+     * kernel log - the number the system integer is cut from. A repeat of the
+     * same text is not a fresh reading; Q:[...] inside it is the learned
+     * capacity scale in 0.1 mAh units.
+     */
+    private void anchorFromGauge() {
+        try {
+            String line = Root.read("dmesg | grep ui_soc | tail -1");
+            if (line == null || line.indexOf("ui_soc:") < 0) return;
+            if (line.equals(lastGaugeLine)) return;
+            lastGaugeLine = line;
+            int k = line.indexOf("ui_soc:");
+            int e = k + 7;
+            while (e < line.length() && Character.isDigit(line.charAt(e))) e++;
+            double ui = Double.parseDouble(line.substring(k + 7, e)) / 100.0;
+            int q = line.indexOf("Q:[");
+            if (q > 0) {
+                int qe = q + 3;
+                while (qe < line.length() && Character.isDigit(line.charAt(qe))) qe++;
+                if (qe > q + 3) {
+                    double cap = Double.parseDouble(line.substring(q + 3, qe)) * 100.0;
+                    if (cap > 100000 && cap < 8000000) perPct = cap / 100.0;
+                }
+            }
+            slewTarget = ui;
+            if (pct < 0) pct = ui;
         } catch (Throwable ignored) {
         }
     }
 
     private void integrate() {
         long now = SystemClock.elapsedRealtime();
-        if (lastMs == 0 || now - lastMs > 30_000) {
-            // First tick, or a gap the integral cannot reconstruct (screen off).
-            // The fill is kept as it is so the number does not jump at a
-            // screen-on; a level change across the gap re-seats it below.
+        if (pct < 0) {
+            // Not anchored yet. The -1 sentinel must survive until a real value
+            // arrives: the first build here integrated it (turning -1 into
+            // -0.999) and the safety clamp then made it 0.00, from which the
+            // gauge anchor dragged the display upward for an hour while the
+            // battery discharged. Anchor first, integrate only real values.
+            anchorFromGauge();
+            if (pct < 0 && level >= 0) pct = level + 0.5;
             emaI = iNow;
             lastMs = now;
-            if (cc != lastCc && lastCc != Long.MIN_VALUE) {
-                fill = (cc < lastCc) ? 0.0 : 1.0;
-            }
-            lastCc = cc;
+            return;
+        }
+        if (lastMs == 0 || now - lastMs > 30_000) {
+            // First tick, or a gap the integral cannot reconstruct (screen off).
+            // The next gauge print heals this within one poll.
+            emaI = iNow;
+            lastMs = now;
             return;
         }
         double dt = (now - lastMs) / 1000.0;
@@ -256,40 +309,42 @@ public class PrecisionService extends Service {
         // over instantly, or the number walks the wrong way while it catches up.
         if (emaI * iNow < 0) emaI = iNow;
         else emaI = emaI * 0.7 + iNow * 0.3;
-        fill += -emaI * dt / 3600.0 / Q_PCT;
-        if (cc != lastCc && lastCc != Long.MIN_VALUE) {
-            // The gauge stepped: re-seat on the new whole percent. A step down
-            // enters the new bucket at the top, a step up at the bottom. The
-            // snap is small when the bucket really held 60 000 uAh (nothing
-            // visible) and grows only as far as the gauge own bucket width
-            // differs from that - and it always lands the integer on the number
-            // the phone itself is showing.
-            fill = (cc < lastCc) ? 0.0 : 1.0;
+        // The instrument itself: uA * s / 3600 = uAh, / uAh-per-percent = %.
+        // Constant rate for constant current - that regularity is the point.
+        pct += (emaI * dt / 3600.0) / perPct;
+        // A fresh gauge print is the device's own truth: blend toward it at no
+        // more than 0.02%/tick so even a bad read cannot jump the display.
+        if (!Double.isNaN(slewTarget)) {
+            double gap = slewTarget - pct;
+            double step = 0.02;
+            if (Math.abs(gap) <= step || Math.abs(gap) < 1e-6) {
+                pct = slewTarget;
+                slewTarget = Double.NaN;
+            } else {
+                pct += Math.signum(gap) * step;
+            }
         }
-        lastCc = cc;
-        if (fill > 1) fill = 1;
-        if (fill < 0) fill = 0;
-        // Full and still plugged: sit on 100.00 rather than drifting past it.
-        if (level == 100 && charging) fill = 0;
+        if (pct > 100) pct = 100;
+        if (pct < 0) pct = 0;
     }
 
-    /**
-     * level + position inside the bucket. The whole number is the gauge own
-     * level, always - 0.995 caps the fraction so two-decimal rounding can never
-     * print level+1 ("42.99" must round to 42.99, not 43.00).
-     */
     private double pct() {
-        if (level < 0) return 0;
-        double frac = 1.0 - fill;
-        if (frac > 0.995) frac = 0.995;
-        if (frac < 0.0) frac = 0.0;
-        double p = level + frac;
-        return p > 100.0 ? 100.0 : p;
+        return pct < 0 ? (level >= 0 ? level : 0) : pct;
     }
 
-    /** percent per hour, from the smoothed current: uA / (uAh per percent) */
+    /** minutes until the number crosses the next whole percent, or -1 */
+    private double minutesToNextWhole() {
+        double rate = ratePerHour();
+        if (pct < 0 || Math.abs(rate) < 0.05) return -1;
+        double p = pct();
+        double gap = rate < 0 ? p - Math.floor(p) : Math.ceil(p) - p;
+        if (gap <= 0.001) gap = 1.0;
+        return gap / Math.abs(rate) * 60.0;
+    }
+
+    /** percent per hour: uA / (uAh per percent) - the learned-capacity rate */
     private double ratePerHour() {
-        return emaI / Q_PCT;
+        return emaI / perPct;
     }
 
     // -------------------------------------------------------- presentation
@@ -305,9 +360,14 @@ public class PrecisionService extends Service {
         String pct = String.format(Locale.US, "%.2f", pct());
         int ma = (int) Math.round(emaI / 1000.0);
         double rate = ratePerHour();
-        String detail = charging
+        double mins = minutesToNextWhole();
+        String eta = mins < 0 ? ""
+                : String.format(Locale.US, " - %d in %d min",
+                        (int) Math.floor(rate < 0 ? pct() : Math.ceil(pct())),
+                        (int) Math.round(mins));
+        String detail = (charging
                 ? String.format(Locale.US, "+%d mA (+%.1f%%/h)", ma, rate)
-                : String.format(Locale.US, "%d mA (%.1f%%/h)", ma, rate);
+                : String.format(Locale.US, "%d mA (%.1f%%/h)", ma, rate)) + eta;
         Intent open = new Intent(this, SetupActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent pi = PendingIntent.getActivity(this, 0, open,

@@ -13,32 +13,35 @@ bitmaps render wide; the network-speed-indicator trick). The shade holds the
 detail: `43.05% · -373 mA (-6.2%/h)`. The SystemUI route stays open as a patch to
 the AxionAOSP tree for a future build.
 
-## The calibration, measured on this phone first
+## The device, researched (what the kernel really exposes)
 
-| reading | value |
-|---|---|
-| `charge_counter` | **exactly `level x 60 000` uAh** (2 460 000 at level 41, 2 580 000 at 43) |
-| step size | 1 % - the counter only moves at whole percents |
-| `CHARGE_FULL` | 4 974 000 uAh (learned) |
-| `CHARGE_FULL_DESIGN` | 6 000 000 uAh |
-| `current_now` | signed: **+ charging, - discharging** (+1 326 000 / -249 000..-429 000 observed) |
+| signal | truth | use |
+|---|---|---|
+| `fuelgauged` kernel log: `ui_soc:4094` | **40.94 % in 0.01% units** - the very value the system integer is cut from (system 41 = round(40.94)) | THE anchor |
+| `Q:[49799 ...]` / `charge_full` | 4 979 000 uAh learned capacity (aging: 10000 = 100.00%, 65 cycles) | the scale: 49 790 uAh per 1 % |
+| `charge_full_design` | 6 000 000 uAh | nothing - the old 60 000 uAh/% scale came from here and was **20% wrong** |
+| `current_now` | signed, live (+ charging, - discharging) | the motion of the decimals |
+| `charge_counter` | `level x 60 000` exactly, 1% quanta | nothing - presentation only |
+| `charge_now` | frozen (8931, then 37) | nothing |
+| gauge print cadence | ~2 lines / 45 s | anchor poll every 12 s is enough |
 
-So the gauge itself can only say 31.00 or 32.00. The model, after the owner's
-first-hour correction: *the readout refines the system percentage, it never
-argues with it.* The whole number is always the gauge's own level; the hundredths
-are the position inside that one-percent bucket, walked by the integrated
-current (1 500 ms ticks, EMA 0.7/0.3, one bucket = 60 000 uAh). At every gauge
-step the number re-seats on the new whole percent - the visible snap is the
-gauge's own tick, never more than the bucket width differs from 60 000 uAh - and
-a plug/unplug turns the smoothed current over instantly. `42.xx` against a
-system 43 is structurally impossible: the fraction is capped at 0.995 so
-two-decimal rounding cannot leak into the next whole either. `I / 60 000` =
-%/h exactly, shown alongside.
+## The model (after the owner's two corrections)
 
-The first build kept an independent coulomb count anchored at service start and
-only softly blended at steps (a 0.08 blend, one-shot - the rest of the error
-stayed forever). It drifted under real use and the owner caught it at 42.xx vs
-43. The bucket model cannot reproduce that failure.
+1. *"42.xx against a system 43 means the battery is lower than 43"* - a fine
+   reading that disagrees with the rounded integer is information. The whole
+   number is never locked to the integer.
+2. *"The xx must follow my usage at a constant rate, or it is a showpiece"* -
+   the decimals are current integration on the learned scale: `uA * s / 3600 /
+   49 790` per tick. Constant current = constant slope, load and charger move
+   it instantly.
+
+So: `ui_soc` anchors, integration carries the number between gauge prints, a
+fresh anchor blends in at 0.02%/tick (a bad read cannot jump the display), and
+the detail line predicts the next whole percent from the real slope: `-266 mA
+(-5.3%/h) - 40 in 10 min`. Two bugs died on the way, both caught live: the
+20%-wrong scale above, and a "not anchored" sentinel that its own safety clamp
+turned into 0.00, after which the anchor dragged the display *upward* for an
+hour while the battery discharged.
 
 ## Zero cost, by construction
 

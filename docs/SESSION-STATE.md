@@ -1,4 +1,9 @@
-# Session state — read this first
+# Session state - read this first
+
+Toolchain that must be rebuilt after deep rewinds: `bash tools/ensure-jdk.sh`
+(extracts /home/user/jdk4py.whl into sdk/jdk - snapshots cap near 128 MB and eat
+the extracted tree), then `bash build.sh --bootstrap` (jars + toolchain.env),
+always `JAVA_HOME=$PWD/sdk/jdk`.
 
 Last updated: 2026-09-23 ~06:00 UTC (this sandbox's clock) by the agent.
 
