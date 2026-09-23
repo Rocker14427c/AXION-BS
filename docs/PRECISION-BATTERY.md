@@ -23,13 +23,22 @@ the AxionAOSP tree for a future build.
 | `CHARGE_FULL_DESIGN` | 6 000 000 uAh |
 | `current_now` | signed: **+ charging, - discharging** (+1 326 000 / -249 000..-429 000 observed) |
 
-So the gauge itself can only say 31.00 or 32.00. The hundredths between its
-anchors come from integrating the live current (a coulomb count at 1 500 ms,
-EMA 0.7/0.3 to smooth the sample noise), and at every gauge step the estimate
-blends onto the new anchor over ~20 s. After a screen-off gap the integral
-cannot reconstruct, the gauge re-anchors outright. The display therefore agrees
-with the system percentage at every whole number and glides between them at the
-true pace of use (`I / 60 000` = %/h exactly, shown alongside).
+So the gauge itself can only say 31.00 or 32.00. The model, after the owner's
+first-hour correction: *the readout refines the system percentage, it never
+argues with it.* The whole number is always the gauge's own level; the hundredths
+are the position inside that one-percent bucket, walked by the integrated
+current (1 500 ms ticks, EMA 0.7/0.3, one bucket = 60 000 uAh). At every gauge
+step the number re-seats on the new whole percent - the visible snap is the
+gauge's own tick, never more than the bucket width differs from 60 000 uAh - and
+a plug/unplug turns the smoothed current over instantly. `42.xx` against a
+system 43 is structurally impossible: the fraction is capped at 0.995 so
+two-decimal rounding cannot leak into the next whole either. `I / 60 000` =
+%/h exactly, shown alongside.
+
+The first build kept an independent coulomb count anchored at service start and
+only softly blended at steps (a 0.08 blend, one-shot - the rest of the error
+stayed forever). It drifted under real use and the owner caught it at 42.xx vs
+43. The bucket model cannot reproduce that failure.
 
 ## Zero cost, by construction
 

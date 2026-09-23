@@ -42,10 +42,16 @@ import java.util.Locale;
  *      -249 000..-429 000 discharging. The sign is still reconciled against the
  *      battery status each tick, so a kernel that reports magnitudes behaves.
  *
- * The gauge is the authority, the integral is the interpolation: at every gauge
- * step the estimate blends onto the new anchor (about twenty ticks), and after a
- * screen-off gap it snaps to the gauge outright. The display therefore agrees
- * with the system percentage at every whole number and glides between them.
+ * The owner's acceptance test, given as a correction the first hour: when the
+ * phone battery says 43, this readout must say 43.xx - never 42.xx. So the
+ * model refines the system percentage instead of replacing it: the whole number
+ * is ALWAYS the gauge own level, and the hundredths are the position inside that
+ * one-percent bucket, walked by the integrated current (one bucket = 60 000
+ * uAh). At every gauge step the number re-seats on the new whole percent - the
+ * small snap is the gauge own tick - and a plug or unplug turns the smoothed
+ * current over instantly so the number never walks the wrong way while the
+ * average catches up. The first build here kept an independent coulomb count
+ * and the owner found it showing 42.xx against a system 43; he was right.
  *
  * Zero cost, by construction: no wake locks, no alarms, no timers of any kind.
  * The tick loop is a plain Handler that runs only while the screen is on (the
@@ -68,8 +74,13 @@ public class PrecisionService extends Service {
     private NotificationManager nm;
     private PowerManager pm;
 
-    /** estimated charge in uAh on the gauge scale; -1 = not anchored yet */
-    private double q = -1;
+    /**
+     * How far through the current 1% bucket, from its top: 0 = just entered (the
+     * number sits at level + 0.995), 1 = exhausted (the number sits at level).
+     * Signed current walks it. Re-seated at every gauge step so the whole number
+     * always equals the system battery percentage.
+     */
+    private double fill = 0.5;
     /** smoothed current in uA, + = charging */
     private double emaI = 0;
     private long lastCc = Long.MIN_VALUE;
@@ -115,9 +126,9 @@ public class PrecisionService extends Service {
                     h.removeCallbacks(tick);
                     ticking = false;
                 } else if (Intent.ACTION_SCREEN_ON.equals(i.getAction())) {
-                    // Coming back from a gap the integral did not see: the gauge
-                    // is the truth about that gap, so re-anchor hard and glide on.
-                    q = -1;
+                    // Coming back from a gap the integral did not see: the fill
+                    // is kept so the number does not jump at a screen-on, and a
+                    // level change across the gap re-seats it on the next tick.
                     startTicking();
                 }
             } catch (Throwable ignored) {
@@ -227,38 +238,53 @@ public class PrecisionService extends Service {
 
     private void integrate() {
         long now = SystemClock.elapsedRealtime();
-        if (q < 0 || lastMs == 0 || now - lastMs > 30_000) {
+        if (lastMs == 0 || now - lastMs > 30_000) {
             // First tick, or a gap the integral cannot reconstruct (screen off).
-            q = cc;
+            // The fill is kept as it is so the number does not jump at a
+            // screen-on; a level change across the gap re-seats it below.
             emaI = iNow;
             lastMs = now;
+            if (cc != lastCc && lastCc != Long.MIN_VALUE) {
+                fill = (cc < lastCc) ? 0.0 : 1.0;
+            }
             lastCc = cc;
             return;
         }
         double dt = (now - lastMs) / 1000.0;
         lastMs = now;
-        emaI = emaI * 0.7 + iNow * 0.3;
-        q += emaI * dt / 3600.0;
+        // A sign reversal is a plug or an unplug: the smoothed current turns
+        // over instantly, or the number walks the wrong way while it catches up.
+        if (emaI * iNow < 0) emaI = iNow;
+        else emaI = emaI * 0.7 + iNow * 0.3;
+        fill += -emaI * dt / 3600.0 / Q_PCT;
         if (cc != lastCc && lastCc != Long.MIN_VALUE) {
-            // The gauge stepped: it is the authority. Blend onto its reading over
-            // about twenty seconds so the number never jumps at the boundary.
-            q += (cc - q) * 0.08;
-            if (Math.abs(cc - q) < 150) q = cc;
+            // The gauge stepped: re-seat on the new whole percent. A step down
+            // enters the new bucket at the top, a step up at the bottom. The
+            // snap is small when the bucket really held 60 000 uAh (nothing
+            // visible) and grows only as far as the gauge own bucket width
+            // differs from that - and it always lands the integer on the number
+            // the phone itself is showing.
+            fill = (cc < lastCc) ? 0.0 : 1.0;
         }
         lastCc = cc;
-        double max = 100.0 * Q_PCT;
-        if (q > max) q = max;
-        if (q < 0) q = 0;
+        if (fill > 1) fill = 1;
+        if (fill < 0) fill = 0;
         // Full and still plugged: sit on 100.00 rather than drifting past it.
-        if (level == 100 && charging) q = max;
+        if (level == 100 && charging) fill = 0;
     }
 
+    /**
+     * level + position inside the bucket. The whole number is the gauge own
+     * level, always - 0.995 caps the fraction so two-decimal rounding can never
+     * print level+1 ("42.99" must round to 42.99, not 43.00).
+     */
     private double pct() {
-        if (q < 0) return level >= 0 ? level : 0;
-        double p = q / Q_PCT;
-        if (p > 100) return 100;
-        if (p < 0) return 0;
-        return p;
+        if (level < 0) return 0;
+        double frac = 1.0 - fill;
+        if (frac > 0.995) frac = 0.995;
+        if (frac < 0.0) frac = 0.0;
+        double p = level + frac;
+        return p > 100.0 ? 100.0 : p;
     }
 
     /** percent per hour, from the smoothed current: uA / (uAh per percent) */
