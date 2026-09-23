@@ -13,6 +13,12 @@ final class Root {
     // one wrong path.
     static final String ACTIVE = "/data/adb/spsm/state/active";
     static final String WHITELIST = "/data/adb/spsm/whitelist.txt";
+    // Apps the owner wants alive in the background. Written by the engine's own
+    // `keep` verb rather than by this app directly, so that adding an app here
+    // releases it immediately if the mode has it frozen right now - the reason
+    // the screen exists at all.
+    static final String KEEP = "/data/adb/spsm/keep_awake.txt";
+    static final String ENGINE = "/data/adb/spsm/scripts/engine.sh";
     static final String DIR = "/data/adb/spsm";
 
     private Root() {}
@@ -69,6 +75,25 @@ final class Root {
            + "  kill -USR1 \"$p\" 2>/dev/null; "
            + "else sh " + DIR + "/scripts/engine.sh screen-" + state + " >/dev/null 2>&1; fi; "
            + "exit 0");
+    }
+
+    /** The apps the owner has asked to keep running in the background. */
+    static String[] keepList() {
+        String out = exec("sh " + ENGINE + " keep list 2>/dev/null");
+        if (out == null) return new String[0];
+        java.util.List<String> out2 = new java.util.ArrayList<>();
+        for (String line : out.split("\n")) {
+            String p = line.trim();
+            if (p.length() > 0 && p.indexOf('.') > 0 && p.indexOf(' ') < 0) out2.add(p);
+        }
+        return out2.toArray(new String[0]);
+    }
+
+    /** Adds or removes one app. Both go through the engine, not the file. */
+    static boolean keep(String pkg, boolean on) {
+        String out = exec("sh " + ENGINE + " keep " + (on ? "add " : "remove ")
+                + (on ? "" : "") + pkg + " 2>&1");
+        return out != null && !out.contains("not a package name");
     }
 
     /** Progress text the engine publishes while it is applying or reverting. */

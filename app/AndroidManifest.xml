@@ -50,6 +50,14 @@
             android:windowSoftInputMode="stateAlwaysHidden" />
 
         <activity
+            android:name=".KeepAwakeActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Spsm"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
+        <activity
             android:name=".SetupActivity"
             android:exported="true"
             android:launchMode="singleTop"

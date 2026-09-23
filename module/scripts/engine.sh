@@ -911,6 +911,73 @@ stop_daemon() {
 # The list itself is written by the app to whitelist.txt (which the restrict
 # options already read); this frees anything the module had blocked and then let
 # go of the record, so the exit does not try to undo it twice.
+# ============================================ keeping apps alive by request
+#
+# The six slots do this for six apps. This does it for as many as the owner
+# wants, and it exists because of a failure this mode actually caused: a chat
+# app force-stopped while the screen was off stops receiving anything at all,
+# because Android does not start a stopped package for a push. Calls and SMS are
+# protected by ROLES whether or not anything is listed here; this is for the chat
+# apps, the mail apps and anything else whose messages must not go quiet.
+#
+# Adding an app takes effect AT ONCE rather than at the next screen-off: if the
+# mode is on and that app is frozen or stopped right now, it is released here, so
+# the owner can see it start working again without waiting for a transition.
+do_keep() {
+  # Called as `engine.sh keep <sub> ...`, and the dispatcher hands over the whole
+  # argument list - so the verb itself arrives as $1 and is stepped over here.
+  [ "${1:-}" = "keep" ] && { shift || true; }
+  _sub=${1:-list}
+  shift 2>/dev/null || true
+  case "$_sub" in
+    list)
+      [ -s "$KEEP_AWAKE" ] || { echo "(no apps kept awake)"; return 0; }
+      cat "$KEEP_AWAKE"
+      ;;
+    add)
+      _ok=0
+      for _p in "$@"; do
+        [ -n "$_p" ] || continue
+        case "$_p" in *[!A-Za-z0-9._-]*) log "keep: '$_p' is not a package name"; continue ;; esac
+        if [ -f "$KEEP_AWAKE" ] && grep -qxF "$_p" "$KEEP_AWAKE" 2>/dev/null; then
+          echo "$_p: already kept"
+          _ok=$((_ok + 1)); continue
+        fi
+        printf '%s\n' "$_p" >> "$KEEP_AWAKE" 2>/dev/null
+        echo "$_p: kept awake"
+        _ok=$((_ok + 1))
+        # Release it now, if this session is the reason it is quiet. Both halves:
+        # the suspension (which a push would clear by itself) and the stop (which
+        # nothing clears but a person).
+        if [ -f "$STATE/active" ]; then
+          if [ -f "$STATE/blocked_by_us.tsv" ] && grep -qxF "$_p" "$STATE/blocked_by_us.tsv" 2>/dev/null; then
+            unsuspend_app "$_p" && log "keep $_p: unsuspended"
+            grep -vxF "$_p" "$STATE/blocked_by_us.tsv" > "$STATE/blocked_by_us.tsv.tmp" 2>/dev/null \
+              && mv -f "$STATE/blocked_by_us.tsv.tmp" "$STATE/blocked_by_us.tsv" 2>/dev/null
+          fi
+          if [ -f "$STOPPED_BY_US" ] && grep -qxF "$_p" "$STOPPED_BY_US" 2>/dev/null; then
+            pm unstop --user 0 "$_p" >/dev/null 2>&1
+            grep -vxF "$_p" "$STOPPED_BY_US" > "$STOPPED_BY_US.tmp" 2>/dev/null \
+              && mv -f "$STOPPED_BY_US.tmp" "$STOPPED_BY_US" 2>/dev/null
+            log "keep $_p: un-stopped, so it can receive pushes again"
+          fi
+        fi
+      done
+      [ "$_ok" = 0 ] && { echo "usage: engine.sh keep add <package>"; return 1; }
+      return 0
+      ;;
+    remove|del|rm)
+      for _p in "$@"; do
+        [ -n "$_p" ] || continue
+        grep -vxF "$_p" "$KEEP_AWAKE" > "$KEEP_AWAKE.tmp" 2>/dev/null \
+          && mv -f "$KEEP_AWAKE.tmp" "$KEEP_AWAKE" 2>/dev/null
+        echo "$_p: free to be blocked again at the next screen-off"
+      done
+      ;;
+    *) echo "usage: engine.sh keep list | keep add <package>... | keep remove <package>..."; return 1 ;;
+  esac
+}
+
 do_allow() {
   _wl="$SPSM_DIR/whitelist.txt"
   _freed=0
@@ -1190,6 +1257,7 @@ case "$CMD" in
   core-sleep) do_core_sleep ;;
   # The recovery command: release everything in the six slots and the record.
   six-restore) do_six_restore ;;
+  keep) do_keep "$@" ;;
   set)        do_set "$2" "$3" ;;
   verify)     do_verify ;;
   probe)      do_probe "$2" ;;
@@ -1216,6 +1284,6 @@ case "$CMD" in
   toggle)
     if [ -f "$ACTIVE" ]; then do_deactivate; else do_activate; fi ;;
   *)
-    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|status|power [snapshot|window <s> <tag>|compare A B]|version|dump-knobs|start-daemon|stop-daemon"
+    echo "usage: engine.sh activate|deactivate|screen-off|screen-on|toggle|set <knob> <0|1>|verify|probe|allow|keep list|keep add <pkg>|keep remove <pkg>|recents|recents-switch <id> [comp]|recents-remove <id> [pkg]|clear-all|recents-opened <how>|status|power [snapshot|window <s> <tag>|compare A B]|version|dump-knobs|start-daemon|stop-daemon"
     exit 2 ;;
 esac

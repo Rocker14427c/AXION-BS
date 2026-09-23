@@ -1456,6 +1456,13 @@ BLOCKED_BY_US="$STATE/blocked_by_us.tsv"
 # a freeze, `pm unstop` releases a stop, and only the second one survives a
 # reboot or an exit on its own.
 STOPPED_BY_US="$STATE/stopped_by_us.tsv"
+# Apps the owner has said must keep running in the background. The six slots are
+# a shortlist with a hard limit; this is the open-ended version, and it exists
+# because of what the owner's phone did: a chat app the mode had force-stopped
+# stopped receiving anything at all, because a stopped package is not woken by a
+# push. Calls and SMS are protected by ROLES and always were; everything else is
+# the owner's call, which is what this file is.
+KEEP_AWAKE="$SPSM_DIR/keep_awake.txt"
 
 # Suspend every app that is not in the six slots.
 #
@@ -1989,8 +1996,16 @@ rom_bg_core() { printf '%s\n' $ROM_BG_CORE; }
 # and the whole step was measured at 264 seconds off the end of an activation in
 # the v3.6.0 log. The sets are turned into strings once and each candidate is
 # tested against them with a shell case - no forks at all until the writes below.
+# What the owner has asked to keep alive, as one space-delimited string. Both
+# lists are honoured - the six slots and the keep-awake list - because they mean
+# the same thing to every caller; they differ only in how many apps they hold and
+# who edits them.
+keep_awake_string() {
+  printf ' %s %s ' "$(cfg keep '')" "$(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ')"
+}
+
 rom_bg_candidates() {
-  _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') $(rom_bg_core | tr '\n' ' ') "
+  _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') $(rom_bg_core | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
   _sys=$(pm list packages -s 2>/dev/null | sed 's/^package://' | sort -u)
   _sys_s=" $(printf '%s\n' $_sys | tr '\n' ' ') "
@@ -2480,7 +2495,7 @@ _protected_packages_build() {
 # list (essentials, root managers, keyboard, launcher, and now the role
 # holders: dialer, SMS, emergency) still stands in front of it.
 blockable_packages() {
-  _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
+  _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
   if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then
     _all="$_all $(pm list packages -s 2>/dev/null | sed 's/^package://')"
@@ -2505,7 +2520,7 @@ apply_block_system_apps() { :; }
 restore_block_system_apps() { :; }
 
 managed_packages() {
-  _keep=" $(cfg keep '') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
+  _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
   if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then

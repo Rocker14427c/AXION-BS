@@ -59,6 +59,19 @@
             android:tint="@color/text_secondary" />
 
         <ImageButton
+            android:id="@+id/btn_keep"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="116dp"
+            android:layout_gravity="end|center_vertical"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/keep_title"
+            android:padding="13dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_check"
+            android:tint="@color/text_secondary" />
+
+        <ImageButton
             android:id="@+id/btn_edit"
             android:layout_width="48dp"
             android:layout_height="48dp"

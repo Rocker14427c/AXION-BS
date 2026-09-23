@@ -80,6 +80,14 @@ public class SpsmHomeActivity extends Activity {
         // to put another app in - no separate screen, and no way to get stuck in
         // it (the tick, or leaving the screen, ends it).
         editButton = findViewById(R.id.btn_edit);
+        // The background-apps list, one tap from the home screen: the owner asked
+        // for a place to say which apps must not be silenced, and a setting three
+        // screens deep is a setting nobody finds.
+        View keepBtn = findViewById(R.id.btn_keep);
+        if (keepBtn != null) {
+            keepBtn.setOnClickListener(v ->
+                    startActivity(new Intent(this, KeepAwakeActivity.class)));
+        }
         if (editButton != null) editButton.setOnClickListener(v -> setEditing(!editing));
         Apps.fillDefaults(this);
         try {

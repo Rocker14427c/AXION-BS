@@ -4170,6 +4170,73 @@ check "a blocked app is force-stopped exactly once per session (${n:-0})" $?
 grep -q "background sweep (mode on): strays cleared" "$WORK/spsm/spsm.log"
 check "and the sweep that follows is already the light one" $?
 run_engine deactivate >/dev/null 2>&1
+
+say "90. an app the owner keeps awake is never frozen, stopped or pushed to the back"
+# The six slots already do this for six apps. This is the open-ended list, and it
+# exists because of what the owner's phone did: a chat app the mode had
+# force-stopped stopped receiving anything at all, because Android does not start
+# a stopped package for a push. Calls and SMS are protected by ROLES; this list is
+# for everything else the owner wants alive.
+make_tree; make_stubs; seed_stub_state
+printf 'com.whatsapp\ncom.gmail\n' > "$WORK/stub/pkgs3"
+mkdir -p "$WORK/spsm"
+printf 'com.whatsapp\n' > "$WORK/spsm/keep_awake.txt"
+screen_on
+run_engine activate >/dev/null 2>&1
+[ ! -f "$WORK/stub/pkg/com.whatsapp.suspended" ]
+check "the kept app was not suspended" $?
+[ -f "$WORK/stub/pkg/com.gmail.suspended" ]
+check "and an app not on the list was" $?
+if grep -q "^com.whatsapp$" "$WORK/stub/force_stopped" 2>/dev/null; then
+  bad "the kept app was never force-stopped"
+else
+  ok "the kept app was never force-stopped"
+fi
+if grep -q "^com.whatsapp$" "$WORK/stub/calls" 2>/dev/null; then
+  bad "it was not even asked about"
+else
+  ok "it was not even asked about"
+fi
+[ "$(cat "$WORK/stub/bucket/com.whatsapp" 2>/dev/null)" != "restricted" ]
+check "and its standby bucket was left alone" $?
+# The command the app and the owner both use.
+run_engine keep list > "$WORK/out.keep1" 2>&1
+grep -qx "com.whatsapp" "$WORK/out.keep1"
+check "engine.sh keep list prints the list" $?
+run_engine keep add com.spotify.music >/dev/null 2>&1
+grep -qx "com.spotify.music" "$WORK/spsm/keep_awake.txt"
+check "keep add writes the app down" $?
+run_engine keep remove com.spotify.music >/dev/null 2>&1
+if grep -qx "com.spotify.music" "$WORK/spsm/keep_awake.txt" 2>/dev/null; then
+  bad "keep remove lets an app be blocked again"
+else
+  ok "keep remove lets an app be blocked again"
+fi
+# Adding an app takes effect at once, not at the next screen-off: if this session
+# is why it is quiet, it is released there and then.
+cat > "$WORK/spsm/state/blocked_by_us.tsv" <<'EOF'
+com.gmail
+com.example.game
+EOF
+cat > "$WORK/spsm/state/stopped_by_us.tsv" <<'EOF'
+com.gmail
+EOF
+: > "$WORK/stub/calls"
+run_engine keep add com.gmail >/dev/null 2>&1
+grep -q "unsuspend.*com.gmail" "$WORK/stub/calls"
+check "keeping an app that is frozen right now unsuspends it immediately" $?
+grep -q "unstop.*com.gmail" "$WORK/stub/calls"
+check "and un-stops it, which is the half a push cannot fix" $?
+if grep -qx "com.gmail" "$WORK/spsm/state/blocked_by_us.tsv" 2>/dev/null; then
+  bad "and it is out of the record it was just released from"
+else
+  ok "and it is out of the record it was just released from"
+fi
+run_engine deactivate >/dev/null 2>&1
+[ -s "$WORK/spsm/keep_awake.txt" ]
+check "the owner's list survives an exit - it is a choice, not session state" $?
+
+run_engine deactivate >/dev/null 2>&1
 # The release that suspend's inverse cannot perform. A suspended app is woken by
 # a push the moment it is unsuspended; a STOPPED app is not - the phone will not
 # start it again until somebody opens it. The owner's phone showed the cost with

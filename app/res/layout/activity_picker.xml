@@ -7,6 +7,7 @@
     android:fitsSystemWindows="true">
 
     <TextView
+        android:id="@+id/picker_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="20dp"
@@ -14,6 +15,19 @@
         android:textColor="@color/white"
         android:textSize="22sp"
         android:fontFamily="sans-serif-medium" />
+
+    <!-- One line of explanation, under the title. The slot picker leaves it
+         empty; the background-apps screen uses it to say what the list is for
+         and that calls and SMS are protected without being listed. -->
+    <TextView
+        android:id="@+id/pick_note"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="12dp"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
 
     <EditText
         android:id="@+id/search"

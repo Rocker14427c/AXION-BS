@@ -682,6 +682,31 @@ package while asleep, with the bucket and app-op recorded and put back on wake
 (`rom_bg_off`, deep). `system_server` itself is not touched: what is taken away is
 its clients.
 
+## What changed in 3.8.2 — the keep-alive round
+
+The morning after the first honest overnight run, the phone was checked with the
+mode **off**, and 173 packages were still force-stopped — WhatsApp and the mail
+client among them. That is why messages had gone quiet.
+
+Suspending an app and stopping an app are not the same thing, and the code had
+treated them as if they were. A suspended app is woken by the next push; a
+**stopped** app is not woken by anything. Android will not start it for a push, an
+alarm or a broadcast — only a person opening it clears the state. Every exit path
+called `pm unsuspend`; nothing ever called the inverse of `am force-stop`, which
+is `pm unstop`. It does now, on the ordinary exit, in recovery, and outside the
+guard on the suspend record — because the sweep stops packages that record never
+names.
+
+**And the section you asked for: Background apps** (the ✓ button on the home
+screen). Every installed app, tap to keep, tap again to release. A kept app is
+never suspended, never force-stopped and never pushed to the *restricted* standby
+bucket — and adding one takes effect at once, so an app that is frozen right now
+starts working while you watch. The list is yours: it survives an exit and a
+reboot. Calls and SMS never need to be on it, and cannot be broken by it — they
+are protected by the phone's own roles (dialer, SMS, emergency).
+
+Suite: 661 passed, 0 failed.
+
 ## What changed in 3.8.1 — the exit round: goodbye in seconds
 
 The brief came with a field log: activation 56 s, exit ~117 s, on the phone

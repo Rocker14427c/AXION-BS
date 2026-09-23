@@ -85,4 +85,14 @@
     <string name="home">Back to the power-saving home screen</string>
     <string name="clear_all">Clear all</string>
     <string name="clear_all_done">Cleared %1$s · %2$s still open</string>
+    <!-- Background apps: the open-ended version of the six slots. Calls and SMS
+         are protected by the phone's own roles and never need to be listed. -->
+    <string name="keep_title">Background apps</string>
+    <string name="keep_note">These apps keep running while the mode is on, so their messages still arrive. Calls and SMS always work and do not need to be listed here.</string>
+    <string name="keep_search">Search apps</string>
+    <string name="keep_count">%1$d kept · %2$d apps · tap to keep or release</string>
+    <string name="keep_on">kept awake</string>
+    <string name="keep_added">%1$s will keep running in the background</string>
+    <string name="keep_removed">%1$s can be blocked again at the next screen-off</string>
+    <string name="keep_failed">The phone refused that change</string>
 </resources>

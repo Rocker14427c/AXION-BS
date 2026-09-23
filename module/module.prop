@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.8.1
-versionCode=72
+version=v3.8.2
+versionCode=73
 author=Axion SPSM
 description=v3.8.1, the exit round: goodbye in seconds, not minutes. The exit no longer re-reads every value of every knob a second time to prove the restores happened - each restore already reads what it touches and reports kept/failed/wrote as it goes, so the verdict costs no fork (the 100-second revert block in the field log is gone by construction). Activation no longer idles the blocked set it just force-stopped, and the sweep that follows hunts only strays (the 25-second apply block). Few-target knobs keep their read-back, a value you changed yourself is still left alone and said so, recovery is unchanged. Suite: 646 checks, 0 failed.
