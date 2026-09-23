@@ -88,12 +88,15 @@ public class PrecisionService extends Service {
     /** continuous estimate in %, -1 until first anchored */
     private double pct = -1;
     /** where a fresh gauge print wants the number to be (%); NaN = none pending */
-    private double slewTarget = Double.NaN;
+    private int lastGaugeVal = -1;
+    private double seatTarget = -1;
+    private long tickN = 0;
+    private double intSec = 0;
     /** smoothed current in uA, + = charging */
     private double emaI = 0;
     /** uAh per one percent: the battery's LEARNED capacity / 100 (researched:
      *  49 790 here - the design 60 000 is 20% wrong and makes the decimals lie) */
-    private double perPct = 49790.0;
+    private double perPct = 60000.0; // uAh per 1.00%% - the device definition (charge_counter = level*60000)
     /** the last gauge print seen in dmesg; identical text = not a fresh read */
     private String lastGaugeLine = "";
     private long lastCc = Long.MIN_VALUE;
@@ -258,27 +261,43 @@ public class PrecisionService extends Service {
      * capacity scale in 0.1 mAh units.
      */
     private void anchorFromGauge() {
-        try {
-            String line = Root.read("dmesg | grep ui_soc | tail -1");
-            if (line == null || line.indexOf("ui_soc:") < 0) return;
-            if (line.equals(lastGaugeLine)) return;
-            lastGaugeLine = line;
-            int k = line.indexOf("ui_soc:");
+        String ln = Root.read("dmesg | grep FGADC | grep ui_soc | tail -1");
+        if (ln == null) ln = "";
+        ln = ln.trim();
+        int ui = -1;
+        int k = ln.indexOf("ui_soc:");
+        if (k >= 0) {
             int e = k + 7;
-            while (e < line.length() && Character.isDigit(line.charAt(e))) e++;
-            double ui = Double.parseDouble(line.substring(k + 7, e)) / 100.0;
-            int q = line.indexOf("Q:[");
-            if (q > 0) {
-                int qe = q + 3;
-                while (qe < line.length() && Character.isDigit(line.charAt(qe))) qe++;
-                if (qe > q + 3) {
-                    double cap = Double.parseDouble(line.substring(q + 3, qe)) * 100.0;
-                    if (cap > 100000 && cap < 8000000) perPct = cap / 100.0;
-                }
-            }
-            slewTarget = ui;
-            if (pct < 0) pct = ui;
-        } catch (Throwable ignored) {
+            while (e < ln.length() && ln.charAt(e) >= '0' && ln.charAt(e) <= '9') e++;
+            try {
+                ui = Integer.parseInt(ln.substring(k + 7, e));
+            } catch (NumberFormatException ignored) {}
+        }
+        if (ui < 0) return;
+        // Dedup on the VALUE: repeated prints must never tug the number - that
+        // tug was the 39.93/39.94 loop he caught.
+        if (ui == lastGaugeVal) return;
+        lastGaugeVal = ui;
+        double target = ui / 100.0;
+        if (pct < 0) {
+            pct = target;
+            return;
+        }
+        double err = target - pct;
+        if (Math.abs(err) > 1.5) {
+            // Gross desync only (reboot, hours of screen-off): glide back at
+            // 0.03/tick from integrate() - never jump the display.
+            seatTarget = target;
+            return;
+        }
+        if (Math.abs(err) > 0.10) {
+            // Deadzone leash: inside 0.10 the integrator is pure; outside, a
+            // gentle pull keeps the number near the device truth without ever
+            // being visible as stutters (0.03 max per 12 s catch).
+            double c = err * 0.06;
+            if (c > 0.03) c = 0.03;
+            if (c < -0.03) c = -0.03;
+            pct += c;
         }
     }
 
@@ -296,15 +315,26 @@ public class PrecisionService extends Service {
             lastMs = now;
             return;
         }
-        if (lastMs == 0 || now - lastMs > 30_000) {
-            // First tick, or a gap the integral cannot reconstruct (screen off).
-            // The next gauge print heals this within one poll.
+        long gapMs = now - lastMs;
+        if (lastMs == 0) {
             emaI = iNow;
             lastMs = now;
             return;
         }
-        double dt = (now - lastMs) / 1000.0;
+        if (gapMs > 120_000) {
+            // Screen-off-scale gap: the gauge re-seats the number; do not
+            // invent minutes of energy the sensor never saw.
+            emaI = iNow;
+            lastMs = now;
+            return;
+        }
+        // A stall (busy main thread, slow root shell) must never lose energy:
+        // integrate the whole gap at the last known current. Discarding it was
+        // the missing 30% of the slope in the second 11-minute diagnostic.
+        double dt = gapMs / 1000.0;
         lastMs = now;
+        tickN++;
+        intSec += dt;
         // A sign reversal is a plug or an unplug: the smoothed current turns
         // over instantly, or the number walks the wrong way while it catches up.
         if (emaI * iNow < 0) emaI = iNow;
@@ -312,16 +342,14 @@ public class PrecisionService extends Service {
         // The instrument itself: uA * s / 3600 = uAh, / uAh-per-percent = %.
         // Constant rate for constant current - that regularity is the point.
         pct += (emaI * dt / 3600.0) / perPct;
-        // A fresh gauge print is the device's own truth: blend toward it at no
-        // more than 0.02%/tick so even a bad read cannot jump the display.
-        if (!Double.isNaN(slewTarget)) {
-            double gap = slewTarget - pct;
-            double step = 0.02;
-            if (Math.abs(gap) <= step || Math.abs(gap) < 1e-6) {
-                pct = slewTarget;
-                slewTarget = Double.NaN;
+        // A gross re-seat never jumps: it glides at 0.03 per tick.
+        if (seatTarget >= 0) {
+            double g = seatTarget - pct;
+            if (Math.abs(g) <= 0.03) {
+                pct = seatTarget;
+                seatTarget = -1;
             } else {
-                pct += Math.signum(gap) * step;
+                pct += Math.signum(g) * 0.03;
             }
         }
         if (pct > 100) pct = 100;
@@ -367,7 +395,7 @@ public class PrecisionService extends Service {
                         (int) Math.round(mins));
         String detail = (charging
                 ? String.format(Locale.US, "+%d mA (+%.1f%%/h)", ma, rate)
-                : String.format(Locale.US, "%d mA (%.1f%%/h)", ma, rate)) + eta;
+                : String.format(Locale.US, "%d mA (%.1f%%/h)", ma, rate)) + eta + String.format(Locale.US, " .%dt %ds", tickN, Math.round(intSec));
         Intent open = new Intent(this, SetupActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent pi = PendingIntent.getActivity(this, 0, open,

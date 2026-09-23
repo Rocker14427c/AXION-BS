@@ -1,5 +1,12 @@
 # Session state - read this first
 
+Precision battery (v3.8.3+ estimator, deployed as AxionSPSM-393.apk):
+integrator at 60000 uAh/% + FGADC ui_soc deadzone leash; diagnostic protocol =
+tools script /data/local/tmp/diag10.sh (11 min, 5 s samples) analyzed against
+slope/reversal/step/gap criteria - ALWAYS run it after touching PrecisionService.
+Remote scripts survive connection loss under nohup; waiters do not - reconnect
+with a FRESH gist endpoint and poll for DIAGDONE.
+
 Toolchain that must be rebuilt after deep rewinds: `bash tools/ensure-jdk.sh`
 (extracts /home/user/jdk4py.whl into sdk/jdk - snapshots cap near 128 MB and eat
 the extracted tree), then `bash build.sh --bootstrap` (jars + toolchain.env),

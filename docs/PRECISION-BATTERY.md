@@ -13,35 +13,39 @@ bitmaps render wide; the network-speed-indicator trick). The shade holds the
 detail: `43.05% · -373 mA (-6.2%/h)`. The SystemUI route stays open as a patch to
 the AxionAOSP tree for a future build.
 
-## The device, researched (what the kernel really exposes)
+## The device, researched (corrected after live diagnostics)
 
 | signal | truth | use |
 |---|---|---|
-| `fuelgauged` kernel log: `ui_soc:4094` | **40.94 % in 0.01% units** - the very value the system integer is cut from (system 41 = round(40.94)) | THE anchor |
-| `Q:[49799 ...]` / `charge_full` | 4 979 000 uAh learned capacity (aging: 10000 = 100.00%, 65 cycles) | the scale: 49 790 uAh per 1 % |
-| `charge_full_design` | 6 000 000 uAh | nothing - the old 60 000 uAh/% scale came from here and was **20% wrong** |
-| `current_now` | signed, live (+ charging, - discharging) | the motion of the decimals |
-| `charge_counter` | `level x 60 000` exactly, 1% quanta | nothing - presentation only |
-| `charge_now` | frozen (8931, then 37) | nothing |
-| gauge print cadence | ~2 lines / 45 s | anchor poll every 12 s is enough |
+| `{FGADC}... ui_soc:3141` | 31.41% in 0.01 units - the value the system integer is rounded from | THE anchor (filter to FGADC lines only!) |
+| `[GM3_boot_data]... ui_soc:3839` | a STALE boot record interleaved in the same log | NEVER - it flickered the anchor between 31 and 38 |
+| `charge_counter` | `level x 60000` uAh exactly | the % scale is the DESIGN scale: 60000 uAh per 1.00% |
+| `Q:[49899 ...]` | learned/aging capacity (~4990 mAh) | an aging report, NOT the percent scale - using it made every rate 20% wrong |
+| `CAR[c:NNNN ...]` | hardware coulomb counter, 50 uAh/LSB, dumped in ~60 s batches | ground truth energy (diagnostic reference) |
+| `current_now` | signed live uA | the motion of the decimals |
+| `charge_now` | frozen | nothing |
 
-## The model (after the owner's two corrections)
+## The model (seven 11-minute live diagnostics later)
 
-1. *"42.xx against a system 43 means the battery is lower than 43"* - a fine
-   reading that disagrees with the rounded integer is information. The whole
-   number is never locked to the integer.
-2. *"The xx must follow my usage at a constant rate, or it is a showpiece"* -
-   the decimals are current integration on the learned scale: `uA * s / 3600 /
-   49 790` per tick. Constant current = constant slope, load and charger move
-   it instantly.
+Hard-won rules, each learned from a failure the diagnostics caught:
 
-So: `ui_soc` anchors, integration carries the number between gauge prints, a
-fresh anchor blends in at 0.02%/tick (a bad read cannot jump the display), and
-the detail line predicts the next whole percent from the real slope: `-266 mA
-(-5.3%/h) - 40 in 10 min`. Two bugs died on the way, both caught live: the
-20%-wrong scale above, and a "not anchored" sentinel that its own safety clamp
-turned into 0.00, after which the anchor dragged the display *upward* for an
-hour while the battery discharged.
+1. The integrator owns the motion: `uA * s / 3600 / 60000` per tick. Constant
+   rate per current; load and charger move it instantly (sign flip on plug).
+2. Tick stalls never lose energy: the stall gap is integrated at the last known
+   current (up to 2 min); longer gaps are screen-off dormancy by design.
+3. The gauge corrects drift ONLY outside a +-0.10 deadzone, at 0.03 per 12 s
+   catch - invisible in the motion. Full-strength pulls produced the
+   39.93/39.94 loop; per-print positional snaps produced visible jitter; a
+   feedback integrator windup produced a 0.9% plunge; a 0.8% snap produced a
+   0.84% jump. All four are rejected by evidence, not taste.
+4. Gross desync (reboot, hours off) glides back at 0.03/tick - never jumps.
+5. Repeated gauge prints are deduplicated on the VALUE, never on the log line.
+
+Acceptance protocol (owner-mandated): 10+ minutes of continuous 5 s samples of
+the displayed value, ui_soc, current, and level; verdict on slope ratio vs
+current physics (0.65-1.35), reversals (0), sawtooth loops (0), max step
+(<0.05), gap to gauge (mean <0.25), and flat spells (<90 s while awake).
+Active-window slope ratio measured: 0.94. Zero wake locks and alarms throughout.
 
 ## Zero cost, by construction
 
