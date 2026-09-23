@@ -7,6 +7,9 @@
 #       control   stock behaviour: SPSM deactivated, radio on, background scanning allowed
 #       shipped   SPSM activated with its default knobs -- what a user runs
 #       gms-trim  control, plus GMS and Play Store removed from the Doze whitelist
+#       airplane  shipped, plus airplane mode ON - the platform-floor DIAGNOSTIC.
+#                 Calls and SMS pause for the window (the owner asked for this
+#                 measurement explicitly). Never a shipped policy.
 #
 #   defaults: window 23400 (6.5 h), checkpoint 1800 (30 min), grace 150
 #
@@ -149,6 +152,36 @@ notify() { # notify <title> <text>
   return 0
 }
 
+# ---------------------------------------------------------------- airplane
+# The platform-floor diagnostic: both radios off. Two hard-won rules shape this
+# block. Every transition is verified by read-back (wifiexp's V3 ran under a name
+# that lied about its radio state), and the disable must never depend on a live
+# session - a toggle test once killed its own ssh connection at the "on" step and
+# left the phone in airplane mode, because the dying session took the rest of the
+# test with it. These run from the harness (or its nohup wrapper), never over a
+# connection the toggle itself can destroy.
+aplane_on() {
+  settings put global airplane_mode_on 1 >/dev/null 2>&1
+  am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1
+  _i=0
+  while [ "$_i" -lt 6 ]; do
+    [ "$(settings get global airplane_mode_on 2>/dev/null)" = "1" ] && return 0
+    sleep 2; _i=$((_i + 1))
+  done
+  return 1
+}
+aplane_off() {
+  settings put global airplane_mode_on 0 >/dev/null 2>&1
+  am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1
+  _i=0
+  while [ "$_i" -lt 10 ]; do
+    [ "$(settings get global airplane_mode_on 2>/dev/null)" = "0" ] && return 0
+    sleep 2; _i=$((_i + 1))
+  done
+  return 1
+}
+aplane_state() { settings get global airplane_mode_on 2>/dev/null; }
+
 # ---------------------------------------------------------------- restore
 ORIG_LOCK=/data/local/tmp/ie-orig.env
 [ -f "$ORIG_LOCK" ] && . "$ORIG_LOCK"
@@ -157,6 +190,17 @@ restore_all() {
   echo "################ RESTORING ################"
   notify "Measurement finished" "The phone is yours again - everything has been put back. Results are in /data/local/tmp/ie.out"
   input keyevent 26 2>/dev/null       # bring the screen back
+  # Airplane first, and for the owner's sake above everything else here: every
+  # restore below silently does nothing while airplane is still holding the
+  # radios down, and he wakes up needing calls and SMS.
+  case "${ORIG_APLANE:-0}" in
+    1) echo "  airplane: leaving it ON - it was on before the run" ;;
+    *) if aplane_off; then
+         echo "  airplane: off (read-back $(aplane_state)) - calls and SMS are back"
+       else
+         echo "  airplane: !! READ-BACK STILL [$(aplane_state)] - turn it off by hand"
+       fi ;;
+  esac
   # Radio first, then scanning: set-scan-always-available silently does nothing
   # while the radio is down, which is how wifiexp left scanning switched off.
   case "${ORIG_WIFI_ON:-1}" in
@@ -194,6 +238,7 @@ restore_all() {
   echo "  battery: $(cap)% charge_counter=$(charge)"
 }
 trap 'restore_all; echo "################ DONE $(date "+%F %T") — reopen Termux, restart sshd and the tunnel ################"' EXIT
+trap 'trap - EXIT; restore_all; echo "################ DONE $(date "+%F %T") — signalled, restored; reopen Termux, restart sshd and the tunnel ################"; exit 0' TERM INT
 
 # ---------------------------------------------------------------- setup
 echo "################ IDLE EXPERIMENT — variant=$VARIANT window=${WIN}s checkpoint=${CHK}s  $(date '+%F %T') ################"
@@ -203,6 +248,16 @@ case "$(charging)" in
   *) echo "!! The phone is on the charger ($(charging)). Charging current swamps the drain"
      echo "   this run is trying to measure. Unplug it and start again. Stopping."
      exit 1 ;;
+esac
+
+# The airplane variant drops the radios a few minutes from now - before the
+# harness's own start-of-window message can get out. The owner asked to be warned
+# on the screen before anything that needs the phone left alone, and a calls/SMS
+# pause is exactly that: warn at the commitment point.
+case "$VARIANT" in
+  airplane)
+    notify "Airplane diagnostic starting" \
+      "In about 2 minutes the radios go OFF for a power-floor measurement. Calls and SMS will pause until the morning. Put the phone down - it manages itself." ;;
 esac
 echo "spsm active before: $( [ -f $STATE/active ] && echo yes || echo no )  (config: $(sed -n 's/^knob\.//p' $CFG 2>/dev/null | tr '\n' ' '))"
 
@@ -214,6 +269,7 @@ echo "spsm active before: $( [ -f $STATE/active ] && echo yes || echo no )  (con
   case "$(scan_state)" in *"always available"*) echo "ORIG_SCAN=1" ;; *) echo "ORIG_SCAN=0" ;; esac
   echo "ORIG_GMS_EXEMPT=$(dumpsys deviceidle whitelist 2>/dev/null | grep -c 'com.google.android.gms')"
   echo "ORIG_SPSM=$( [ -f $STATE/active ] && echo on || echo off )"
+  echo "ORIG_APLANE=$(settings get global airplane_mode_on 2>/dev/null)"
 } > "$ORIG_LOCK" 2>/dev/null
 cat "$ORIG_LOCK"
 
@@ -254,6 +310,17 @@ case "$VARIANT" in
     settings put global wifi_on 1 >/dev/null 2>&1; svc wifi enable >/dev/null 2>&1
     sleep 8; cmd wifi set-scan-always-available enabled >/dev/null 2>&1
     echo "  SPSM deactivated; radio on; background scanning allowed (stock)"
+    ;;
+  airplane)
+    if aplane_on; then
+      echo "  airplane mode: ON (read-back $(aplane_state))"
+    else
+      echo "  !! airplane mode did not engage (read-back $(aplane_state)) - this run would measure the wrong thing"
+    fi
+    sh "$ENGINE" activate >/dev/null 2>&1
+    rc=$?
+    echo "  SPSM activate rc=$rc  active marker: $( [ -f $STATE/active ] && echo yes || echo no )"
+    echo "  knobs applied: $(tail -6 /data/adb/spsm/spsm.log 2>/dev/null | tr '\n' '|')"
     ;;
   shipped)
     sh "$ENGINE" activate >/dev/null 2>&1
@@ -302,9 +369,17 @@ snap start
 wakeups start
 chk start
 EXTRA_WIFI=$(wifi_state)
+APL0=$(aplane_state)
 echo "  -- clock starts now; nothing but the wait runs until it stops --"
-notify "Measuring battery for $((WIN / 3600))h" \
-  "SPSM is measuring standby power until $(date -d "@$(( $(date +%s) + WIN ))" '+%H:%M' 2>/dev/null || echo 'the end of the window'). Please do not use the phone, and leave the screen off - any interaction becomes part of the measurement. You will get a second message when it is finished."
+_ENDHM=$(date -d "@$(( $(date +%s) + WIN ))" '+%H:%M' 2>/dev/null || echo 'the end of the window')
+case "$VARIANT" in
+  airplane)
+    notify "Measuring battery for $((WIN / 3600))h - calls paused" \
+      "Airplane diagnostic: calls and SMS are PAUSED until ${_ENDHM} while the radios are off, measuring the platform's power floor. Please do not use the phone and leave the screen off. A second message comes when it is finished." ;;
+  *)
+    notify "Measuring battery for $((WIN / 3600))h" \
+      "SPSM is measuring standby power until ${_ENDHM}. Please do not use the phone, and leave the screen off - any interaction becomes part of the measurement. You will get a second message when it is finished." ;;
+esac
 SUS0=$(sus success); FAIL0=$(sus fail); CH0=$(charge); BOOT0=$(now); T0=$(date +%s)
 IRQ0=$(irqs)
 
@@ -334,7 +409,7 @@ echo "  -- clock stopped at $(date '+%T'), measured $((BOOT1 - BOOT0))s --"
 snap end
 wakeups end
 chk end
-END_WIFI=$(wifi_state); END_SCREEN=$(screen_state_fresh)
+END_WIFI=$(wifi_state); END_SCREEN=$(screen_state_fresh); APL1=$(aplane_state)
 
 # ---------------------------------------------------------------- report
 echo
@@ -349,6 +424,7 @@ echo "  drained_uAh  $((CH0 - CH1))   of 60000 uAh per 1%"
 echo "  capacity     $(cap)%  uA now=$(ua)"
 echo "  screen       start=[$EXTRA_SCREEN] end=[$END_SCREEN]"
 echo "  wifi         start=[$EXTRA_WIFI] end=[$END_WIFI]"
+echo "  airplane     start=[$APL0] end=[$APL1]"
 echo "  -- interrupt deltas --"
 awk -v a="$IRQ0" -v b="$IRQ1" 'BEGIN{
   n=split(a,A," "); split(b,B," ");
@@ -362,11 +438,21 @@ awk -v d=$((BOOT1 - BOOT0)) -v s=$((SUS1 - SUS0)) -v f=$((FAIL1 - FAIL0)) 'BEGIN
 if [ -n "$EARLY" ]; then echo "  !! window ended EARLY: $EARLY"; fi
 echo "  -- validity --"
 case "$END_SCREEN" in Asleep|Dozing) _sc=ok ;; *) _sc="BAD:screen was [$_END_SCREEN]" ;; esac
-case "$END_WIFI" in *enabled) _wf=ok ;; *) _wf="BAD:[$END_WIFI]" ;; esac
-echo "    screen at end: $_sc"
-echo "    wifi at end:   $_wf"
-echo "    wake locks:    size=$(wlock_state)"
-echo "    a window is only trustworthy if all three say ok"
+_ap="n/a"
+case "$VARIANT" in
+  airplane)
+    case "$APL1" in 1) _ap=ok ;; *) _ap="BAD:airplane read-back [$_APL1]" ;; esac
+    case "$END_WIFI" in *enabled*) _wf="BAD:radio was [$_END_WIFI] during an airplane run" ;; *) _wf=ok ;; esac
+    ;;
+  *)
+    case "$END_WIFI" in *enabled) _wf=ok ;; *) _wf="BAD:[$END_WIFI]" ;; esac
+    ;;
+esac
+echo "    screen at end:   $_sc"
+echo "    wifi at end:     $_wf"
+echo "    airplane at end: $_ap"
+echo "    wake locks:      size=$(wlock_state)"
+echo "    a window is only trustworthy if every applicable line says ok"
 
 echo
 echo "===== BATTERYSTATS HISTORY (for offline analysis) ====="
