@@ -554,6 +554,16 @@ do_deactivate() {
     rm -f "$STATE/blocked_by_us.tsv"
     log "exit: released every suspended app ($_freed package(s))"
   fi
+  # ...and the half of it that `pm unsuspend` cannot undo. Outside the guard on
+  # purpose: the two records are independent - the sweep stops packages the
+  # suspend record never names - and a release that only ran when a suspension
+  # was found would leave exactly those behind. This is the path the exit
+  # actually takes (the deep phase's own restore only runs if the screen came
+  # back on first), and it is the one that matters: a STOPPED app is not woken
+  # by a push, so leaving these behind silences messaging with no visible cause.
+  # Measured on the owner's phone: 173 packages, WhatsApp among them, still
+  # stopped with the mode off.
+  command -v release_force_stopped >/dev/null 2>&1 && release_force_stopped
 
   # The one-minute core timer is disarmed with the session, and the sweep
   # remembers nothing into the next one.
@@ -978,6 +988,10 @@ do_six_restore() {
   cat "$SPSM_DIR/whitelist.txt" 2>/dev/null "$STATE/blocked_by_us.tsv" 2>/dev/null \
     | pm_batch unsuspend >/dev/null 2>&1
   rm -f "$STATE/blocked_by_us.tsv" 2>/dev/null
+  # Recovery has to free the force-stops too: a stopped app cannot be woken by
+  # a push, so a crash that left them behind would leave the phone silently
+  # unable to receive messages until each app was opened by hand.
+  command -v release_force_stopped >/dev/null 2>&1 && release_force_stopped
   # The one honest caveat: with the mode still on, its next transition will
   # re-apply its own choices. Recovery still works - it must - but the log
   # says what comes next instead of leaving a mystery.

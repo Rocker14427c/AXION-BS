@@ -226,6 +226,16 @@ case "$CMD" in
           *)        cat "$S/pkgs3"    2>/dev/null | sed 's/^/package:/' ;;
         esac
         ;;
+      unstop)
+        # pm unstop [--user N] <pkg> - the inverse of a force-stop, and the one
+        # release the module cannot skip: a stopped app is not woken by a push,
+        # so leaving it stopped is what silences a messaging app after an exit.
+        # This phone's `pm unstop` takes exactly one package per call.
+        shift
+        [ "$1" = "--user" ] && shift 2
+        printf '%s\n' "$1" >> "$S/unstopped"
+        sed -i "/^$1$/d" "$S/force_stopped" 2>/dev/null
+        ;;
       path) echo "package:/data/app/$2/base.apk" ;;
       enable|disable)
         # pm enable|disable [--user N] <target>

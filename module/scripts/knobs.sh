@@ -1451,6 +1451,11 @@ snapshot_block_other_apps() {
 # nothing else. Written by the apply, read by the restore, and removed by the
 # restore.
 BLOCKED_BY_US="$STATE/blocked_by_us.tsv"
+# What force-stop took away, as opposed to what suspend froze. The two need
+# separate records because they need separate inverses: `pm unsuspend` releases
+# a freeze, `pm unstop` releases a stop, and only the second one survives a
+# reboot or an exit on its own.
+STOPPED_BY_US="$STATE/stopped_by_us.tsv"
 
 # Suspend every app that is not in the six slots.
 #
@@ -1551,6 +1556,9 @@ apply_block_other_apps() {
     esac
     _bu_seen="$_bu_seen$_p "
     printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
+    # The same set, recorded a second time for the release that suspend's
+    # inverse cannot perform. $_r.s is precisely what was force-stopped above.
+    printf '%s\n' "$_p" >> "$STOPPED_BY_US"
   done < "$_r.s"
   rm -f "$_r" "$_r.s"
   # Attribution, only when this knob was actually slow. The four numbers are
@@ -1560,6 +1568,33 @@ apply_block_other_apps() {
   if [ "$((_bo_t5 - _bo_t0))" -ge 2 ] 2>/dev/null; then
     log "  block_other_apps phases: suspended-read=$((_bo_t1 - _bo_t0))s candidates=$((_bo_t2 - _bo_t1))s pm-suspend=$((_bo_t3 - _bo_t2))s force-stop=$((_bo_t4 - _bo_t3))s record=$((_bo_t5 - _bo_t4))s"
   fi
+}
+
+# ======================================== putting back what force-stop took
+#
+# `pm suspend` freezes an app, and every path in this file releases that with
+# `pm unsuspend`. Force-stop is NOT the same thing, and the difference is the
+# bug the owner's phone showed after one night of this mode: a stopped package
+# is not merely frozen - the phone will not start it again on a push, an alarm
+# or a broadcast; only a person opening it clears the state. So a messaging app
+# this mode stopped, stops messaging, and releasing the suspensions on exit does
+# not bring it back. Measured on the owner's phone with the mode off: 173
+# packages left stopped, WhatsApp and the mail client among them, nothing on
+# screen to explain why messages had gone quiet. `pm` has the inverse of
+# force-stop - `pm unstop` - and this is where it is finally called. One call
+# per package, because this phone's `pm unstop` takes exactly one.
+release_force_stopped() {
+  [ -f "$STOPPED_BY_US" ] || return 0
+  _n=0
+  while read -r _p; do
+    [ -n "$_p" ] || continue
+    su 2000 -c "pm unstop --user 0 $_p" >/dev/null 2>&1 \
+      || pm unstop --user 0 "$_p" >/dev/null 2>&1
+    _n=$((_n + 1))
+  done < "$STOPPED_BY_US"
+  rm -f "$STOPPED_BY_US" 2>/dev/null
+  [ "$_n" -gt 0 ] && log "released $_n force-stopped package(s) - stopped apps can start again"
+  return 0
 }
 
 restore_block_other_apps() {
@@ -1573,6 +1608,8 @@ restore_block_other_apps() {
   # pm call per forty, instead of 186 forks on the way out.
   pm_batch unsuspend < "$BLOCKED_BY_US" >/dev/null 2>&1
   rm -f "$BLOCKED_BY_US"
+  # And the half of it that `pm unsuspend` cannot undo.
+  release_force_stopped
 }
 
 # What the deep phase actually did, written down at the moment it happens.

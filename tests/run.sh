@@ -348,7 +348,8 @@ dump_state() {
   find "$WORK/stub" -type f \
        -not -name calls -not -name force_stopped -not -name task_in_front \
        -not -name task_started -not -name tasks_removed \
-       -not -name uid_idle -not -name kill_all | sort | while read -r f; do
+       -not -name uid_idle -not -name kill_all -not -name unstopped \
+       | sort | while read -r f; do
     case "${f#$WORK/stub/}" in
       # The module's own home screen is disabled again on the way out: that IS
       # its shipping state (the manifest ships it disabled), so a comparison
@@ -4169,6 +4170,19 @@ check "a blocked app is force-stopped exactly once per session (${n:-0})" $?
 grep -q "background sweep (mode on): strays cleared" "$WORK/spsm/spsm.log"
 check "and the sweep that follows is already the light one" $?
 run_engine deactivate >/dev/null 2>&1
+# The release that suspend's inverse cannot perform. A suspended app is woken by
+# a push the moment it is unsuspended; a STOPPED app is not - the phone will not
+# start it again until somebody opens it. The owner's phone showed the cost with
+# the mode off: 173 packages still stopped, WhatsApp among them, its messages
+# gone quiet, and nothing on screen to explain it.
+# The launcher is excluded on purpose: home_swap stops it and starts the mode's
+# own home straight back, so it is stopped-and-running rather than left stopped.
+_s=$(sort -u "$WORK/stub/force_stopped" 2>/dev/null | grep -v "^com.android.launcher3$" | grep -c .)
+_u=$(sort -u "$WORK/stub/unstopped" 2>/dev/null | grep -c .)
+[ "${_s:-0}" = 0 ] && [ "${_u:-0}" -gt 0 ]
+check "and every app it force-stopped is un-stopped again on the way out (left stopped ${_s:-0}, released ${_u:-0})" $?
+[ ! -f "$WORK/spsm/state/stopped_by_us.tsv" ]
+check "and the force-stop record is cleared, so no later exit frees a stranger's stop" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
