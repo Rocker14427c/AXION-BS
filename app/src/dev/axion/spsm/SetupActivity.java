@@ -45,7 +45,6 @@ public class SetupActivity extends Activity {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
         });
-        findViewById(R.id.btn_precision).setOnClickListener(v -> togglePrecision());
         if (getIntent() != null && getIntent().getBooleanExtra("toggle", false)) {
             getIntent().removeExtra("toggle");
             onToggle();
@@ -65,7 +64,6 @@ public class SetupActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        refreshPrecision();
         // The slots are not what this screen is FOR - the switch is. A view
         // problem in a row of icons must never be the reason the app cannot be
         // opened, which is exactly what happened once: a slot held as the wrong
@@ -236,31 +234,5 @@ public class SetupActivity extends Activity {
                 refresh();
             });
         }).start();
-    }
-
-    /** The precision readout: one tap on, one tap off, the label says the state. */
-    private void togglePrecision() {
-        try {
-            if (PrecisionService.enabled(this)) {
-                PrecisionService.stop(this);
-                Toast.makeText(this, R.string.precision_off_toast, Toast.LENGTH_SHORT).show();
-            } else {
-                PrecisionService.start(this);
-                Toast.makeText(this, R.string.precision_on_toast, Toast.LENGTH_SHORT).show();
-            }
-        } catch (Throwable ignored) {
-        }
-        refreshPrecision();
-    }
-
-    private void refreshPrecision() {
-        try {
-            Button b = findViewById(R.id.btn_precision);
-            if (b != null) {
-                b.setText(PrecisionService.enabled(this)
-                        ? R.string.precision_on : R.string.precision_off);
-            }
-        } catch (Throwable ignored) {
-        }
     }
 }

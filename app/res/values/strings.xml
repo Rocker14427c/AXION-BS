@@ -32,10 +32,6 @@
     <string name="done_on">Super power saving mode is on</string>
     <string name="done_off">Super power saving mode is off</string>
     <string name="search">Search by name or package</string>
-    <string name="precision_on">Precision battery: on (31.63 in the status bar)</string>
-    <string name="precision_off">Precision battery: off</string>
-    <string name="precision_on_toast">Precision battery is on - the number lives in the status bar</string>
-    <string name="precision_off_toast">Precision battery is off</string>
     <string name="knobs_title">Options</string>
     <string name="knobs_subtitle">Choose what the mode does. Anything you switch off is left exactly as it is.</string>
     <string name="knobs_loading">Loading options…</string>

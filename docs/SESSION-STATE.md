@@ -1,12 +1,5 @@
 # Session state - read this first
 
-Precision battery (v3.8.3+ estimator, deployed as AxionSPSM-393.apk):
-integrator at 60000 uAh/% + FGADC ui_soc deadzone leash; diagnostic protocol =
-tools script /data/local/tmp/diag10.sh (11 min, 5 s samples) analyzed against
-slope/reversal/step/gap criteria - ALWAYS run it after touching PrecisionService.
-Remote scripts survive connection loss under nohup; waiters do not - reconnect
-with a FRESH gist endpoint and poll for DIAGDONE.
-
 Toolchain that must be rebuilt after deep rewinds: `bash tools/ensure-jdk.sh`
 (extracts /home/user/jdk4py.whl into sdk/jdk - snapshots cap near 128 MB and eat
 the extracted tree), then `bash build.sh --bootstrap` (jars + toolchain.env),
@@ -41,7 +34,7 @@ Consequences to design around:
 | repo | `Rewrite` at `416c910` (v3.8.2 zip committed on top of `7e88cb6`) |
 | GitHub release | **v3.8.2** published; zip asset rebuilt with the drop_line fix (asset replaced) |
 | APK | `module/app/AxionSPSM.apk` = v3.8.2 (73), 105 355 bytes, md5 `3deaffa2d0a568d8a3219c1e4af00fd5` |
-| phone | scripts **v3.8.2 + drop_line fix** (frozen until after tonight run), app **v3.8.3 (74)** with precision battery live; keep-list empty |
+| phone | scripts **v3.8.2 + drop_line fix** (frozen until after tonight run), app **v3.8.4 (75)** precision feature REMOVED (owner request), SPSM only; keep-list empty |
 | suites | 674/0 main, 252/0 codec, 22/0 install (single-entry remove now asserted) |
 | connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly; NEVER retry a dead host - re-fetch first |
 
