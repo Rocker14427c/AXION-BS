@@ -27,11 +27,11 @@ Consequences to design around:
 | thing | state |
 |---|---|
 | repo | `Rewrite` at `416c910` (v3.8.2 zip committed on top of `7e88cb6`) |
-| GitHub release | **v3.8.2** published with `Axion-SPSM-v3.8.2-RMX3430.zip` attached |
+| GitHub release | **v3.8.2** published; zip asset rebuilt with the drop_line fix (asset replaced) |
 | APK | `module/app/AxionSPSM.apk` = v3.8.2 (73), 105 355 bytes, md5 `3deaffa2d0a568d8a3219c1e4af00fd5` |
-| phone | still running **v3.8.1**; v3.8.2 not yet installed |
-| suites | 672/0 main, 252/0 codec, 22/0 install, 5/0 daemon |
-| tailscale | daemon up, **waiting for the owner's approval click** |
+| phone | **v3.8.2 + drop_line fix is installed** (running + both module APK copies + version stamp); keep-list empty, owner picks his apps in the app |
+| suites | 674/0 main, 252/0 codec, 22/0 install (single-entry remove now asserted) |
+| connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly; NEVER retry a dead host - re-fetch first |
 
 ## Connecting to the phone
 
@@ -45,8 +45,9 @@ Consequences to design around:
 4. `status` → the phone appears as a peer. Then SSH through the userspace stack:
    `ssh -o ProxyCommand="/home/user/ts/tailscale --socket=/home/user/ts/state/tailscaled.sock nc %h %p" -i ~/.ssh/arena_agent2 u0_a252@<phone>`
 
-Pinggy still works as a fallback (60-minute sessions, new hostname each time): `sshd` in Termux,
-then `ssh -p 443 -R0:localhost:8022 tcp@a.pinggy.io`.
+The owner publishes the CURRENT endpoint at the gist URL above (one `tcp://HOST:PORT`).
+After ANY ssh failure: re-fetch the gist, parse the new host/port, reconnect with `~/.ssh/arena_agent2`
+as `u0_a252` on that host/port.
 
 ## Installing v3.8.2 on the phone
 
