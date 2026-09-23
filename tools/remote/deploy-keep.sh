@@ -49,6 +49,29 @@ else
   FAIL=1
 fi
 
+echo "== 3b. the APKs the NEXT BOOT installs from =="
+# service.sh calls install-apk.sh on every boot, and install-apk.sh installs from
+# the MODULE directory - so updating only the installed app looks perfect until a
+# reboot quietly puts the old one back. That is exactly what happened on the
+# owner's phone: the app reported 3.8.2 while both module copies still held 3.8.1.
+if [ -d "$MOD" ]; then
+  for dst in "$MOD/system/app/AxionSPSM/AxionSPSM.apk" "$MOD/app/AxionSPSM.apk"; do
+    _dir=${dst%/*}
+    [ -d "$_dir" ] || continue
+    cp -f "$P/AxionSPSM.apk" "$dst" || FAIL=1
+    SAY "$dst"
+    SAY "    md5 $(md5sum "$dst" | cut -c1-16)"
+  done
+fi
+
+echo "== 3c. the version stamp the module reports =="
+# Written by the installer at boot; a hand deployment has to write it too, or the
+# module reports the previous version while running the new one.
+if [ -f "$P/module.prop" ]; then
+  _v=$(sed -n 's/^version=//p' "$P/module.prop" | head -1)
+  [ -n "$_v" ] && printf '%s\n' "$_v" > "$RUN/state/script_version" && SAY "stamp -> $_v"
+fi
+
 echo "== 4. the keep-awake list (never overwritten if it exists) =="
 if [ -f "$RUN/keep_awake.txt" ]; then
   SAY "already there, $(grep -c . "$RUN/keep_awake.txt") app(s) - left alone"

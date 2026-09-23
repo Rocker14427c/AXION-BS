@@ -4212,6 +4212,23 @@ if grep -qx "com.spotify.music" "$WORK/spsm/keep_awake.txt" 2>/dev/null; then
 else
   ok "keep remove lets an app be blocked again"
 fi
+# The single-entry case, which is not a corner: a phone whose owner has kept ONE
+# app is the ordinary state of this file, and it is exactly the case that
+# `grep -v ... && mv` gets wrong - grep exits 1 when it filters every line out, so
+# the mv never runs and the removal silently does nothing. That is how it behaved
+# on the owner's phone, with the suite green, because the case above removes from a
+# two-entry list and only the one-entry list fails.
+printf 'com.example.only\n' > "$WORK/spsm/keep_awake.txt"
+run_engine keep remove com.example.only >/dev/null 2>&1
+[ ! -s "$WORK/spsm/keep_awake.txt" ]
+check "removing the ONLY entry leaves an empty list, not a stale one" $?
+printf 'com.example.only\n' > "$WORK/spsm/state/blocked_by_us.tsv"
+printf 'com.example.only\n' > "$WORK/spsm/state/stopped_by_us.tsv"
+run_engine keep add com.example.only >/dev/null 2>&1
+[ ! -s "$WORK/spsm/state/blocked_by_us.tsv" ]
+check "and keeping the only frozen app clears the suspend record" $?
+[ ! -s "$WORK/spsm/state/stopped_by_us.tsv" ]
+check "and clears the force-stop record too" $?
 # Adding an app takes effect at once, not at the next screen-off: if this session
 # is why it is quiet, it is released there and then.
 cat > "$WORK/spsm/state/blocked_by_us.tsv" <<'EOF'

@@ -952,13 +952,11 @@ do_keep() {
         if [ -f "$STATE/active" ]; then
           if [ -f "$STATE/blocked_by_us.tsv" ] && grep -qxF "$_p" "$STATE/blocked_by_us.tsv" 2>/dev/null; then
             unsuspend_app "$_p" && log "keep $_p: unsuspended"
-            grep -vxF "$_p" "$STATE/blocked_by_us.tsv" > "$STATE/blocked_by_us.tsv.tmp" 2>/dev/null \
-              && mv -f "$STATE/blocked_by_us.tsv.tmp" "$STATE/blocked_by_us.tsv" 2>/dev/null
+            drop_line "$STATE/blocked_by_us.tsv" "$_p"
           fi
           if [ -f "$STOPPED_BY_US" ] && grep -qxF "$_p" "$STOPPED_BY_US" 2>/dev/null; then
             pm unstop --user 0 "$_p" >/dev/null 2>&1
-            grep -vxF "$_p" "$STOPPED_BY_US" > "$STOPPED_BY_US.tmp" 2>/dev/null \
-              && mv -f "$STOPPED_BY_US.tmp" "$STOPPED_BY_US" 2>/dev/null
+            drop_line "$STOPPED_BY_US" "$_p"
             log "keep $_p: un-stopped, so it can receive pushes again"
           fi
         fi
@@ -969,8 +967,7 @@ do_keep() {
     remove|del|rm)
       for _p in "$@"; do
         [ -n "$_p" ] || continue
-        grep -vxF "$_p" "$KEEP_AWAKE" > "$KEEP_AWAKE.tmp" 2>/dev/null \
-          && mv -f "$KEEP_AWAKE.tmp" "$KEEP_AWAKE" 2>/dev/null
+        drop_line "$KEEP_AWAKE" "$_p"
         echo "$_p: free to be blocked again at the next screen-off"
       done
       ;;
@@ -999,8 +996,7 @@ do_allow() {
   for _p in $_list; do
     if [ -f "$STATE/blocked_by_us.tsv" ] && grep -qxF "$_p" "$STATE/blocked_by_us.tsv"; then
       _freed=$((_freed + 1))
-      grep -vxF "$_p" "$STATE/blocked_by_us.tsv" > "$STATE/blocked_by_us.tsv.tmp" 2>/dev/null \
-        && mv -f "$STATE/blocked_by_us.tsv.tmp" "$STATE/blocked_by_us.tsv" 2>/dev/null
+      drop_line "$STATE/blocked_by_us.tsv" "$_p"
       if unsuspend_app "$_p"; then
         log "allow $_p: it is in the six slots, so it is free"
       else

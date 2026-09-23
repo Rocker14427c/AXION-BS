@@ -57,6 +57,29 @@ spsm_version() {
 # is exactly "this phone is running stale code".
 scripts_stamp() { cat "$SCRIPT_VERSION_STAMP" 2>/dev/null; }
 
+# Drop one exact line from a file, atomically.
+#
+# The obvious spelling is wrong, and the owner's phone proved it: `grep -vxF x f > t
+# && mv t f` does nothing when x is the ONLY line in f, because grep exits 1 when
+# it filters every line out - so the removal that mattered most silently did
+# nothing. A one-entry list is not an edge case here; it is the normal state of
+# every one of these files on a real phone. Only a real grep error (2) is a reason
+# to leave the file alone.
+drop_line() { # drop_line <file> <exact-line>
+  _dl_f=$1; _dl_v=$2
+  [ -f "$_dl_f" ] || return 0
+  _dl_t="$_dl_f.dl.$$"
+  grep -vxF "$_dl_v" "$_dl_f" > "$_dl_t" 2>/dev/null
+  _dl_rc=$?
+  if [ "$_dl_rc" -le 1 ]; then
+    mv -f "$_dl_t" "$_dl_f" 2>/dev/null
+  else
+    rm -f "$_dl_t" 2>/dev/null
+    return 1
+  fi
+  return 0
+}
+
 # The code's own version, baked in at build time by build.sh. Written from
 # module.prop so there is one authority; falls back to the module directory.
 SPSM_CODE_VERSION=$(scripts_stamp)
