@@ -127,12 +127,35 @@ wakeups() { # wakeups <tag> -- the per-reason wakeup counters, for the diff
   echo "  alarm dump saved ($(wc -l < $D/ie-alarm-$1.txt 2>/dev/null) lines)"
 }
 
+# ---------------------------------------------------------------- telling the owner
+#
+# The owner uses this phone; the one thing a long unattended window must not do is
+# leave them wondering whether it is safe to pick it up. He asked for a warning on
+# the screen itself, so this posts one: what is happening, how long, and that he
+# should leave it alone. Two notifications per run, not per checkpoint - a message
+# every half hour would be its own wakeup source.
+#
+# Tried in order, because none of these is guaranteed on every ROM:
+#   1. `cmd notification post` - AOSP's own tool, present on Android 11+
+#   2. termux-notification      - needs the Termux:API add-on
+#   3. a log line               - at least the record is complete
+notify() { # notify <title> <text>
+  _t=$1; _b=$2
+  timeout 20 cmd notification post -S bigtext -t "$_t" spsm "$_b" >/dev/null 2>&1 && return 0
+  command -v termux-notification >/dev/null 2>&1 \
+    && timeout 20 termux-notification --title "$_t" --content "$_b" --id 9911 >/dev/null 2>&1 && return 0
+  log_line="  (no on-screen notification available; saying it in this log instead)"
+  printf '%s\n' "$log_line"
+  return 0
+}
+
 # ---------------------------------------------------------------- restore
 ORIG_LOCK=/data/local/tmp/ie-orig.env
 [ -f "$ORIG_LOCK" ] && . "$ORIG_LOCK"
 restore_all() {
   echo
   echo "################ RESTORING ################"
+  notify "Measurement finished" "The phone is yours again - everything has been put back. Results are in /data/local/tmp/ie.out"
   input keyevent 26 2>/dev/null       # bring the screen back
   # Radio first, then scanning: set-scan-always-available silently does nothing
   # while the radio is down, which is how wifiexp left scanning switched off.
@@ -280,6 +303,8 @@ wakeups start
 chk start
 EXTRA_WIFI=$(wifi_state)
 echo "  -- clock starts now; nothing but the wait runs until it stops --"
+notify "Measuring battery for $((WIN / 3600))h" \
+  "SPSM is measuring standby power until $(date -d "@$(( $(date +%s) + WIN ))" '+%H:%M' 2>/dev/null || echo 'the end of the window'). Please do not use the phone, and leave the screen off - any interaction becomes part of the measurement. You will get a second message when it is finished."
 SUS0=$(sus success); FAIL0=$(sus fail); CH0=$(charge); BOOT0=$(now); T0=$(date +%s)
 IRQ0=$(irqs)
 
