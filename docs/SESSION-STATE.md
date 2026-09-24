@@ -1,5 +1,11 @@
 # Session state - read this first
 
+NIGHT-2 (airplane) DONE and DECISIVE: radios-off drain = radios-on drain =
+3.00%/6.8h ~26 mA. The floor is the PLATFORM, not the radios. 0-1% is physics-
+impossible until the floor drops 3x. Focus = platform floor (IPI0, alarmtimer,
+suspend residency via ie-history rails) + SPSM. See docs/POWER-OVERNIGHT-2.md.
+Wi-Fi-off-vs-on experiment cancelled by data.
+
 Toolchain that must be rebuilt after deep rewinds: `bash tools/ensure-jdk.sh`
 (extracts /home/user/jdk4py.whl into sdk/jdk - snapshots cap near 128 MB and eat
 the extracted tree), then `bash build.sh --bootstrap` (jars + toolchain.env),
