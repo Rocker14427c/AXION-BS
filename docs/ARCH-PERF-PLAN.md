@@ -131,3 +131,76 @@ benchmark before/after (activate/deactivate/deep/recents latency, fork counts, C
 wakeup rate, RAM PSS); keep only measured wins; never break calls/SMS; no blind CPU
 restrictions; preserve every existing feature, workaround and the journal's guarantees
 (drift=0). Suite (966 checks) green at every step; new behaviour gets new checks.
+
+## 6. Census results and what was built (2026-09-25, Rewrite)
+
+### 6.1 The census verdict (shimmed full daily round, 6,354 calls / 488 s)
+
+The owner ran the phone normally with a 15-second screen timeout (~12 screen
+cycles in the window, plus active use). Logical call counts (the shims sat on
+am/pm/cmd/settings/dumpsys; note `am`/`pm` on this ROM are shell wrappers that
+exec `cmd activity`/`cmd package`, so a shimmed `am` call logs twice - the
+numbers below are de-duplicated to logical calls):
+
+| call | count | avg under load |
+|---|---|---|
+| get-standby-bucket (am→cmd activity) | 1,113 | 84 ms cmd / 300-480 ms via am-fan |
+| appops get | 1,104 | 80 ms |
+| appops set | 1,083 | 69 ms |
+| set-standby-bucket | 552 | 59 ms |
+| force-stop | 188 | 82 ms |
+| settings get/put (JVM `settings`) | 87 | 82-140 ms (cmd settings: 28-36 ms) |
+| pm/cmd package list | 26 | 135 ms |
+| dumpsys deviceidle | 18 | 56 ms |
+
+Reading: ~48 app_restrict+rom_bg_off passes in eight minutes (DEEP_ONCE resets
+on every wake, and every 15-second screen-off is a new idle period), ~100
+binder calls a pass - the churn, not any single call, is the cost. am+cmd
+together burned ~750 CPU-seconds in a 488 s window. Steady state (screen on,
+mode on) is clean: app polling is negligible. The exit's unstop fan is 187
+`pm unstop` JVMs under `su 2000 -c` (invisible to the shims - KernelSU resets
+PATH - but counted by /proc/stat). No double force-stop bug: the apparent
+am+cmd duplication was the wrapper exec'ing cmd, one logical call.
+
+### 6.2 Built (in order, each with fallbacks and new checks)
+
+1. **Deep grace** (`deep_grace_secs`, default 75, 0 = the v3.9.0 behavior).
+   The screen-off transition applies only the cheap deep knobs; the daemon's
+   timer - the core-sleep mechanism, mirrored exactly - fires `engine
+   deep-restrict` once the screen has STAYED off that long. The command
+   re-checks mode/screen/journal (`j_state`), the wake clears the marker.
+   Kills ~90% of the passes above: a 15-second screen-off never pays for them.
+2. **Native paths first** for every service verb: `cmd settings` (a third of
+   the JVM wrapper's cost under load), `cmd activity`, `cmd package` (skipping
+   the am/pm wrapper sh+exec), each with the old command as the fallback -
+   lib.sh `sget/sput/sdel`, `am_read/am_write/pm_read/pm_run`, pm_batch and
+   the suspend/unstop chains keep their su-2000 identity order.
+3. **spsm-tool.jar** (4a, scope: `shellbatch`): one JVM (app_process, uid
+   2000, dex jar in module/bin, published by publish_native with a
+   run-it-and-see proof) that hands each batch line to the service's own
+   shellCommand entry point in-process - the platform's bytes, permissions
+   and result codes, minus fork+exec+runtime per call. Framed protocol
+   (`### idx rc` / output / `### END`), rc via ResultReceiver. Wired into
+   apply/restore of app_restrict + rom_bg_off (reads batch, guarded writes
+   batch) and the exit's unstop fan (187 calls, one JVM). Contract: the fan
+   stays byte-for-byte the reference - the suite proves the tool's record
+   equals the fan's, and any short/dead answer falls back to the fan over
+   idempotent writes. Settings verb deliberately NOT in v1: `cmd settings`
+   native fan already beats one JVM start for the 2-16 target knobs.
+4. 4b fork hygiene: `now_epoch` was already forkless on the device (mksh
+   `%(%s)T`; `date` only in the rig's fake clocks) - confirmed, nothing to do
+   beyond the above.
+
+Suite: run.sh 713 checks / 93 sections (92: grace, 93: tool byte-equivalence
+and fallbacks) + daemon suite, green. Device numbers (activate/deactivate/
+deep-cycle walls, CPU-s, fork counts, before/after) are recorded in the
+release notes when the on-device benchmark round completes.
+
+### 6.3 Still open
+
+- 4d gestures: Plan D (native evdev daemon: swipe-up → HOME keyevent,
+  hold → SpsmRecentsActivity, engine nav conditional on cfg nav_mode +
+  daemon alive) - census item 4 facts are in section 1 of the journal;
+  build after the perf round lands on the device.
+- Post-tool census: decide whether any remaining pass cost justifies more
+  batching (recents list verb, settings verb) - only if measured.

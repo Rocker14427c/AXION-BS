@@ -139,6 +139,44 @@ EOF
   chmod +x "$BIN/date"
   echo 0 > "$WORK/clock_offset"
 
+  # The rig's stand-in for the batch tool (module/bin/spsm-tool.jar). The real
+  # tool is a JVM handing each batch line to the service's own shellCommand
+  # entry point; the fake hands it to the stub that models that service, and
+  # prints the SAME frames: ### index rc / the output / ### END. What the
+  # parsers see is byte-identical, so the tests test the protocol, not the
+  # runtime. Sections opt in with SPSM_TOOL_CMD="$BIN/faketool".
+  cat > "$BIN/faketool" <<EOF
+#!/bin/sh
+# fake spsm-tool: shellbatch [file]
+_verb=\$1
+[ "\$_verb" = shellbatch ] || { echo "usage: faketool shellbatch [file]" >&2; exit 2; }
+_src=\${2:-/dev/stdin}
+_i=0
+_TAB=\$(printf '\t')
+while IFS="\$_TAB" read -r _svc _rest || [ -n "\$_svc" ]; do
+  [ -n "\$_svc" ] || continue
+  printf '%s|%s\n' "\$_svc" "\$_rest" >> "$WORK/faketool.log"
+  set -- \$(printf '%s' "\$_rest" | tr '\t' ' ')
+  case \$_svc in
+    activity) _c=am ;;
+    package)  _c=pm ;;
+    settings) _c=settings ;;
+    *)        _c=cmd ;;
+  esac
+  if [ "\$_c" = cmd ]; then
+    _out=\$(CMD_OVERRIDE=cmd sh "$REPO/tests/stub.sh" "\$_svc" "\$@" 2>&1); _rc=\$?
+  else
+    _out=\$(CMD_OVERRIDE=\$_c sh "$REPO/tests/stub.sh" "\$@" 2>&1); _rc=\$?
+  fi
+  printf '###\t%d\t%d\n' "\$_i" "\$_rc"
+  [ -n "\$_out" ] && printf '%s\n' "\$_out"
+  printf '###\tEND\n'
+  _i=\$((_i + 1))
+done < "\$_src"
+exit 0
+EOF
+  chmod +x "$BIN/faketool"
+
   # stub.sh reads the command name from $CMD_OVERRIDE when present
   sed -i 's|^CMD=$(basename "$0")|CMD=${CMD_OVERRIDE:-$(basename "$0")}|' "$REPO/tests/stub.sh"
 }
@@ -4452,6 +4490,95 @@ run_engine deactivate >/dev/null 2>&1
 run_engine verify > "$WORK/out.v92" 2>&1
 grep -q 'drift=0' "$WORK/out.v92"
 check "92 ends with no drift" $?
+
+# --------------------------------------------------------------------------
+# 93. The batch tool: one JVM for the per-app knobs' whole set of service
+#     calls. The census of 2026-09-25: ~4,100 processes in eight minutes of
+#     screen cycling for app_restrict + rom_bg_off, 60-480ms each under the
+#     power-save governor, and 187 more for the exit's unstop fan. The tool
+#     (module/bin/spsm-tool.jar) hands every call to the service's own
+#     shellCommand entry point in-process - the platform's bytes, minus the
+#     fork/exec/runtime per call. The tests hold it to the fan's contract:
+#     the SAME record byte for byte, the SAME guarded restores, the fan
+#     whenever the tool is missing, dead, or answers short.
+# --------------------------------------------------------------------------
+say "93. spsm-tool: the batch is the fan, byte for byte - and the fan is the fallback"
+make_tree; make_stubs; seed_stub_state
+enable_knobs app_restrict rom_bg_off
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+# --- the fan's pass first: the reference record, from the same stub phone.
+screen_off
+run_engine screen-off >/dev/null 2>&1
+cp "$WORK/spsm/journal/orig/app_restrict.tsv" "$WORK/ar.fan" 2>/dev/null
+[ -f "$WORK/spsm/journal/orig/rom_bg.tsv" ] && cp "$WORK/spsm/journal/orig/rom_bg.tsv" "$WORK/rb.fan"
+screen_on
+run_engine screen-on >/dev/null 2>&1
+# --- now the tool's pass over the restored phone.
+export SPSM_TOOL_CMD="$BIN/faketool"
+screen_off
+run_engine screen-off >/dev/null 2>&1
+diff "$WORK/ar.fan" "$WORK/spsm/journal/orig/app_restrict.tsv" >/dev/null 2>&1
+check "app_restrict: the tool's record is the fan's record, byte for byte" $?
+if [ -f "$WORK/rb.fan" ]; then
+  diff "$WORK/rb.fan" "$WORK/spsm/journal/orig/rom_bg.tsv" >/dev/null 2>&1
+else
+  [ ! -f "$WORK/spsm/journal/orig/rom_bg.tsv" ]
+fi
+check "rom_bg_off: the same" $?
+[ "$(cat "$WORK/stub/bucket/com.spotify.music" 2>/dev/null)" = "restricted" ]
+check "the batched writes put the bucket where the fan puts it" $?
+[ "$(cat "$WORK/stub/appop/com.spotify.music" 2>/dev/null)" = "RUN_ANY_IN_BACKGROUND: deny" ]
+check "and denied the background the same way" $?
+# --- the batched restore keeps the fan's guards: only what is still OURS.
+echo 25 > "$WORK/stub/bucket/com.example.game"
+screen_on
+run_engine screen-on >/dev/null 2>&1
+[ "$(cat "$WORK/stub/bucket/com.example.game" 2>/dev/null)" = "25" ]
+check "a bucket somebody else moved is not clobbered by the batched restore" $?
+[ "$(cat "$WORK/stub/bucket/com.spotify.music" 2>/dev/null)" = "20" ]
+check "and our own value is put back, exactly as the fan would" $?
+[ "$(cat "$WORK/stub/appop/com.spotify.music" 2>/dev/null)" = "RUN_ANY_IN_BACKGROUND: allow" ]
+check "the app-op too" $?
+# --- the release of the force-stopped set goes through the tool as one batch.
+printf 'com.tool.a\ncom.tool.b\ncom.tool.c\n' >> "$WORK/spsm/state/stopped_by_us.tsv"
+run_engine deactivate >/dev/null 2>&1
+grep -q '^com.tool.a$' "$WORK/stub/unstopped" 2>/dev/null
+check "the batched release unstops every package" $?
+grep -q 'in one batch' "$WORK/spsm/spsm.log"
+check "and says it was one batch" $?
+unset SPSM_TOOL_CMD
+
+# --- a dead tool: the fan takes over and the record is still right.
+make_tree; make_stubs; seed_stub_state
+enable_knobs app_restrict
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+printf '#!/bin/sh\nexit 1\n' > "$BIN/deadtool"
+chmod +x "$BIN/deadtool"
+export SPSM_TOOL_CMD="$BIN/deadtool"
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ -s "$WORK/spsm/journal/orig/app_restrict.tsv" ]
+check "a tool that dies falls back to the fan" $?
+[ "$(cat "$WORK/stub/bucket/com.spotify.music" 2>/dev/null)" = "restricted" ]
+check "and the fan's writes all landed" $?
+# --- a tool that answers short: frames missing means the batch is not trusted.
+printf '#!/bin/sh\nprintf '"'"'###\\t0\\t0\\n'"'"'\nprintf '"'"'restricted\\n'"'"'\n' > "$BIN/shorttool"
+chmod +x "$BIN/shorttool"
+export SPSM_TOOL_CMD="$BIN/shorttool"
+screen_on
+run_engine screen-on >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+diff "$WORK/ar.fan" "$WORK/spsm/journal/orig/app_restrict.tsv" >/dev/null 2>&1
+check "a short answer falls back to the fan, record intact" $?
+unset SPSM_TOOL_CMD
+screen_on
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v93" 2>&1
+grep -q 'drift=0' "$WORK/out.v93"
+check "93 ends with no drift" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

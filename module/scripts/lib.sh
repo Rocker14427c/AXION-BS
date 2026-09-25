@@ -147,6 +147,26 @@ publish_native() { # publish_native <module dir>
   _md=$1
   [ -d "$_md/bin" ] || return 0
   mkdir -p "$SPSM_BIN" 2>/dev/null
+  # The batch tool is one jar for every phone - dex has no architecture. The
+  # proof of life is the same idea as the natives': run it with no verb, which
+  # the JVM inside answers with a usage line and status 2. Anything else (no
+  # app_process, a jar the runtime will not load) removes it again, and every
+  # caller falls back to the shell paths it was built on.
+  if [ -f "$_md/bin/spsm-tool.jar" ]; then
+    cp -f "$_md/bin/spsm-tool.jar" "$SPSM_BIN/spsm-tool.jar.new" 2>/dev/null \
+      && chmod 644 "$SPSM_BIN/spsm-tool.jar.new" 2>/dev/null \
+      && mv -f "$SPSM_BIN/spsm-tool.jar.new" "$SPSM_BIN/spsm-tool.jar" 2>/dev/null
+    if [ -f "$SPSM_BIN/spsm-tool.jar" ]; then
+      su 2000 -c "CLASSPATH=$SPSM_BIN/spsm-tool.jar app_process / dev.axion.spsm.tool.Main" >/dev/null 2>&1
+      _trc=$?
+      if [ "$_trc" = 2 ]; then
+        log "batch tool: published"
+      else
+        rm -f "$SPSM_BIN/spsm-tool.jar" 2>/dev/null
+        log "batch tool: does not run here (rc=$_trc) - the shell paths stay in charge"
+      fi
+    fi
+  fi
   for _abi in $(native_abi_list); do
     [ -d "$_md/bin/$_abi" ] || continue
     _ok=1
@@ -179,6 +199,51 @@ publish_native() { # publish_native <module dir>
   rm -f "$SPSM_BIN/spsm-screenmon" 2>/dev/null
   log "native helpers: none of the shipped builds run here - the daemon will poll"
   return 0
+}
+
+# ------------------------------------------------------------------ batch tool
+# ONE JVM for a whole batch of service calls (tool/src -> spsm-tool.jar). The
+# census of 2026-09-25 counted 6,354 processes in 488 seconds of a daily
+# round, and each was a fork, an exec and - for the JVM wrappers - a runtime
+# start, for ONE binder transaction. The tool does the same transactions
+# in-process, through each service's shellCommand entry point: exactly what
+# `cmd` calls from the outside, with the same identity (uid 2000), the same
+# arguments, the same output and the same result codes.
+#
+# Contract, verb `shellbatch` (batch file path as argv, or stdin):
+#   in, one op per line:   SERVICE<TAB>ARG<TAB>ARG...
+#   out, one frame per op: ###<TAB>index<TAB>rc / the command's own output /
+#                          ###<TAB>END
+# rc<0 is the tool's own (-1 no such service, -2 call failed, -3 timed out).
+#
+# Every caller keeps the proven shell fan as its fallback and uses it unless
+# the tool answers with a frame for every line: a missing jar, a dead runtime
+# or a short answer costs nothing but the attempt.
+tool_jar_path() {
+  [ -f "$SPSM_BIN/spsm-tool.jar" ] && { printf '%s' "$SPSM_BIN/spsm-tool.jar"; return 0; }
+  return 1
+}
+tool_ok() {
+  [ -n "${SPSM_TOOL_CMD:-}" ] && return 0        # the test rig's fake tool
+  tool_jar_path >/dev/null 2>&1 || return 1
+  command -v app_process >/dev/null 2>&1 || return 1
+  command -v su >/dev/null 2>&1 || return 1
+  return 0
+}
+tool_shellbatch() { # tool_shellbatch <batch-file>   -> frames on stdout
+  if [ -n "${SPSM_TOOL_CMD:-}" ]; then
+    sh "$SPSM_TOOL_CMD" shellbatch "$1"
+    return $?
+  fi
+  _tsj=$(tool_jar_path) || return 1
+  su 2000 -c "CLASSPATH=$_tsj app_process / dev.axion.spsm.tool.Main shellbatch '$1'"
+}
+# Did the tool answer with exactly <expected> frames? A short answer means it
+# died mid-batch, and the caller's fallback has to run - over writes that are
+# idempotent, so a partial batch costs nothing but the retry.
+tool_frames_ok() { # tool_frames_ok <out-file> <expected-frames>
+  _tf=$(awk -F'\t' '$1 == "###" && $2 == "END" { c++ } END { print c + 0 }' "$1" 2>/dev/null)
+  [ "${_tf:-0}" = "$2" ]
 }
 
 # /data/adb/spsm must exist before anything else references it.

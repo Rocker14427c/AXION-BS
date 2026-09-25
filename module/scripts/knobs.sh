@@ -1228,6 +1228,183 @@ restore_ged_boost_off() { restore_kv "$1" "$2"; }
 
 # ============================================================ Apps
 
+# ------------------------------------------------------------- batch paths
+# The per-app knobs through the batch tool (lib.sh: tool_shellbatch): ONE JVM
+# for the whole set of reads, ONE for the whole set of writes, instead of a
+# process per call - the census of 2026-09-25 counted ~4,100 of them in eight
+# minutes of screen cycling, at 60-480ms each under the power-save governor.
+# The contract is the fan's contract: the same reads, the same guards, the
+# same record lines, the same writes - the tool only runs the services' own
+# shellCommand entry points in-process, so the bytes are the platform's.
+# Anything short - no tool, a dead tool, a missing frame - and the caller runs
+# the proven fan instead; the writes are idempotent and the collector's
+# sort -u folds duplicate records, so the retry costs nothing but time.
+
+# Frames from a reads batch (per package: get-standby-bucket then appops get)
+# -> one line per package: pkg<TAB>origBucket<TAB>origOp, "-" where the fan
+# would have seen nothing usable. Exits 3 on a short answer.
+_batch_reads_parse() { # _batch_reads_parse <unks-file> <frames-file>
+  awk -F'\t' -v unksf="$1" '
+    BEGIN {
+      n = 0
+      while ((getline l < unksf) > 0) { n++; pkg[n] = l }
+      close(unksf); frames = 0; inbody = 0
+    }
+    $1 == "###" && $2 == "END" { frames++; inbody = 0; next }
+    $1 == "###" && inbody == 0 { idx = $2 + 0; rc[idx] = $3 + 0; inbody = 1; got = 0; next }
+    inbody == 1 {
+      gsub(/\r/, "")
+      if (!got && $0 != "") {
+        fl = $0; gsub(/^[ \t]+|[ \t]+$/, "", fl); firstline[idx] = fl; got = 1
+      }
+      if (match($0, /RUN_ANY_IN_BACKGROUND:[ \t]*[a-z_]+/)) {
+        s = substr($0, RSTART, RLENGTH); sub(/^RUN_ANY_IN_BACKGROUND:[ \t]*/, "", s)
+        if (!(idx in opword)) opword[idx] = s
+      }
+    }
+    END {
+      if (frames != 2 * n) exit 3
+      for (i = 1; i <= n; i++) {
+        bi = 2 * i - 2; ai = 2 * i - 1     # frames are 0-based
+        ob = "-"; oo = "-"
+        f = firstline[bi]
+        # A bucket is one word and the call answered for itself; anything else
+        # is the service talking, and the fan never recorded talk as a value.
+        if (rc[bi] == 0 && f != "" && f !~ /[ \t]/) ob = f
+        if (ai in opword) oo = opword[ai]
+        printf "%s\t%s\t%s\n", pkg[i], ob, oo
+      }
+    }
+  ' "$2"
+}
+
+# apply_app_restrict / apply_rom_bg_off through the tool. Writes the SAME
+# scratch-record lines the fan's workers write (4 fields for app_restrict,
+# 5 for rom_bg - each collector below reads its own shape), then batches the
+# writes: holds for the already-recorded, fresh restrictions for the rest.
+_restrict_batch() { # _restrict_batch <pkgs-file> <scratch> <known> <bucket> <ar|rb>
+  _bp=$1; _br=$2; _bk=$3; _bb=$4; _bm=$5
+  _bd="$SPSM_DIR/.tmp/rbatch.$$.${KRV_TAG:-main}"
+  mkdir -p "$_bd" 2>/dev/null || return 1
+  : > "$_bd/in1"; : > "$_bd/unks"; : > "$_bd/in2"
+  while read -r _p; do
+    [ -n "$_p" ] || continue
+    case "$_bk" in
+      *" $_p "*)
+        # Already recorded in this idle period: hold our values, read nothing.
+        printf 'activity\tset-standby-bucket\t%s\t%s\n' "$_p" "$_bb" >> "$_bd/in2"
+        printf 'appops\tset\t%s\tRUN_ANY_IN_BACKGROUND\tdeny\n' "$_p" >> "$_bd/in2"
+        [ "$_bm" = rb ] && printf 'activity\tmake-uid-idle\t%s\n' "$_p" >> "$_bd/in2"
+        ;;
+      *)
+        printf '%s\n' "$_p" >> "$_bd/unks"
+        printf 'activity\tget-standby-bucket\t%s\n' "$_p" >> "$_bd/in1"
+        printf 'appops\tget\t%s\tRUN_ANY_IN_BACKGROUND\n' "$_p" >> "$_bd/in1"
+        ;;
+    esac
+  done < "$_bp"
+  if [ -s "$_bd/in1" ]; then
+    tool_shellbatch "$_bd/in1" > "$_bd/out1" 2>/dev/null || { rm -rf "$_bd"; return 1; }
+    _batch_reads_parse "$_bd/unks" "$_bd/out1" > "$_bd/parsed" || { rm -rf "$_bd"; return 1; }
+    while IFS="$TAB" read -r _p _ob _oo; do
+      [ -n "$_p" ] || continue
+      { [ "$_ob" = "-" ] && [ "$_oo" = "-" ]; } && continue
+      if [ "$_bm" = rb ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$_p" "$_ob" "$_bb" "$_oo" deny >> "$_br"
+      else
+        printf '%s\t%s\t%s\t%s\n' "$_p" "$_ob" "$_oo" "$_bb" >> "$_br"
+      fi
+      [ "$_ob" != "-" ] && printf 'activity\tset-standby-bucket\t%s\t%s\n' "$_p" "$_bb" >> "$_bd/in2"
+      [ "$_oo" != "-" ] && printf 'appops\tset\t%s\tRUN_ANY_IN_BACKGROUND\tdeny\n' "$_p" >> "$_bd/in2"
+      [ "$_bm" = rb ] && printf 'activity\tmake-uid-idle\t%s\n' "$_p" >> "$_bd/in2"
+    done < "$_bd/parsed"
+  fi
+  if [ -s "$_bd/in2" ]; then
+    _wn=$(awk 'NF { c++ } END { print c + 0 }' "$_bd/in2")
+    if tool_shellbatch "$_bd/in2" > "$_bd/out2" 2>/dev/null \
+       && tool_frames_ok "$_bd/out2" "$_wn"; then
+      :
+    else
+      rm -rf "$_bd"
+      return 1
+    fi
+  fi
+  rm -rf "$_bd"
+  return 0
+}
+
+# restore_app_restrict / restore_rom_bg_off through the tool: one reads batch
+# over the record, the fan's guards applied to the answers (undo only what is
+# still OURS - a value somebody else moved since is a newer decision), one
+# writes batch for what passed. Same 5-field record both knobs write.
+_restore_batch() { # _restore_batch <tsv-list>
+  _rl=$1
+  _bd="$SPSM_DIR/.tmp/rrbatch.$$.${KRV_TAG:-main}"
+  mkdir -p "$_bd" 2>/dev/null || return 1
+  : > "$_bd/in1"; : > "$_bd/ops"
+  awk -F'\t' -v inf="$_bd/in1" -v opsf="$_bd/ops" '
+    NF >= 4 && $1 != "" {
+      if ($2 != "-" && $2 != "") {
+        printf "activity\tget-standby-bucket\t%s\n", $1 >> inf
+        printf "%s\tbucket\t%s\t%s\n", $1, $2, $3 >> opsf
+      }
+      if ($4 != "-" && $4 != "") {
+        printf "appops\tget\t%s\tRUN_ANY_IN_BACKGROUND\n", $1 >> inf
+        printf "%s\top\t%s\t%s\n", $1, $4, $5 >> opsf
+      }
+    }
+  ' "$_rl"
+  if [ -s "$_bd/in1" ]; then
+    tool_shellbatch "$_bd/in1" > "$_bd/out1" 2>/dev/null || { rm -rf "$_bd"; return 1; }
+    awk -F'\t' -v opsf="$_bd/ops" '
+      BEGIN {
+        n = 0
+        while ((getline l < opsf) > 0) { n++; ops[n] = l }
+        close(opsf); frames = 0; inbody = 0
+      }
+      $1 == "###" && $2 == "END" { frames++; inbody = 0; next }
+      $1 == "###" && inbody == 0 { idx = $2 + 0; rc[idx] = $3 + 0; inbody = 1; got = 0; next }
+      inbody == 1 {
+        gsub(/\r/, "")
+        if (!got && $0 != "") {
+          fl = $0; gsub(/^[ \t]+|[ \t]+$/, "", fl); firstline[idx] = fl; got = 1
+        }
+        if (match($0, /RUN_ANY_IN_BACKGROUND:[ \t]*[a-z_]+/)) {
+          s = substr($0, RSTART, RLENGTH); sub(/^RUN_ANY_IN_BACKGROUND:[ \t]*/, "", s)
+          if (!(idx in opword)) opword[idx] = s
+        }
+      }
+      END {
+        if (frames != n) exit 3
+        for (i = 1; i <= n; i++) {
+          split(ops[i], o, "\t")           # pkg kind restore-value our-value
+          fi_ = i - 1                      # frames are 0-based
+          cur = "-"
+          if (o[2] == "bucket") {
+            f = firstline[fi_]
+            if (rc[fi_] == 0 && f != "" && f !~ /[ \t]/) cur = f
+          } else if (fi_ in opword) cur = opword[fi_]
+          if (cur != o[4]) continue        # not ours any more: leave it alone
+          if (o[2] == "bucket") printf "activity\tset-standby-bucket\t%s\t%s\n", o[1], o[3]
+          else printf "appops\tset\t%s\tRUN_ANY_IN_BACKGROUND\t%s\n", o[1], o[3]
+        }
+      }
+    ' "$_bd/out1" > "$_bd/in2" || { rm -rf "$_bd"; return 1; }
+    if [ -s "$_bd/in2" ]; then
+      _wn=$(awk 'NF { c++ } END { print c + 0 }' "$_bd/in2")
+      if tool_shellbatch "$_bd/in2" > "$_bd/out2" 2>/dev/null \
+         && tool_frames_ok "$_bd/out2" "$_wn"; then
+        :
+      else
+        rm -rf "$_bd"
+        return 1
+      fi
+    fi
+  fi
+  rm -rf "$_bd"
+  return 0
+}
+
 meta_app_restrict() {
   echo "Apps|Restrict background work|While the screen is off, apps outside your six slots do less work in the background. Notifications may arrive a little later.|1|deep|battery"
 }
@@ -1257,6 +1434,13 @@ apply_app_restrict() {
   : > "$_r"
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   managed_packages > "$_d/restrict.pkgs.$$" 2>/dev/null
+  # Batch tool first: one JVM reads the whole set, one writes it (_restrict_
+  # batch). The fan below is the fallback and stays the reference.
+  _tool_done=''
+  if tool_ok && _restrict_batch "$_d/restrict.pkgs.$$" "$_r" "$_known" "$_bucket" ar; then
+    _tool_done=1
+  fi
+  if [ -z "$_tool_done" ]; then
   _c=0
   while read -r _pkg; do
     [ -n "$_pkg" ] || continue
@@ -1293,6 +1477,7 @@ apply_app_restrict() {
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_d/restrict.pkgs.$$"
   wait
+  fi
   rm -f "$_d/restrict.pkgs.$$"
   # One writer, in a stable order. Only the first sighting of a package in this
   # idle period is a record of what it looked like before we touched it.
@@ -1308,6 +1493,11 @@ apply_app_restrict() {
 restore_app_restrict() {
   _list="$ORIG_DIR/app_restrict.tsv"
   [ -f "$_list" ] || return 0
+  # Batch tool first (_restore_batch): one JVM for the guarded reads, one for
+  # the writes that passed the guards. The fan below is the fallback.
+  _tool_done=''
+  if tool_ok && _restore_batch "$_list"; then _tool_done=1; fi
+  if [ -z "$_tool_done" ]; then
   # Every app here costs two reads and up to two writes, and on the way out they
   # ran one app after another - eight seconds of the exit in the v3.6.0 log for a
   # dozen apps, and it is the same work the apply already does together. The
@@ -1334,6 +1524,7 @@ restore_app_restrict() {
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_list"
   wait
+  fi
   # The idle period is over: the next one starts from whatever the phone looks
   # like then, not from this record.
   rm -f "$_list"
@@ -1756,6 +1947,27 @@ applied_snapshot_block_other_apps() {
 # per package, because this phone's `pm unstop` takes exactly one.
 release_force_stopped() {
   [ -f "$STOPPED_BY_US" ] || return 0
+  # The batch tool turns the whole release into ONE JVM: 187 unstop calls were
+  # 187 processes under su on the exit (the census of 2026-09-25 could not
+  # even see them - KernelSU resets the PATH - but /proc/stat counted every
+  # fork). Frame count is the contract check; anything short hands the release
+  # to the proven fan below, over calls that are idempotent.
+  if tool_ok; then
+    _bn=$(awk 'NF { c++ } END { print c + 0 }' "$STOPPED_BY_US")
+    if [ "${_bn:-0}" -gt 0 ]; then
+      _bd="$SPSM_DIR/.tmp/unstop.$$"
+      mkdir -p "$_bd" 2>/dev/null
+      awk 'NF { printf "package\tunstop\t--user\t0\t%s\n", $0 }' "$STOPPED_BY_US" > "$_bd/in"
+      if tool_shellbatch "$_bd/in" > "$_bd/out" 2>/dev/null \
+         && tool_frames_ok "$_bd/out" "$_bn"; then
+        rm -rf "$_bd"
+        rm -f "$STOPPED_BY_US" 2>/dev/null
+        log "released $_bn force-stopped package(s) in one batch - stopped apps can start again"
+        return 0
+      fi
+      rm -rf "$_bd"
+    fi
+  fi
   # Twelve at a time, reniced - and
   # NOT one after another: this phone's `pm unstop` takes one package per call,
   # so the exit that released 187 of them sequentially spent 14s in this loop
@@ -2234,6 +2446,14 @@ apply_rom_bg_off() {
   rom_bg_candidates > "$_pkgfile" 2>/dev/null
   _names=$(tr '\n' ' ' < "$_pkgfile" 2>/dev/null)
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
+  _n=$(awk 'NF { c++ } END { print c + 0 }' "$_pkgfile" 2>/dev/null)
+  # Batch tool first (_restrict_batch, rb shape); the fan below is the
+  # fallback and stays the reference.
+  _tool_done=''
+  if tool_ok && _restrict_batch "$_pkgfile" "$_r" "$_known" "$_bucket" rb; then
+    _tool_done=1
+  fi
+  if [ -z "$_tool_done" ]; then
   _n=0
   _c=0
   while read -r _pkg; do
@@ -2268,6 +2488,7 @@ apply_rom_bg_off() {
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_pkgfile"
   wait
+  fi
   rm -f "$_pkgfile"
   # One writer for the journal, in a stable order.
   sort -u "$_r" 2>/dev/null | while IFS=$TAB read -r _pkg _ob _nb _oo _no; do
@@ -2284,6 +2505,11 @@ apply_rom_bg_off() {
 restore_rom_bg_off() {
   _list="$ORIG_DIR/rom_bg.tsv"
   [ -f "$_list" ] || return 0
+  # Batch tool first (_restore_batch, the same 5-field record as
+  # app_restrict); the fan below is the fallback.
+  _tool_done=''
+  if tool_ok && _restore_batch "$_list"; then _tool_done=1; fi
+  if [ -z "$_tool_done" ]; then
   _c=0
   while IFS=$TAB read -r _pkg _ob _nb _oo _no || [ -n "$_pkg" ]; do
     [ -n "$_pkg" ] || continue
@@ -2305,6 +2531,7 @@ restore_rom_bg_off() {
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done < "$_list"
   wait
+  fi
   rm -f "$_list"
 }
 
