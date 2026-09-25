@@ -693,7 +693,7 @@ j_reset() {
         # Our value may still be in place: keep the record that predates it.
         _kept=$((_kept + 1)) ;;
       *)
-        rm -f "$JOURNAL/$_id.orig" "$JOURNAL/$_id.applied" "$JOURNAL/$_id.meta" "$JOURNAL/$_id.state" ;;
+        rm -f "$JOURNAL/$_id.orig" "$JOURNAL/$_id.applied" "$JOURNAL/$_id.meta" "$JOURNAL/$_id.state" "$JOURNAL/$_id.writes" ;;
     esac
   done
   [ -d "$ORIG_DIR" ] || mkdir -p "$ORIG_DIR" 2>/dev/null
@@ -1278,6 +1278,11 @@ safety_unlock() {
 tmp_sweep() {
   [ -d "$SPSM_DIR/.tmp" ] || return 0
   find "$SPSM_DIR/.tmp" -type f -mmin +60 -exec rm -f {} + 2>/dev/null
+  # The scratch DIRECTORIES outlive their files: one field day left 34 of them
+  # (one per knob per snapshot tag). rmdir only ever removes an empty one, so
+  # a directory somebody is still writing into survives the sweep - and the
+  # day's rubble does not.
+  find "$SPSM_DIR/.tmp" -mindepth 1 -type d -mmin +60 -exec rmdir {} + 2>/dev/null
   return 0
 }
 

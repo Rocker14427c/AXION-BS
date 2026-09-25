@@ -122,7 +122,23 @@ snap_kv() {
 }
 
 # Apply "target=value" pairs, splitting on the FIRST '=' only.
+#
+# The writes go out TOGETHER, and the log of what they did is written down as
+# they land. Both halves are measured, not guessed:
+#   - one `settings put` costs this phone most of a fifth of a second while the
+#     activation fan is contending, and a knob with three keys spent seconds
+#     writing three values that know nothing about each other (restore_kv made
+#     the same argument for the exit, and the exit got its seconds back);
+#   - the engine reads every knob a SECOND time after the apply to journal what
+#     the change looks like. For the knobs whose snapshot is exactly the set of
+#     targets written here, that read is asking the phone for values this
+#     function just wrote with its own hand. The writes log is the same answer
+#     for free - see SYNTH_KNOBS below.
+# A write that fails is logged as FAILED and sends the knob back to a real
+# read, so the journal never claims a value that was not confirmed.
 apply_kv() {
+  _wlog=''
+  [ -n "${KNOB_ID:-}" ] && _wlog="$JOURNAL/$KNOB_ID.writes"
   for _pair in "$@"; do
     _t=${_pair%%=*}
     _v=${_pair#*=}
@@ -138,8 +154,66 @@ apply_kv() {
         continue
       fi
     fi
-    kv_write "$_t" "$_v"
+    if [ -n "$_wlog" ]; then
+      ( if kv_write "$_t" "$_v"; then
+          printf '%s\t%s\n' "$_t" "$(enc_val "$_v")" >> "$_wlog" 2>/dev/null
+        else
+          printf 'FAILED\t%s\n' "$_t" >> "$_wlog" 2>/dev/null
+        fi ) </dev/null &
+    else
+      kv_write "$_t" "$_v"
+    fi
   done
+  [ -n "$_wlog" ] && wait
+  return 0
+}
+
+# ---------------------------------------------------- synthesised applied read
+#
+# The knobs whose snapshot targets are EXACTLY the targets apply_kv writes -
+# and nothing else - never need the engine's second real read after the apply:
+# the writes log holds what the phone confirmed, target by target. A knob that
+# writes anything outside apply_kv (dt2w_off's proc nodes, the radios' svc
+# calls, the GPU's opp lock, the governor's own read-backs) is deliberately
+# NOT listed: for those, the honest applied reading stays a real reading.
+#
+# The field log that paid for this: activation 2026-09-25 10:59, 67s total,
+# with dt2w_off alone at 8s - two full settings passes (before AND after) plus
+# sequential puts, on a phone answering each settings call in a fifth of a
+# second while three knobs contended for it.
+SYNTH_KNOBS="aod_off dt2w_off timeout_short animations_off haptic_off rotate_lock blur_off statusbar_on scan_always_off location_off sync_off battery_saver"
+
+synth_eligible() { # synth_eligible <id>
+  case " $SYNTH_KNOBS " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+# synth_applied <id> -> the applied snapshot text, or rc=1 when the writes log
+# cannot account for the outcome (missing, empty, or holding a FAILED write).
+# Targets the apply skipped or never touched keep their original values -
+# which is precisely what a real read would report for them seconds later.
+synth_applied() {
+  _sw="$JOURNAL/$1.writes"
+  [ -s "$_sw" ] || return 1
+  _swt=''
+  while IFS= read -r _sl || [ -n "$_sl" ]; do
+    case "$_sl" in
+      FAILED*) return 1 ;;
+      *) _swt="$_swt$_sl
+" ;;
+    esac
+  done < "$_sw"
+  [ -n "$_swt" ] || return 1
+  [ -f "$JOURNAL/$1.orig" ] || return 1
+  while IFS=$TAB read -r _st _sv || [ -n "$_st" ]; do
+    [ -n "$_st" ] || continue
+    _nw=$(snap_get "$_swt" "$_st")
+    if [ -n "$_nw" ]; then
+      printf '%s\t%s\n' "$_st" "$_nw"
+    else
+      printf '%s\t%s\n' "$_st" "$_sv"
+    fi
+  done < "$JOURNAL/$1.orig"
 }
 
 # Restore from a snapshot file produced by snap_kv.
@@ -412,7 +486,17 @@ meta_dt2w_off() {
   echo "Display|No wake on double-tap|Taps and swipes on the sleeping screen no longer wake the phone. The power button always works.|1|session|battery"
 }
 snapshot_dt2w_off() { snap_kv $DT2W_SETTINGS $DT2W_NODES; }
-apply_dt2w_off() { apply_kv "@secure:double_tap_to_wake=0" "@system:double_tap_to_wake=0" "@secure:tap_to_wake=0"; for _f in $DT2W_NODES; do w 0 "$_f"; done; }
+apply_dt2w_off() {
+  # The proc nodes go through apply_kv with the settings: a node whose
+  # original reading was (MISSING) is skipped before any write (nothing to
+  # undo it by), an existing node joins the same parallel write fan, and the
+  # writes log then accounts for EVERY target this knob touches - which is
+  # what lets the applied reading be synthesised from the log instead of a
+  # second 16-target sweep right after the first one.
+  set -- "@secure:double_tap_to_wake=0" "@system:double_tap_to_wake=0" "@secure:tap_to_wake=0"
+  for _f in $DT2W_NODES; do set -- "$@" "$_f=0"; done
+  apply_kv "$@"
+}
 restore_dt2w_off() { restore_kv "$1" "$2"; }
 
 meta_aod_off() {
@@ -990,7 +1074,7 @@ meta_blur_off() {
   echo "Performance|Window blur off|Blurred panels behind the interface are not drawn - a saving on every frame. The look is plainer; switch back on to restore it.|1|session|perf"
 }
 snapshot_blur_off() { snap_kv @global:disable_window_blurs; }
-apply_blur_off() { sput global disable_window_blurs 1; }
+apply_blur_off() { apply_kv "@global:disable_window_blurs=1"; }
 restore_blur_off() { restore_kv "$1" "$2"; }
 probe_blur_off() { printf 'blurs_disabled\t%s\n' "$(sget global disable_window_blurs 2>/dev/null || echo unset)"; }
 
@@ -1430,11 +1514,24 @@ meta_block_other_apps() {
 # them all suspended on exit.)
 snapshot_block_other_apps() {
   _susp=''
+  _susp_read=0
   _suspf="$SPSM_DIR/.tmp/susp.$$_${KRV_TAG:-main}"
   if suspended_packages > "$_suspf" 2>/dev/null; then
+    _susp_read=1
     _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
   rm -f "$_suspf"
+  if [ "$_susp_read" = 1 ] && [ "$_susp" = "  " ]; then
+    # The phone's own suspension record was READ and says nothing is
+    # suspended. That answer used to be double-checked with a `dumpsys
+    # package` per candidate - 188 binder round trips, ~8s of every
+    # activation on this phone (field, 2026-09-25). The record IS the
+    # authority pm itself uses; when it could not be read at all, the
+    # per-package check below still runs. One awk pass instead: same bytes,
+    # one fork.
+    blockable_packages | awk 'BEGIN { OFS = "\t" } NF { print $1, 0 }'
+    return 0
+  fi
   blockable_packages | while read -r _p; do
     [ -n "$_p" ] || continue
     _s=0
@@ -1489,8 +1586,10 @@ apply_block_other_apps() {
   _bo_t0=$(now_epoch)
   # Who is already suspended, read once above rather than asked once per app.
   _susp=''
+  _susp_read=0
   _suspf="$_d/susp.$$_${KRV_TAG:-main}"
   if suspended_packages > "$_suspf" 2>/dev/null; then
+    _susp_read=1
     _susp=" $(tr '\n' ' ' < "$_suspf") "
   fi
   rm -f "$_suspf"
@@ -1498,14 +1597,27 @@ apply_block_other_apps() {
   # Who is a candidate at all: blockable, minus what somebody else already
   # suspended (never ours to take over, and never ours to release).
   _cand="$_d/cand.$$"
-  : > "$_cand"
-  for _p in $(blockable_packages); do
-    [ -n "$_p" ] || continue
-    if [ -n "$_susp" ]; then
-      case "$_susp" in *" $_p "*) continue ;; esac
-    fi
-    printf '%s\n' "$_p" >> "$_cand"
-  done
+  if [ "$_susp_read" = 1 ] && [ "$_susp" = "  " ]; then
+    # Nothing is suspended and the phone's record was read to say so: every
+    # blockable package is a candidate, and building the list is a straight
+    # copy. The per-package shell pass cost 2s on a quiet phone and 5s under
+    # the activation's own fan (device probes, 2026-09-25) - for a filter
+    # that, in this case, filters nothing.
+    blockable_packages > "$_cand"
+  else
+    # One open for the whole loop: 187 separate `>>` appends were 187
+    # open/write/close cycles through SELinux and f2fs - measured 4s of the
+    # block knob's candidate phase on the device, for what is really one file.
+    {
+      for _p in $(blockable_packages); do
+        [ -n "$_p" ] || continue
+        if [ -n "$_susp" ]; then
+          case "$_susp" in *" $_p "*) continue ;; esac
+        fi
+        printf '%s\n' "$_p"
+      done
+    } > "$_cand"
+  fi
   # One pm call per forty packages - 186 suspensions cost five round-trips,
   # not 186 forks on min-frequency cores. Only what the phone confirmed lands
   # in the record.
@@ -1513,11 +1625,14 @@ apply_block_other_apps() {
   pm_batch suspend < "$_cand" > "$_r"
   rm -f "$_cand"
   _bo_t3=$(now_epoch)
-  # A suspended app holds memory until it is stopped: same as ever, six at a
-  # time, for exactly the apps this call confirmed. The idle hand-to-AMS is
-  # gone: a suspended app cannot run, so "idle" adds nothing a suspension
-  # does not already say - and it was a second fork per app, 186 of them, on
-  # min-frequency cores.
+  # A suspended app holds memory until it is stopped: same as ever, for
+  # exactly the apps this call confirmed. The idle hand-to-AMS is gone: a
+  # suspended app cannot run, so "idle" adds nothing a suspension does not
+  # already say - and it was a second fork per app, 186 of them, on
+  # min-frequency cores. Twelve at a time since v3.9.0: the work per package
+  # is one binder call to AMS, which keeps far more threads than twelve -
+  # the field run at six spent 5s here; the wall time is AMS's queue, not
+  # the fork rate.
   sort -u "$_r" 2>/dev/null > "$_r.s"
   _c=0
   while read -r _p; do
@@ -1527,7 +1642,7 @@ apply_block_other_apps() {
       am force-stop "$_p" >/dev/null 2>&1
     ) &
     _c=$((_c + 1))
-    [ "$_c" -ge 6 ] && { wait; _c=0; }
+    [ "$_c" -ge 12 ] && { wait; _c=0; }
   done < "$_r.s"
   wait
   _bo_t4=$(now_epoch)
@@ -1547,6 +1662,12 @@ apply_block_other_apps() {
   # The existing record is read once into a space-delimited string and tested
   # with `case`, which is the same technique blockable_packages already uses
   # for its keep-list. Output order and content are unchanged.
+  #
+  # And the record is WRITTEN once per file, not once per package: 374 open-
+  # append-close round trips against /data measured 10s in the field (the
+  # 2026-09-25 activation: record=10s for 187 lines). The whole record is
+  # built in a variable and lands in one write per file - same bytes, same
+  # order, two opens.
   _bu_seen=" "
   if [ -s "$BLOCKED_BY_US" ]; then
     while IFS= read -r _bl; do
@@ -1556,17 +1677,22 @@ apply_block_other_apps() {
     # drop that entry from the seen-set and duplicate it in the record.
     [ -n "$_bl" ] && _bu_seen="$_bu_seen$_bl "
   fi
+  _bu_new=''
   while read -r _p; do
     [ -n "$_p" ] || continue
     case "$_bu_seen" in
       *" $_p "*) continue ;;
     esac
     _bu_seen="$_bu_seen$_p "
-    printf '%s\n' "$_p" >> "$BLOCKED_BY_US"
+    _bu_new="$_bu_new$_p
+"
+  done < "$_r.s"
+  if [ -n "$_bu_new" ]; then
     # The same set, recorded a second time for the release that suspend's
     # inverse cannot perform. $_r.s is precisely what was force-stopped above.
-    printf '%s\n' "$_p" >> "$STOPPED_BY_US"
-  done < "$_r.s"
+    printf '%s' "$_bu_new" >> "$BLOCKED_BY_US" 2>/dev/null
+    printf '%s' "$_bu_new" >> "$STOPPED_BY_US" 2>/dev/null
+  fi
   rm -f "$_r" "$_r.s"
   # Attribution, only when this knob was actually slow. The four numbers are
   # the phases in order: reading who is already suspended, choosing candidates,
@@ -1575,6 +1701,44 @@ apply_block_other_apps() {
   if [ "$((_bo_t5 - _bo_t0))" -ge 2 ] 2>/dev/null; then
     log "  block_other_apps phases: suspended-read=$((_bo_t1 - _bo_t0))s candidates=$((_bo_t2 - _bo_t1))s pm-suspend=$((_bo_t3 - _bo_t2))s force-stop=$((_bo_t4 - _bo_t3))s record=$((_bo_t5 - _bo_t4))s"
   fi
+}
+
+# The applied reading, from the record the apply CONFIRMED rather than from an
+# immediate re-read of the disk.
+#
+# PackageManager answers `pm suspend` the moment the suspension is real, but
+# flushes /data/system/users/*/package-restrictions.xml seconds later - and the
+# engine's after-read used to race that flush. The field log (2026-09-25, the
+# 67s activation) shows the cost: 187 packages suspended and confirmed, the
+# knob then reported "no visible change (optional node missing?)" because BOTH
+# of its reads of the world said zero - the second one reading a file the
+# system had not written yet. A lying note is cosmetic; what it really broke
+# is the promise that the journal can tell a kept change from a failed one.
+#
+# So the after-read is answered from our own confirmed record: every package
+# pm confirmed is suspended (1), everything else keeps whatever the before-
+# read saw. The engine prefers a function named applied_snapshot_<id> when the
+# knob defines one; the before-read is untouched, and `engine.sh verify` still
+# reads the live phone end to end.
+applied_snapshot_block_other_apps() {
+  [ -s "$BLOCKED_BY_US" ] || return 1
+  # A record of nothing confirms nothing: refuse, and the knob falls back to
+  # the phone's own (re-)reading.
+  grep -qm1 . "$BLOCKED_BY_US" 2>/dev/null || return 1
+  [ -f "$JOURNAL/block_other_apps.orig" ] || return 1
+  # One awk pass over the two files. The record says which packages the phone
+  # CONFIRMED suspended - they read 1 here whatever the disk's flush lag says
+  # (the 2026-09-25 field race: 187 confirmed suspensions journalled as "no
+  # visible change" because the after-read saw the pre-suspend XML). Every
+  # other line passes through byte-for-byte as the before-snapshot recorded
+  # it. The shell loop this replaces re-checked 188 lines one case-match at
+  # a time at the tail of every activation: ~2s on the device.
+  awk 'NR == FNR { if (length($0)) b[$0] = 1; next }
+       { t = index($0, "\t")
+         if (t == 0) { print; next }
+         k = substr($0, 1, t - 1)
+         if (k in b) print k "\t1"; else print
+       }' "$BLOCKED_BY_US" "$JOURNAL/block_other_apps.orig"
 }
 
 # ======================================== putting back what force-stop took
@@ -1592,13 +1756,29 @@ apply_block_other_apps() {
 # per package, because this phone's `pm unstop` takes exactly one.
 release_force_stopped() {
   [ -f "$STOPPED_BY_US" ] || return 0
+  # Twelve at a time, reniced - and
+  # NOT one after another: this phone's `pm unstop` takes one package per call,
+  # so the exit that released 187 of them sequentially spent 14s in this loop
+  # (field, 2026-09-25 07:23 - more than half of that exit's "revert clean in
+  # 24s", and the 47s exit the same morning's owner saw at 12:17 was this loop
+  # again under a throttled governor). The calls are independent values with
+  # no order between them; the wall time is now the slowest batch, not the sum.
+  # stdin is detached per worker: a backgrounded child that inherits the loop's
+  # redirected stdin can eat the record the loop is still reading.
   _n=0
+  _c=0
   while read -r _p; do
     [ -n "$_p" ] || continue
-    su 2000 -c "pm unstop --user 0 $_p" >/dev/null 2>&1 \
-      || pm unstop --user 0 "$_p" >/dev/null 2>&1
     _n=$((_n + 1))
+    (
+      bg_nice
+      su 2000 -c "pm unstop --user 0 $_p" >/dev/null 2>&1 \
+        || pm unstop --user 0 "$_p" >/dev/null 2>&1
+    ) </dev/null &
+    _c=$((_c + 1))
+    [ "$_c" -ge 12 ] && { wait; _c=0; }
   done < "$STOPPED_BY_US"
+  wait
   rm -f "$STOPPED_BY_US" 2>/dev/null
   [ "$_n" -gt 0 ] && log "released $_n force-stopped package(s) - stopped apps can start again"
   return 0
@@ -1958,6 +2138,14 @@ meta_sweep_bg() {
 snapshot_sweep_bg() { :; }
 apply_sweep_bg() { sweep_background "mode on"; }
 restore_sweep_bg() { :; }
+# The sweep is an action, not a setting: its snapshot is empty by design, so
+# the engine's before-and-after comparison always agrees with itself and the
+# generic note fired on every activation - "no visible change (optional node
+# missing?)", which reads like a fault and is neither. Its own log line (what
+# was stopped, what the memory did) is the report; the note now says so.
+note_sweep_bg() {
+  printf 'the sweep is an action, not a setting - its log line above is the report; there is no value to read back\n'
+}
 
 # The ROM's own background work.
 #
@@ -2379,7 +2567,14 @@ _prot_uniq() {
   printf '%s' "tmp${_pu:-$$}.$_PROT_SEQ"
 }
 protected_packages() {
-  _pc="${TMPDIR:-/tmp}/.spsm-protected.$$"
+  # Where the cache lives. TMPDIR first (the test rigs set one, and a desktop
+  # /tmp is fine); otherwise the module's own scratch dir - because /tmp DOES
+  # NOT EXIST on Android outside Termux, and a cache path nobody can write is
+  # a cache that never warms: every caller then paid the eight binder round
+  # trips again, three times in one activation, while the phone waited.
+  _pdir="${TMPDIR:-$SPSM_DIR/.tmp}"
+  [ -d "$_pdir" ] || mkdir -p "$_pdir" 2>/dev/null
+  _pc="$_pdir/.spsm-protected.$$"
   # Staleness is handled by a generation stamp rather than a `find` on every
   # call: `find` is itself a fork, which is the cost this cache exists to
   # avoid. The stamp is written by the run that built the cache, so a file left
@@ -2495,6 +2690,42 @@ _protected_packages_build() {
 # list (essentials, root managers, keyboard, launcher, and now the role
 # holders: dialer, SMS, emergency) still stands in front of it.
 blockable_packages() {
+  # ONE list per engine run, however many callers ask. A single activation
+  # builds this three times - the before-snapshot, the apply's candidate
+  # pass and the after-snapshot - and each build costs two `pm list` calls,
+  # the protected-list binder round trips and a sort: 6-8s a pop on the
+  # owner's phone (field, 2026-09-25: the 8s gap in front of "snap
+  # block_other_apps" and candidates=6s behind it). Nothing the list is
+  # built from - the installed packages, the keep lists, the protected
+  # roles, the block_system_apps switch - changes during one engine run,
+  # so the second and third builds were paying for a byte-identical answer.
+  # The cache is named by SPSM_RUN_ID (per invocation, shared by every
+  # subshell of it) and swept by tmp_sweep like every other scratch file.
+  # The per-PACKAGE STATES are still read fresh where honesty requires it;
+  # this caches only the candidate SET.
+  _lc_dir="${TMPDIR:-$SPSM_DIR/.tmp}"
+  _lc="$_lc_dir/.spsm-blockable.${SPSM_RUN_ID:-boot}"
+  if [ -s "$_lc" ]; then cat "$_lc"; return 0; fi
+  [ -d "$_lc_dir" ] || mkdir -p "$_lc_dir" 2>/dev/null
+  _lt="$_lc.$(_prot_uniq)"
+  _blockable_build > "$_lt" 2>/dev/null
+  if [ -s "$_lt" ]; then
+    if mv -f "$_lt" "$_lc" 2>/dev/null; then
+      cat "$_lc"
+    else
+      # Lost the rename race against a parallel builder of the same run -
+      # identical contents, so serve this build and drop the temp.
+      cat "$_lt"; rm -f "$_lt" 2>/dev/null
+    fi
+  else
+    # An empty list is never published as a cached answer (same rule as the
+    # protected cache): a phone with no third-party apps still asks every run.
+    rm -f "$_lt" 2>/dev/null
+    _blockable_build
+  fi
+}
+
+_blockable_build() {
   _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
   if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then
@@ -2520,6 +2751,32 @@ apply_block_system_apps() { :; }
 restore_block_system_apps() { :; }
 
 managed_packages() {
+  # One list per engine run, for exactly the reason blockable_packages caches
+  # its own: a screen-off applies app_restrict AND rom_bg_off (and the deep
+  # phase's own bookkeeping), each of which used to rebuild this from scratch
+  # - a `dumpsys deviceidle whitelist` parse, two `pm list` calls and the
+  # protected round trips, per caller, while the phone is trying to fall
+  # asleep. The v3.4.1 log's seven-minute screen-off started with exactly
+  # this duplication.
+  _lc_dir="${TMPDIR:-$SPSM_DIR/.tmp}"
+  _lc="$_lc_dir/.spsm-managed.${SPSM_RUN_ID:-boot}"
+  if [ -s "$_lc" ]; then cat "$_lc"; return 0; fi
+  [ -d "$_lc_dir" ] || mkdir -p "$_lc_dir" 2>/dev/null
+  _lt="$_lc.$(_prot_uniq)"
+  _managed_build > "$_lt" 2>/dev/null
+  if [ -s "$_lt" ]; then
+    if mv -f "$_lt" "$_lc" 2>/dev/null; then
+      cat "$_lc"
+    else
+      cat "$_lt"; rm -f "$_lt" 2>/dev/null
+    fi
+  else
+    rm -f "$_lt" 2>/dev/null
+    _managed_build
+  fi
+}
+
+_managed_build() {
   _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
   _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')

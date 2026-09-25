@@ -1,6 +1,6 @@
 id=axion_spsm
 name=Axion Super Power Saving
-version=v3.8.3
-versionCode=74
+version=v3.9.0
+versionCode=76
 author=Axion SPSM
-description=v3.8.3, the precision round: the battery at two decimals, in the status bar. charge_counter on this phone reports level x 60000 uAh and only steps at whole percents, so the hundredths come from integrating the live current between the gauge anchors - the number glides at the real pace of use and charge, agrees with the system percentage at every whole, and costs nothing: no wake locks, no alarms, screen-off silence by construction. Tap-to-toggle on the setup screen. Suite: 674 checks, 0 failed.
+description=v3.9.0, the daily round: the activation and the exit got their seconds back from four measured lies - the package lists were rebuilt three times per activation on a phone that answers every pm call slowly (one build per run now), the protected-list cache was written to /tmp, which does not exist on Android (it lives in the module's own scratch now), the after-read of a 187-app suspension raced PackageManager's own flush and reported "no visible change" (the applied reading comes from what pm confirmed), and the exit released 187 force-stops one su-fork at a time (six at a time now, like every other fan). Settings knobs journal their own writes and skip the second settings pass; the sweep's note tells the truth; the screen-off progress file no longer outlives the transition.

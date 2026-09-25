@@ -55,6 +55,12 @@ knob_apply() { # knob_apply id
     log "snap $_id: $(unesc "$_snap" | tr '\n' ' ' | cut -c1-160)"
   fi
 
+  # The per-apply scratch that apply_kv's writes log lives in (SYNTH_KNOBS,
+  # knobs.sh). Cleared BEFORE the apply runs, so a synthesis can never be
+  # decided from a previous session's writes - truncate rather than rm, with
+  # the builtin, because this path runs for every knob of every phase.
+  : > "$JOURNAL/$_id.writes" 2>/dev/null
+
   "$_fn"
   _rc=$?
 
@@ -63,7 +69,33 @@ knob_apply() { # knob_apply id
   # that matters (the first application of a session). On a phone that spends a
   # fifth of a second answering each settings read, a whole snapshot per knob is
   # seconds off every activation.
-  _now=$("snapshot_$_id" 2>/dev/null)
+  #
+  # And the one snapshot is not always a re-read of the phone. Two honest
+  # answers exist for a knob that can produce them, both opt-in per knob:
+  #   - applied_snapshot_<id>: for knobs whose on-disk state LAGS the phone's
+  #     own confirmation. PackageManager answers `pm suspend` the moment the
+  #     suspension is real and flushes package-restrictions.xml seconds later;
+  #     the immediate re-read lost that race and the 2026-09-25 field log
+  #     shows the cost - 187 confirmed suspensions reported as "no visible
+  #     change".
+  #   - SYNTH_KNOBS: for knobs whose snapshot targets are exactly what
+  #     apply_kv wrote. The writes log is the after-picture, confirmed per
+  #     target; the second settings pass was seconds per activation spent
+  #     re-asking the phone what we had just told it.
+  # A refused apply (rc=2) always keeps the real read: a knob that undid its
+  # own change must be journalled from the world, not from our intent. Any
+  # honest source that cannot answer falls through to the real snapshot, so
+  # the journal is never left empty by an optimisation.
+  _now=''
+  if [ "$_rc" != "2" ]; then
+    if has_function "applied_snapshot_$_id"; then
+      _now=$("applied_snapshot_$_id" 2>/dev/null)
+    fi
+    if [ -z "$_now" ] && synth_eligible "$_id"; then
+      _now=$(synth_applied "$_id" 2>/dev/null)
+    fi
+  fi
+  [ -n "$_now" ] || _now=$("snapshot_$_id" 2>/dev/null)
   j_record_applied "$_id" "$_now"
   j_write_meta "$_id" knob "$_id"
   j_order_add "$_id"
@@ -248,7 +280,17 @@ phase_session() { # apply|revert
     # phone carried a stale knob.nav_buttons=0 from an older version, and
     # the built-in never fired.) No home up, no bar.
     case $_k in
-      home_swap|nav_buttons)
+      home_swap)
+        knob_enabled home_swap "$(knob_default home_swap)" || continue
+        # do_activate applies the home FIRST, on purpose, so the black screen
+        # is up in about a second - and this tail then applied it a SECOND
+        # time, a minute later, re-verifying a role that had not moved (the
+        # 2026-09-25 field log carries "our home is up" twice for one
+        # switch). Already applied in this session: nothing to do. A refused
+        # application (state=restored) IS retried here - that is what this
+        # tail is for.
+        [ "$(j_state home_swap)" = applied ] && continue ;;
+      nav_buttons)
         knob_enabled home_swap "$(knob_default home_swap)" || continue ;;
       *)
         knob_enabled "$_k" "$(knob_default "$_k")" || continue ;;
@@ -320,9 +362,23 @@ phase_deep() { # apply|revert
   # knob, not the sum. The core sleep is NOT applied here at all: its delay
   # is the feature, and the daemon's timer fires it (engine.sh core-sleep).
   progress "Idle: applying the asleep options"
+  # Two waves. The freeze switches - deep_doze's force-idle and data_saver's
+  # restrict-background - go LAST, after everything else is written. Field,
+  # 2026-09-25 13:14: launched together, force-idle landed while app_restrict
+  # was still mid-binder and its per-app appops calls crawled on a frozen
+  # system - 43s to apply, 20s to revert on the way back, and the whole deep
+  # phase kept the CPU busy for 48s after the screen went dark. On a
+  # responsive system the same writes take seconds; the freeze then costs a
+  # few more, and the phone reaches real idle sooner - the entire point of
+  # the phase.
   _c=0
+  for _wave in 1 2; do
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
+    case "$_k" in
+      deep_doze|data_saver_idle) [ "$_wave" = 2 ] || continue ;;
+      *)                         [ "$_wave" = 1 ] || continue ;;
+    esac
     knob_enabled "$_k" "$(knob_default "$_k")" || continue
     [ "$_k" = cores_sleep ] && continue
     if [ -f "$STATE/deep_report" ]; then
@@ -350,6 +406,7 @@ phase_deep() { # apply|revert
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
+  done
 }
 
 # Reverting a deep phase must also undo knobs that are still applied, so it
@@ -360,11 +417,22 @@ phase_deep_revert() {
   # difference was this phase, which holds the two slowest reverts on the phone
   # (the per-app background work) and used to run them one after another. The
   # knobs are independent values; each reverts in its own subshell with its own
-  # journal slice, and nothing here has an order (the CPU power mode, the one
-  # knob the governor's revert depends on, went back before this was called).
+  # journal slice (the CPU power mode, the one knob the governor's revert
+  # depends on, went back before this was called).
+  #
+  # Two waves, the mirror of the apply: the THAW first. deep_doze's unforce,
+  # data_saver's unrestrict and the boost restore give the system its speed
+  # back, and only then do the per-app reverts run - field 13:15:55, the
+  # app_restrict revert spent 20s writing appops into a still-frozen system
+  # while the 3s thaw finished beside it.
   _c=0
+  for _wave in 1 2; do
   for _k in $(knobs_reversed); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
+    case "$_k" in
+      deep_doze|data_saver_idle|ged_boost_off) [ "$_wave" = 1 ] || continue ;;
+      *)                                       [ "$_wave" = 2 ] || continue ;;
+    esac
     ( KRV_TAG=$_k
       bg_nice
       _kt0=$(now_epoch)
@@ -376,6 +444,7 @@ phase_deep_revert() {
     [ "$_c" -ge 6 ] && { wait; _c=0; }
   done
   wait
+  done
 }
 
 # ------------------------------------------------------------------ commands
@@ -440,6 +509,22 @@ do_activate() {
   sync_scripts
   j_reset
   rm -f "$STATE/sweep_full"
+
+  # Warm this run's package-list caches in the background. The block knob's
+  # before-snapshot is the first reader and used to pay the whole build -
+  # the protected-role binder round trips plus two pm lists - inside a
+  # snapshot the activation waits on. The build now runs alongside the knobs
+  # ahead of it in the pass; by the time the block knob reads, the run's
+  # cache is warm and the snapshot is a cat. Same run id, same keys, so the
+  # warm list is exactly the one the knob would build - and if the knob
+  # somehow gets there first, both builds are the same work published under
+  # a temp name and moved into place: last writer wins with identical
+  # content. Deliberately NOT reniced: at nice 19 the eight fan workers
+  # starved it and the snapshot still found a cold cache (field, 13:14) -
+  # this IS the block knob's critical path, just moved earlier.
+  if knob_enabled block_other_apps; then
+    ( blockable_packages >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
+  fi
   log "===== SPSM v3 ON (scripts $(scripts_stamp), module $(spsm_version)) ====="
 
   # The visible switch first: the user should see the black home in about a
@@ -654,6 +739,11 @@ do_screen_off() {
   # the phone the screen is on again and everything is deliberately back to
   # normal, so this line is the only honest record of what the idle state was.
   deep_report
+  # The transition is over. The progress file phase_deep wrote at its start is
+  # transition UI: left in place, the app keeps reporting "Idle: applying the
+  # asleep options" for the rest of the sleep period and beyond (field,
+  # 2026-09-25: still on disk 26 minutes after the phone woke).
+  rm -f "$PROGRESS" 2>/dev/null
   lock_release
 }
 

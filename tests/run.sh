@@ -3060,6 +3060,16 @@ make_tree; make_stubs; seed_stub_state
 enable_knobs app_restrict deep_doze
 screen_on
 run_engine activate >/dev/null 2>&1
+# The DEEP_ONCE skip is engine logic, judged from the deep report. The rig's
+# stub screen monitor occasionally fabricates a wake between the two
+# screen-offs below (t6, 2026-09-25: a spurious do_screen_on cleared the
+# report and the four checks that judge by it failed together, while the
+# section passed 3/3 isolated and the whole suite passed clean on rerun). A
+# spurious wake really does revert the knobs, so the engine is honest to
+# re-apply after one - the noise belongs to the rig, not the product. This
+# section judges the engine with the daemon out of the frame; the daemon's
+# own screen handling has its sections above.
+stop_daemons
 screen_off
 run_engine screen-off >/dev/null 2>&1
 [ "$(grep -c 'snap app_restrict' "$WORK/spsm/spsm.log")" = "1" ]
@@ -4267,6 +4277,103 @@ _u=$(sort -u "$WORK/stub/unstopped" 2>/dev/null | grep -c .)
 check "and every app it force-stopped is un-stopped again on the way out (left stopped ${_s:-0}, released ${_u:-0})" $?
 [ ! -f "$WORK/spsm/state/stopped_by_us.tsv" ]
 check "and the force-stop record is cleared, so no later exit frees a stranger's stop" $?
+
+say "91. the daily round: writes journaled, applied reads honest, one list per run"
+TAB=$(printf '\t')
+# --- A settings apply leaves a log of the writes it confirmed, and the
+# --- journal's applied reading - now built from that log instead of a second
+# --- settings pass - must agree with what the phone actually holds.
+make_tree; make_stubs; seed_stub_state
+enable_knobs haptic_off
+screen_on
+run_engine activate >"$WORK/out.act91" 2>&1
+[ -s "$WORK/spsm/journal/haptic_off.writes" ]
+check "a settings apply leaves a log of its confirmed writes" $?
+grep -q "^@system:haptic_feedback_enabled$TAB" "$WORK/spsm/journal/haptic_off.writes" 2>/dev/null
+check "the log names the target it wrote" $?
+grep -q "^@system:haptic_feedback_enabled$TAB" "$WORK/spsm/journal/haptic_off.applied" 2>/dev/null
+check "and the journal's applied reading holds the confirmed value" $?
+_ap=$(sed -n "s/^@system:haptic_feedback_enabled$TAB//p" "$WORK/spsm/journal/haptic_off.applied" 2>/dev/null | head -1)
+_lv=$(cat "$WORK/stub/settings/system.haptic_feedback_enabled" 2>/dev/null)
+# The journal stores values ENCODED (the codec's one-record-one-line rule puts
+# a literal \n on the end); the comparison decodes the same way unesc would.
+[ -n "$_ap" ] && [ "${_ap%\\n}" = "$_lv" ]
+check "which is the value the phone itself holds - the synthesis is not a claim (journal=${_ap%\\n} phone=$_lv)" $?
+run_engine deactivate >/dev/null 2>&1
+
+# --- synth_applied, unit level: replace only what was confirmed, keep the
+# --- rest exactly as found, and REFUSE the moment the log cannot account
+# --- for the outcome. A refused synthesis falls back to the real read in
+# --- knob_apply - the journal is never left empty by an optimisation.
+printf '@system:unit_x\t1\n@system:unit_y\t1\n' > "$WORK/spsm/journal/unit.orig"
+printf '@system:unit_x\t0\n' > "$WORK/spsm/journal/unit.writes"
+_u=$(run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; synth_applied unit')
+[ "$_u" = "$(printf '@system:unit_x\t0\n@system:unit_y\t1')" ]
+check "the synthesis replaces what was written and keeps what was not" $?
+printf 'FAILED\t@system:unit_x\n' > "$WORK/spsm/journal/unit.writes"
+run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; synth_applied unit' >/dev/null 2>&1
+[ $? -ne 0 ]
+check "one failed write refuses the synthesis - the knob gets the real read" $?
+: > "$WORK/spsm/journal/unit.writes"
+run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; synth_applied unit' >/dev/null 2>&1
+[ $? -ne 0 ]
+check "and an empty writes log is no answer either" $?
+rm -f "$WORK/spsm/journal/unit.orig" "$WORK/spsm/journal/unit.writes"
+
+# --- The block's applied reading comes from the record pm CONFIRMED, not
+# --- from an immediate re-read of the disk: PackageManager flushes
+# --- package-restrictions.xml seconds after answering, and the 2026-09-25
+# --- field log shows the race - 187 confirmed suspensions journalled as
+# --- "no visible change" because the after-read saw the pre-suspend file.
+printf 'com.whatsapp\t0\ncom.other.app\t0\n' > "$WORK/spsm/journal/block_other_apps.orig"
+printf 'com.whatsapp\n' > "$WORK/spsm/state/blocked_by_us.tsv"
+_u=$(run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; applied_snapshot_block_other_apps')
+[ "$_u" = "$(printf 'com.whatsapp\t1\ncom.other.app\t0')" ]
+check "the confirmed suspensions are journalled as suspended, whatever the disk says" $?
+: > "$WORK/spsm/state/blocked_by_us.tsv"
+run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; . "$SPSM_DIR/scripts/knobs.sh"; applied_snapshot_block_other_apps' >/dev/null 2>&1
+[ $? -ne 0 ]
+check "with no confirmed record the hook refuses, and the real read stands in" $?
+rm -f "$WORK/spsm/journal/block_other_apps.orig" "$WORK/spsm/state/blocked_by_us.tsv"
+
+# --- One candidate list per engine run. A single activation used to build it
+# --- three times (before-snapshot, candidates, after-snapshot), and each
+# --- build costs two pm calls, the protected round trips and a sort - 6-8s
+# --- a pop on the device. The after-read no longer lists packages at all,
+# --- and the run's one build is cached for its later callers.
+make_tree; make_stubs; seed_stub_state
+enable_knobs block_other_apps
+screen_on
+: > "$WORK/stub/calls"
+run_engine activate >"$WORK/out.act91b" 2>&1
+_n=$(grep -c '^pm list packages -3' "$WORK/stub/calls" 2>/dev/null || true)
+[ "${_n:-9}" = 1 ]
+check "an activation asks the phone for the package list ONCE (got ${_n:-?})" $?
+ls "$WORK/spsm/.tmp"/.spsm-blockable.* >/dev/null 2>&1
+check "and publishes that one build where the run's later callers read it" $?
+run_engine deactivate >/dev/null 2>&1
+
+# --- The transition UI ends with the transition: the progress file the deep
+# --- phase writes at screen-off must not outlive it (field: still on disk
+# --- 26 minutes after the phone woke, and the app kept showing it).
+make_tree; make_stubs; seed_stub_state
+screen_on
+run_engine activate >/dev/null 2>&1
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ ! -f "$WORK/spsm/state/progress" ]
+check "screen-off leaves no progress file behind" $?
+screen_on
+run_engine deactivate >/dev/null 2>&1
+
+# --- A finished session's writes scratch goes with its journal records.
+printf 'restored\n' > "$WORK/spsm/journal/unitc.state"
+: > "$WORK/spsm/journal/unitc.writes"
+: > "$WORK/spsm/journal/unitc.orig"
+run_engine activate >/dev/null 2>&1
+{ [ ! -f "$WORK/spsm/journal/unitc.writes" ] && [ ! -f "$WORK/spsm/journal/unitc.state" ]; }
+check "j_reset takes the writes scratch with the records of a finished session" $?
+run_engine deactivate >/dev/null 2>&1
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

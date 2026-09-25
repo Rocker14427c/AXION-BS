@@ -293,7 +293,8 @@ printf '\n\033[1;36m== %s\033[0m\n' "the protected-package list is built once pe
 # is the bug this test would have caught.
 SPSM_RUN_ID="codec-test-$$"
 export SPSM_RUN_ID
-rm -f "${TMPDIR:-/tmp}/.spsm-protected.$$" 2>/dev/null
+mkdir -p "$SPSM_DIR/.tmp" 2>/dev/null
+rm -f "$SPSM_DIR/.tmp/.spsm-protected.$$" 2>/dev/null
 _a=$(_protected_packages_build)
 _b=$(protected_packages)
 _c=$(protected_packages)
@@ -303,16 +304,16 @@ ok_if $? "the cached answer equals a fresh build"
 ok_if $? "and repeated calls stay identical"
 # The cache must actually be warm after the first call - otherwise it is doing
 # the work three times and merely agreeing with itself.
-[ -s "${TMPDIR:-/tmp}/.spsm-protected.$$" ]
+[ -s "$SPSM_DIR/.tmp/.spsm-protected.$$" ]
 ok_if $? "the cache survives the subshell each caller runs it in"
 # A build that yields nothing must never be published: a cached empty list
 # means "nothing is protected", and the dialer and launcher get suspended.
-printf '#%s\n' "$SPSM_RUN_ID" > "${TMPDIR:-/tmp}/.spsm-protected.$$"
+printf '#%s\n' "$SPSM_RUN_ID" > "$SPSM_DIR/.tmp/.spsm-protected.$$"
 _d=$(protected_packages)
 [ -n "$_d" ]
 ok_if $? "a stamp-only cache file is rebuilt rather than read as empty"
 # A file left by an earlier run with the same pid must not be trusted.
-printf '#stale-other-run\nbogus.package\n' > "${TMPDIR:-/tmp}/.spsm-protected.$$"
+printf '#stale-other-run\nbogus.package\n' > "$SPSM_DIR/.tmp/.spsm-protected.$$"
 _e=$(protected_packages)
 case "$_e" in *bogus.package*) false ;; *) true ;; esac
 ok_if $? "and a cache from a different run is not reused"
@@ -323,7 +324,7 @@ ok_if $? "and a cache from a different run is not reused"
 # six `mv`s failed on a temp another had already renamed away. Measured 6/6
 # misses in a six-way race, and the cache that was meant to SAVE eight binder
 # calls per caller instead added forty-five to screen-on.
-rm -f "${TMPDIR:-/tmp}/.spsm-protected.$$" 2>/dev/null
+rm -f "$SPSM_DIR/.tmp/.spsm-protected.$$" 2>/dev/null
 _perr=$( { for _n in 1 2 3 4 5 6; do ( protected_packages >/dev/null ) & done; wait; } 2>&1 )
 [ -z "$_perr" ]
 ok_if $? "six parallel builders produce no errors (got: $_perr)"
@@ -332,7 +333,7 @@ ok_if $? "six parallel builders produce no errors (got: $_perr)"
 _pw=$(protected_packages)
 case "$_pw" in *com.android.dialer*) true ;; *) false ;; esac
 ok_if $? "and the surviving cache is a complete list"
-rm -f "${TMPDIR:-/tmp}"/.spsm-protected.* 2>/dev/null
+rm -f "$SPSM_DIR/.tmp"/.spsm-protected.* 2>/dev/null
 
 printf '\n  %d checks, %d failed\n\n' "$((PASS + FAIL))" "$FAIL"
 [ "$FAIL" = 0 ] || exit 1

@@ -242,6 +242,10 @@ drain_report() { # drain_report - say what the sleep cost
   [ -n "$_l0" ] && [ -n "$_l1" ] && [ -n "$_t0" ] || return 0
   _mins=$(( (_t1 - _t0) / 60 ))
   _drop=$(( _l0 - _l1 ))
+  # A charging phone "drains" upward: the -60%/h this logged on 2026-09-25
+  # while the phone sat plugged in is noise, not a measurement. A level that
+  # came back up says nothing about what the sleep cost - stay quiet.
+  [ "$_drop" -ge 0 ] || return 0
   if [ "$_mins" -ge 1 ]; then
     _rate=$(awk -v d="$_drop" -v m="$_mins" 'BEGIN { printf "%.2f", d * 60 / m }')
   else
