@@ -198,9 +198,54 @@ release notes when the on-device benchmark round completes.
 
 ### 6.3 Still open
 
-- 4d gestures: Plan D (native evdev daemon: swipe-up → HOME keyevent,
-  hold → SpsmRecentsActivity, engine nav conditional on cfg nav_mode +
-  daemon alive) - census item 4 facts are in section 1 of the journal;
-  build after the perf round lands on the device.
 - Post-tool census: decide whether any remaining pass cost justifies more
   batching (recents list verb, settings verb) - only if measured.
+- 4d device verification: the recognizer is built, unit-proven on the host
+  (synthetic touches) and wired through the rig (740 checks green), but the
+  on-phone proof - a real finger, a real evdev device, the recents activity
+  actually coming up - waits for the tunnel.
+
+### 6.4 4d shipped as Plan D: spsm-gesturemon (2026-09-26)
+
+The native evdev daemon, built the day after the perf round landed:
+
+1. **native/spsm-gesturemon.c** - one static binary (~58KB, zig cc, both
+   ABIs, publish_native stages it beside spsm-screenmon). poll() over three
+   fds: the touchscreen evdev (auto-discovered via BTN_TOUCH +
+   ABS_MT_POSITION_*, screen size from the panel's own absinfo maximums), a
+   timerfd for the hold, a signalfd for the exit. Zero CPU between touches,
+   the screenmon pattern. NO grab, NO uinput (4e stays rejected): it only
+   READS events, so every normal touch keeps working and nothing outside a
+   session changes. Recognition: swipe up from the bottom band (6% of screen
+   height) with dy >= 5% and |dx|*2 <= dy fires home (`cmd input keyevent
+   3`); the same swipe held 350ms with dy >= 40px fires recents
+   (SpsmRecentsActivity) while the finger is still down, once per touch;
+   500ms cooldown swallows the bounce. `--script` mode feeds synthetic
+   touches through the SAME state machine the device path uses - that is how
+   the suite proves the semantics without a phone (section 95).
+2. **lib.sh start_gesturemon/stop_gesturemon** - pid file under state/, log
+   to $SPSM_DIR/gesturemon.log, binary from $SPSM_BIN with the module-tree
+   fallback (the rig's seam), SPSM_NO_GESTUREMON kill switch mirroring
+   screenmon's. Gates, each with its own log line: cfg gesture_nav (default
+   1), navigation_mode == 2, and launcher3 in blocked_by_us.tsv - the
+   recognizer only takes the edge when WE are the reason the system's owner
+   of it is gone. Commands are config-overridable
+   (gesture_home_cmd/gesture_recents_cmd).
+3. **engine.sh** - start at the end of do_activate (after the session knobs:
+   blocked_by_us.tsv is the gate's input), ensure-not-restart on the
+   "already on" path, stop first thing in do_deactivate so the launcher's
+   TouchInteractionService reclaims the edge before it is unblocked.
+4. **apply_nav_buttons gained the gesture decision.** The knob is built into
+   the power-saving home (the owner's earlier instruction: three buttons for
+   the session), which on a gesture phone means the bar replaces the very
+   edge this ask is about. Now: a phone already on gestures KEEPS them for
+   the session when gesture_nav allows and the recognizer binary exists -
+   nothing is written, so the exit has nothing to undo (return 2, the
+   no-change answer). No binary, or gesture_nav=0, or a phone that was never
+   on gestures: the v3.9.0 three-button path, unchanged. Buttons and the
+   recognizer can never own the same edge at once; sections 94's mini
+   sessions prove both directions.
+
+Suite: run.sh 740 checks / 95 sections (94: wiring, gates, pid lifecycle,
+nav interplay; 95: recognition semantics on the host build, gated on the
+binary like the daemon suite gates screenmon) + daemon suite 19/19, green.

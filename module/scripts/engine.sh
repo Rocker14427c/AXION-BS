@@ -553,6 +553,7 @@ do_activate() {
       phase_deep apply
     fi
     start_daemon
+    start_gesturemon
     progress "On"
   rm -f "$PROGRESS"
     lock_release
@@ -600,6 +601,10 @@ do_activate() {
   # any more - v3.7.5 removed cap_always together with the frequency ceiling.
 
   start_daemon
+  # The gesture edge: after the session knobs (blocked_by_us.tsv decides
+  # whether WE own the bottom edge now) and off the activation's critical
+  # path - it is one fork of a poll()-based native helper.
+  start_gesturemon
   tmp_sweep
   # The owner's launcher does not re-read suspension states on its own, so
   # with this mode's home OFF the blocked apps kept full-colour icons in the
@@ -627,6 +632,10 @@ do_deactivate() {
   _exit_t0=$(now_epoch)
   sync_scripts
   log "===== SPSM v3 OFF (scripts $(scripts_stamp), module $(spsm_version)) ====="
+  # Give the bottom edge back first: the launcher is about to be unblocked and
+  # its TouchInteractionService will own the gestures again - two recognizers
+  # would double-fire home.
+  stop_gesturemon
   progress "Restoring"
 
   # Two facts about the session that is ending, taken before anything is put

@@ -25,7 +25,7 @@ mkdir -p "$OUT"
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 
-PROGRAMS=(spsm-screenmon)
+PROGRAMS=(spsm-screenmon spsm-gesturemon)
 
 # --------------------------------------------------------------- toolchain
 CC_KIND=""

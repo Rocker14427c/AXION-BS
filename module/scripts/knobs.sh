@@ -2231,6 +2231,19 @@ apply_nav_buttons() {
     log "nav: the phone already uses three-button navigation"
     return 0
   fi
+  # The gesture decision (the owner's ask of 2026-09-26: swipe up must reach
+  # this mode's home, swipe up and hold its recents). A phone that is ALREADY
+  # on gestures keeps them for the session when the config allows it and the
+  # recognizer binary is there to own the bottom edge - spsm-gesturemon, see
+  # lib.sh. Without the binary this falls through to the three-button switch
+  # below: keeping gesture mode with no recognizer and a stopped launcher is
+  # exactly the dead edge v3.9.0 had. gesture_nav=0 is the owner's switch back
+  # to the v3.9.0 behavior, buttons and all. Nothing is written on this path,
+  # so the exit has nothing of ours to undo (return 2, the no-change answer).
+  if [ "$_was" = 2 ] && [ "$(cfg gesture_nav 1)" = 1 ] && gesturemon_binary >/dev/null 2>&1; then
+    log "nav: keeping gesture navigation - spsm-gesturemon owns the bottom edge this session"
+    return 2
+  fi
   if [ -z "$_was_overlay" ] && [ -z "$_was" ]; then
     log "nav: this phone will not say which navigation it uses, so it is left alone"
     return 2

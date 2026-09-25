@@ -1412,3 +1412,74 @@ pending_knobs() {
   case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
   echo "$_n"
 }
+
+# ------------------------------------------------------- gesturemon (v3.10)
+# The gesture-nav problem (owner, 2026-09-25): with SPSM on, swipe-up and
+# swipe-up-hold did nothing - the launcher's TouchInteractionService owns the
+# bottom edge, and this mode force-stops the launcher (block_other_apps;
+# launcher3 is NOT in protected_packages, verified in knobs.sh). The
+# screen-edge work is done by spsm-gesturemon instead: a ~60KB static native
+# daemon (native/spsm-gesturemon.c) that poll()s the touchscreen evdev - zero
+# CPU between touches - and recognizes two gestures itself:
+#   swipe up from the bottom band  -> home    (cmd input keyevent 3)
+#   swipe up and hold in the band  -> recents (our SpsmRecentsActivity)
+# No input grab, no uinput: it only READS events, so every normal touch keeps
+# working exactly as before, and Pulse/launcher behaviour outside SPSM is
+# untouched (the daemon only runs while the mode is on). Plan D of the
+# gesture discussion in docs/ARCH-PERF-PLAN.md section 4d.
+# The recognizer binary this phone would run, or empty: the published copy for
+# the proven ABI first ($SPSM_BIN, publish_native), the module tree as the
+# fallback (a run before any publish, and the test rig).
+gesturemon_binary() {
+    _gb="${SPSM_BIN:+$SPSM_BIN/spsm-gesturemon}"
+    if [ -z "$_gb" ] || [ ! -x "$_gb" ]; then
+        _gb="${SCRIPT_DIR:+$SCRIPT_DIR/spsm-gesturemon}"
+    fi
+    [ -n "$_gb" ] && [ -x "$_gb" ] && { printf '%s' "$_gb"; return 0; }
+    return 1
+}
+
+start_gesturemon() {
+    [ -n "${SPSM_NO_GESTUREMON:-}" ] && return 0
+    # Already running: leave it alone (activate's "already on" path calls this
+    # to ENSURE, not to restart).
+    if [ -s "$STATE/gesturemon.pid" ]; then
+        _gpid=$(cat "$STATE/gesturemon.pid" 2>/dev/null)
+        if [ -n "$_gpid" ] && kill -0 "$_gpid" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$STATE/gesturemon.pid"
+    fi
+    [ "$(cfg gesture_nav 1)" = "1" ] || { log "gesturemon: off (gesture_nav=0)"; return 0; }
+    _gnav=$(sget secure navigation_mode 2)
+    if [ "$_gnav" != "2" ]; then
+        log "gesturemon: navigation_mode=$_gnav (gestures need 2) - skipped"
+        return 0
+    fi
+    # Only take the edge over when WE are the reason the system gesture owner
+    # is gone: launcher3 blocked by this session. If the owner kept it
+    # protected (or block_other_apps is off), Pulse still owns the edge and a
+    # second recognizer would double-fire home.
+    if ! grep -qx com.android.launcher3 "$STATE/blocked_by_us.tsv" 2>/dev/null; then
+        log "gesturemon: launcher not stopped by this session - system gestures own the edge; skipped"
+        return 0
+    fi
+    _gbin=$(gesturemon_binary) || { log "gesturemon: binary not found - skipped"; return 0; }
+    _ghome=$(cfg gesture_home_cmd 'cmd input keyevent 3')
+    _grec=$(cfg gesture_recents_cmd 'cmd activity start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity')
+    nohup "$_gbin" --home-cmd "$_ghome" --recents-cmd "$_grec" \
+        >>"$SPSM_DIR/gesturemon.log" 2>&1 &
+    echo $! > "$STATE/gesturemon.pid"
+    log "gesturemon: started (pid $(cat "$STATE/gesturemon.pid")) - swipe up = home, swipe up + hold = recents"
+    return 0
+}
+
+stop_gesturemon() {
+    [ -s "$STATE/gesturemon.pid" ] || return 0
+    _gpid=$(cat "$STATE/gesturemon.pid" 2>/dev/null)
+    rm -f "$STATE/gesturemon.pid"
+    [ -n "$_gpid" ] || return 0
+    kill -TERM "$_gpid" 2>/dev/null || true
+    log "gesturemon: stopped"
+    return 0
+}

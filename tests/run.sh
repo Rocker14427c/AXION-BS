@@ -4580,6 +4580,217 @@ run_engine verify > "$WORK/out.v93" 2>&1
 grep -q 'drift=0' "$WORK/out.v93"
 check "93 ends with no drift" $?
 
+# --------------------------------------------------------------------------
+# 94. gesturemon wiring: the mode owns the bottom edge while it is on.
+#     The owner's phone (2026-09-25): swipe-up and swipe-up-hold did nothing
+#     under SPSM - the launcher's TouchInteractionService owns the gestures
+#     and block_other_apps force-stops the launcher (it is NOT in
+#     protected_packages). start_gesturemon (lib.sh) hands the edge to the
+#     native recognizer for the length of the session, and only when the
+#     three facts that make it safe are true: gesture navigation is the
+#     phone's mode, the config allows it, and WE stopped the launcher - if
+#     Pulse still owns the edge, a second recognizer would double-fire home.
+#     The rig drives it with a fake binary; recognition itself is section 95.
+# --------------------------------------------------------------------------
+say "94. gesturemon: started with the session, gated, and stopped on exit"
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/spsm/bin"
+cat > "$WORK/spsm/bin/spsm-gesturemon" <<FAKE
+#!/bin/sh
+printf 'ARGS %s\n' "\$*" >> "$WORK/gmon.args"
+exec sleep 300
+FAKE
+chmod 755 "$WORK/spsm/bin/spsm-gesturemon"
+# The rig's launcher is a third-party package so the block knob reaches it
+# without block_system_apps; what matters is the gate, not the store it came
+# from.
+printf 'com.android.launcher3\ncom.whatsapp\n' > "$WORK/stub/pkgs3"
+# nav_buttons (the owner's earlier instruction) would switch the session to the
+# system's three-button bar - but a phone already on gestures KEEPS them now
+# that the recognizer owns the edge (apply_nav_buttons, gesture_nav config).
+# This section is that owner: gestures kept, launcher stopped, gesturemon up.
+enable_knobs block_other_apps
+: > "$WORK/gmon.args"
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+grep -qx com.android.launcher3 "$WORK/spsm/state/blocked_by_us.tsv"
+check "the session stopped the launcher" $?
+grep -q 'nav: keeping gesture navigation' "$WORK/spsm/spsm.log" && \
+  [ "$(cat "$WORK/stub/settings/secure.navigation_mode")" = "2" ]
+check "the gesture phone keeps gestures - no three-button switch" $?
+grep -q 'gesturemon: started' "$WORK/spsm/spsm.log"
+check "activate started the recognizer" $?
+_gpid=$(cat "$WORK/spsm/state/gesturemon.pid" 2>/dev/null)
+[ -n "$_gpid" ] && kill -0 "$_gpid" 2>/dev/null
+check "the recognizer is alive under its pid file" $?
+grep -q -- '--home-cmd' "$WORK/gmon.args" && grep -q 'SpsmRecentsActivity' "$WORK/gmon.args"
+check "the commands it fires are the config defaults" $?
+# The "already on" path ENSURES, it does not restart: same pid afterwards.
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+_gpid2=$(cat "$WORK/spsm/state/gesturemon.pid" 2>/dev/null)
+[ -n "$_gpid2" ] && [ "$_gpid2" = "$_gpid" ] && kill -0 "$_gpid" 2>/dev/null
+check "re-activate keeps the running recognizer" $?
+# The exit gives the edge back before the launcher is unblocked.
+run_engine deactivate >/dev/null 2>&1
+grep -q 'gesturemon: stopped' "$WORK/spsm/spsm.log"
+check "deactivate stopped the recognizer" $?
+[ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "the pid file is gone" $?
+kill -0 "$_gpid" 2>/dev/null; [ $? -ne 0 ]
+check "the process is gone" $?
+# The other owner's phone: no recognizer binary (not installed, wrong ABI) -
+# keeping gesture mode with a stopped launcher and nothing on the edge is the
+# dead swipe of v3.9.0, so the session falls back to the three-button bar and
+# the buttons own the edge.
+make_tree; make_stubs; seed_stub_state
+printf 'com.android.launcher3\ncom.whatsapp\n' > "$WORK/stub/pkgs3"
+enable_knobs block_other_apps
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+grep -q 'navigation_mode=0' "$WORK/spsm/spsm.log" && [ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "without the binary, the session takes the three-button bar" $?
+run_engine deactivate >/dev/null 2>&1
+# And the owner's switch back to the v3.9.0 behavior: gesture_nav=0 with the
+# binary present - buttons, and the recognizer stays down.
+make_tree; make_stubs; seed_stub_state
+mkdir -p "$WORK/spsm/bin"
+cat > "$WORK/spsm/bin/spsm-gesturemon" <<FAKE2
+#!/bin/sh
+exec sleep 300
+FAKE2
+chmod 755 "$WORK/spsm/bin/spsm-gesturemon"
+printf 'com.android.launcher3\ncom.whatsapp\n' > "$WORK/stub/pkgs3"
+enable_knobs block_other_apps
+echo "gesture_nav=0" >> "$WORK/spsm/config"
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+[ "$(cat "$WORK/stub/settings/secure.navigation_mode")" = "0" ] && \
+  grep -q 'gesturemon: off (gesture_nav=0)' "$WORK/spsm/spsm.log" && \
+  [ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "gesture_nav=0 returns the phone to the button bar" $?
+run_engine deactivate >/dev/null 2>&1
+# --- the gates, one at a time, through the library directly. The tree was
+# rebuilt for the three-button case, so the fake binary is laid again.
+mkdir -p "$WORK/spsm/bin"
+cat > "$WORK/spsm/bin/spsm-gesturemon" <<FAKE3
+#!/bin/sh
+printf 'ARGS %s\n' "\$*" >> "$WORK/gmon.args"
+exec sleep 300
+FAKE3
+chmod 755 "$WORK/spsm/bin/spsm-gesturemon"
+# A clean config: the mini-sessions above left gesture_nav=0 in theirs, and
+# every gate below must fail for the reason it is testing, not for a leftover.
+: > "$WORK/spsm/config"
+echo com.android.launcher3 > "$WORK/spsm/state/blocked_by_us.tsv"
+_gstart() { run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; start_gesturemon'; }
+_gstop()  { run_shell_env sh -c '. "$SPSM_DIR/scripts/lib.sh"; stop_gesturemon'; }
+printf '%s' 0 > "$WORK/stub/settings/secure.navigation_mode"
+: > "$WORK/spsm/spsm.log"
+_gstart >/dev/null 2>&1
+grep -q 'navigation_mode=0' "$WORK/spsm/spsm.log" && [ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "button navigation: the edge stays with the system" $?
+printf '%s' 2 > "$WORK/stub/settings/secure.navigation_mode"
+echo "gesture_nav=0" >> "$WORK/spsm/config"
+: > "$WORK/spsm/spsm.log"
+_gstart >/dev/null 2>&1
+grep -q 'gesture_nav=0' "$WORK/spsm/spsm.log" && [ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "the config switch turns the feature off" $?
+: > "$WORK/spsm/config"
+: > "$WORK/spsm/state/blocked_by_us.tsv"
+: > "$WORK/spsm/spsm.log"
+_gstart >/dev/null 2>&1
+grep -q 'launcher not stopped' "$WORK/spsm/spsm.log" && [ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "with Pulse alive, no second recognizer" $?
+echo com.android.launcher3 > "$WORK/spsm/state/blocked_by_us.tsv"
+chmod 000 "$WORK/spsm/bin/spsm-gesturemon"
+: > "$WORK/spsm/spsm.log"
+_gstart >/dev/null 2>&1
+grep -q 'binary not found' "$WORK/spsm/spsm.log" && [ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "without the binary the session still runs" $?
+chmod 755 "$WORK/spsm/bin/spsm-gesturemon"
+: > "$WORK/spsm/spsm.log"
+SPSM_NO_GESTUREMON=1
+export SPSM_NO_GESTUREMON
+_gstart >/dev/null 2>&1
+unset SPSM_NO_GESTUREMON
+[ ! -f "$WORK/spsm/state/gesturemon.pid" ] && ! grep -q 'gesturemon' "$WORK/spsm/spsm.log"
+check "the kill switch silences it entirely" $?
+# The owner's overrides reach the binary's argv (the rig's seam, the phone's
+# escape hatch).
+echo "gesture_home_cmd=input keyevent KEYCODE_HOME" >> "$WORK/spsm/config"
+: > "$WORK/gmon.args"
+_gstart >/dev/null 2>&1
+grep -q 'KEYCODE_HOME' "$WORK/gmon.args"
+check "config can replace the home command" $?
+_gstop >/dev/null 2>&1
+[ ! -f "$WORK/spsm/state/gesturemon.pid" ]
+check "stop clears the pid file" $?
+run_engine verify > "$WORK/out.v94" 2>&1
+grep -q 'drift=0' "$WORK/out.v94"
+check "94 ends with no drift" $?
+
+# --------------------------------------------------------------------------
+# 95. gesturemon recognition: the host build of the real binary, fed the
+#     synthetic touches of --script mode (the same recognizer state machine
+#     the device's evdev events go through, byte for byte). Semantics: a
+#     quick swipe up from the bottom band is HOME; the same swipe held is
+#     RECENTS while the finger is still down; everything else - horizontal
+#     drags, swipes that start above the band, short flicks - is the user's
+#     own scrolling and must not fire. Gated on the host binary the way the
+#     daemon suite gates its screenmon checks.
+# --------------------------------------------------------------------------
+say "95. gesturemon: the recognizer reads a swipe, a hold, and nothing else"
+GMON="$REPO/build/native/host/spsm-gesturemon"
+if [ -x "$GMON" ]; then
+  make_tree; make_stubs
+  mkdir -p "$WORK/gt"
+  # screen 2400 tall -> band=144 (6%), min_dy=120 (5%), hold 350ms/40px
+  printf '0 500 2350 down\n40 500 2300 move\n80 502 2240 move\n140 503 2180 up\n' > "$WORK/gt/swipe"
+  printf '0 500 2350 down\n100 500 2290 move\n400 500 2280 move\n700 500 2280 up\n' > "$WORK/gt/hold"
+  printf '0 100 2380 down\n80 400 2370 move\n160 700 2360 up\n'                  > "$WORK/gt/side"
+  printf '0 500 1500 down\n80 500 1380 move\n160 500 1250 up\n'                  > "$WORK/gt/above"
+  printf '0 500 2380 down\n60 500 2330 up\n'                                      > "$WORK/gt/flick"
+  printf '0 500 2350 down\n60 500 2200 up\n160 500 2350 down\n220 500 2200 up\n' > "$WORK/gt/twice"
+  _grun() { # _grun script out [extra args...]
+    _gs=$1; _go=$2; shift 2
+    : > "$_go"
+    "$GMON" --script "$WORK/gt/$_gs" --screen-h 2400 --band 144 --min-dy 120 \
+      --hold-dy 40 --hold-ms 350 "$@" \
+      --home-cmd "echo HOME >> $_go" --recents-cmd "echo RECENTS >> $_go" --quiet
+    return $?
+  }
+  _grun swipe "$WORK/gt/o1"
+  [ "$(cat "$WORK/gt/o1")" = "HOME" ]
+  check "a quick swipe up from the band is home" $?
+  _grun hold "$WORK/gt/o2"
+  [ "$(cat "$WORK/gt/o2")" = "RECENTS" ]
+  check "a swipe up and hold is recents - once, and not home on release" $?
+  _grun side "$WORK/gt/o3"
+  [ ! -s "$WORK/gt/o3" ]
+  check "a horizontal drag in the band fires nothing" $?
+  _grun above "$WORK/gt/o4"
+  [ ! -s "$WORK/gt/o4" ]
+  check "a swipe that starts above the band fires nothing" $?
+  _grun flick "$WORK/gt/o5"
+  [ ! -s "$WORK/gt/o5" ]
+  check "a short flick below the minimum fires nothing" $?
+  _grun twice "$WORK/gt/o6" --cooldown-ms 500
+  [ "$(cat "$WORK/gt/o6")" = "HOME" ]
+  check "the cooldown swallows the bounce" $?
+  _grun swipe "$WORK/gt/o7" --cooldown-ms 0
+  check "a clean script run exits zero" $?
+  _gargs=0
+  # script mode without the screen size, and an unknown flag: both are the
+  # binary refusing to guess, not a run that found no device (that is 1).
+  "$GMON" --script "$WORK/gt/swipe" --band 10 >/dev/null 2>&1; [ $? -eq 2 ] && _gargs=1
+  "$GMON" --no-such-flag >/dev/null 2>&1; [ $? -eq 2 ] && _gargs=$((_gargs + 1))
+  [ "$_gargs" = "2" ]
+  check "bad arguments exit 2 instead of guessing" $?
+else
+  say "    (skipped: no host binary - build with: bash native/build.sh --host)"
+fi
+
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" = "0" ] || exit 1
