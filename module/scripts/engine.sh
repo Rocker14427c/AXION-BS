@@ -372,6 +372,7 @@ phase_deep() { # apply|revert
   # few more, and the phone reaches real idle sooner - the entire point of
   # the phase.
   _c=0
+  _deep_grace=$(cfg deep_grace_secs 75)
   for _wave in 1 2; do
   for _k in $(knobs_all); do
     [ "$(knob_scope "$_k")" = "deep" ] || continue
@@ -387,6 +388,16 @@ phase_deep() { # apply|revert
           log "idle: $_k is already in place from this idle period - not redoing it"
           continue ;;
       esac
+    fi
+    # The deep grace (census of 2026-09-25): the two per-app knobs are ~100
+    # binder calls a screen-off, and with a 15-second screen timeout they ran
+    # 48 times in eight minutes - ~4,100 calls, most of what the mode burned
+    # while idle, all for screen-offs nobody used. With a grace they wait: the
+    # daemon's timer fires `engine deep-restrict` once the screen has STAYED
+    # off for deep_grace_secs. 0 = the v3.9.0 behavior: everything at the
+    # transition.
+    if [ "$_deep_grace" -gt 0 ] 2>/dev/null; then
+      case "$_k" in app_restrict|rom_bg_off) continue ;; esac
     fi
     # SIX at a time, reniced: two at a time was the v3.7.8 answer to the load
     # spike, and the owner's v3.7.10 log shows what it cost - app_restrict
@@ -483,11 +494,54 @@ do_core_sleep() {
   return 0
 }
 
+# The deferred half of the deep phase: the two per-app knobs (app_restrict,
+# rom_bg_off), fired by the daemon's deep_grace_secs timer once the screen has
+# stayed off that long (see phase_deep for the census behind it). Same shape
+# and same self-defence as do_core_sleep: whoever fires it arms the marker,
+# the wake disarms by removing it, the journal is the truth about what is
+# already applied, and a wake that lands mid-apply is answered right here.
+do_deep_restrict() {
+  [ -f "$ACTIVE" ] || return 0
+  [ -f "$STATE/deep_restricted" ] || : > "$STATE/deep_restricted" 2>/dev/null
+  if [ "$(screen_state)" != "off" ]; then
+    rm -f "$STATE/deep_restricted" 2>/dev/null
+    return 0
+  fi
+  _grace=$(cfg deep_grace_secs 75)
+  log "idle ${_grace}s: the screen stayed off - applying the per-app restrictions"
+  for _k in app_restrict rom_bg_off; do
+    knob_enabled "$_k" "$(knob_default "$_k")" || continue
+    # Applied already in this idle period (an earlier fire): re-recording
+    # would save our own values as the user's originals.
+    case "$(j_state "$_k")" in applied) continue ;; esac
+    ( KRV_TAG=$_k
+      bg_nice
+      _kt0=$(now_epoch)
+      knob_apply "$_k"
+      log "  restrict knob $_k: applied in $(( $(now_epoch) - _kt0 ))s" ) &
+  done
+  wait
+  # The wake may have landed while the restrictions were going in - undo them
+  # here, now, rather than leave a phone in somebody's hand restricted. (The
+  # wake's own phase_deep_revert may do the same; knob_revert is idempotent
+  # per journal slice, exactly as in the cores_sleep case.)
+  if [ ! -f "$STATE/deep_restricted" ] || [ "$(screen_state)" != "off" ]; then
+    for _k in app_restrict rom_bg_off; do
+      case "$(j_state "$_k")" in
+        applied) ( KRV_TAG=$_k bg_nice knob_revert "$_k" >/dev/null 2>&1 ) & ;;
+      esac
+    done
+    wait
+  fi
+  return 0
+}
+
 do_activate() {
   lock_acquire || { log "activate: busy"; return 1; }
   progress "Starting"
   rm -f "$STATE/doze_forced"
   rm -f "$STATE/cores_asleep"
+  rm -f "$STATE/deep_restricted"
 
   if [ -f "$ACTIVE" ]; then
     # Already on. Re-applying every knob here costs the phone a whole pass - 25
@@ -653,6 +707,7 @@ do_deactivate() {
   # The one-minute core timer is disarmed with the session, and the sweep
   # remembers nothing into the next one.
   rm -f "$STATE/cores_asleep"
+  rm -f "$STATE/deep_restricted"
   rm -f "$STATE/sweep_full"
 
   # The CPU power mode is NOT touched on the way out - and not on the way in
@@ -773,6 +828,7 @@ do_screen_on() {
   # The governor and the GPU floor are session knobs: a wake does not lift
   # them - "all the time is good enough", as the owner put it.
   rm -f "$STATE/cores_asleep"
+  rm -f "$STATE/deep_restricted"
   knob_revert cores_sleep
   # The rest, SIX AT A TIME and reniced. Wide open, the wake once asked the
   # phone for every pm/appops call it owed at the same instant and the owner
@@ -1045,7 +1101,8 @@ do_keep() {
             drop_line "$STATE/blocked_by_us.tsv" "$_p"
           fi
           if [ -f "$STOPPED_BY_US" ] && grep -qxF "$_p" "$STOPPED_BY_US" 2>/dev/null; then
-            pm unstop --user 0 "$_p" >/dev/null 2>&1
+            cmd package unstop --user 0 "$_p" >/dev/null 2>&1 \
+              || pm unstop --user 0 "$_p" >/dev/null 2>&1
             drop_line "$STOPPED_BY_US" "$_p"
             log "keep $_p: un-stopped, so it can receive pushes again"
           fi
@@ -1341,6 +1398,7 @@ case "$CMD" in
   screen-on)  do_screen_on ;;
   # The daemon's one-minute timer (see daemon.sh): cores 2-7 go to sleep.
   core-sleep) do_core_sleep ;;
+  deep-restrict) do_deep_restrict ;;
   # The recovery command: release everything in the six slots and the record.
   six-restore) do_six_restore ;;
   keep) do_keep "$@" ;;

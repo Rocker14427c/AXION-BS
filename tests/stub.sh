@@ -110,7 +110,7 @@ recents_pkg_of() { # recents_pkg_of <id>
 
 case "$CMD" in
   settings)
-    log_call "$@"
+    [ -n "$STUB_NOLOG" ] || log_call "$@"
     case "$1" in
       get)
         # printf, not echo: dash's echo reinterprets backslashes inside the
@@ -216,7 +216,7 @@ case "$CMD" in
     ;;
 
   pm)
-    log_call "$@"
+    [ -n "$STUB_NOLOG" ] || log_call "$@"
     case "$1" in
       list)
         # pm list packages -3  -> the third-party apps
@@ -291,7 +291,7 @@ case "$CMD" in
     ;;
 
   am)
-    log_call "$@"
+    [ -n "$STUB_NOLOG" ] || log_call "$@"
     case "$1" in
       get-standby-bucket) cat "$S/bucket/$2" 2>/dev/null || echo 10 ;;
       task)
@@ -390,6 +390,19 @@ case "$CMD" in
   cmd)
     log_call "$@"
     case "$1 $2" in
+      # The module prefers `cmd <service>` over the wrappers: on the phone,
+      # `am` and `pm` are shell wrappers that exec exactly these services and
+      # `settings` is a JVM around the same provider - the native path is a
+      # third of the cost under load (census of 2026-09-25). The stub answers
+      # from the same store either way, so the call is handed to the branch
+      # that models the service, failure injections included. STUB_NOLOG keeps
+      # the call log at one line per call, naming what really ran.
+      "settings get"|"settings put"|"settings delete")
+        _s=$0; shift; CMD_OVERRIDE=settings STUB_NOLOG=1 exec sh "$_s" "$@" ;;
+      "activity get-standby-bucket"|"activity set-standby-bucket"|"activity force-stop"|"activity make-uid-idle"|"activity kill-all"|"activity start")
+        _s=$0; shift; CMD_OVERRIDE=am STUB_NOLOG=1 exec sh "$_s" "$@" ;;
+      "package suspend"|"package unsuspend"|"package unstop"|"package list"|"package enable"|"package disable")
+        _s=$0; shift; CMD_OVERRIDE=pm STUB_NOLOG=1 exec sh "$_s" "$@" ;;
       # The navigation bar is drawn by an exclusive RRO, and the ROM keeps the
       # secure setting in step with it. Both are modelled by one value here, the
       # way the phone behaves: 0 three-button, 1 two-button, 2 gesture.

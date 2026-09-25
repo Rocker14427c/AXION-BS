@@ -159,7 +159,7 @@ recents_remove() { # recents_remove <task-id> [package]
       *[!A-Za-z0-9._]*)
         log "recents: refusing a package that is not a package name" ;;
       *)
-        if has am && am force-stop "$_pkg" >/dev/null 2>&1 && ! task_exists "$_id"; then
+        if has am && am_write force-stop "$_pkg" && ! task_exists "$_id"; then
           log "recents: task $_id closed by stopping $_pkg"
           return 0
         fi ;;

@@ -42,6 +42,15 @@ _CORES_AFTER=$(cfg cores_sleep_after_secs 60)
 _ASLEEP_NAP=$(cfg asleep_nap_secs 3)
 _CORES_EVERY=$((_CORES_AFTER / _ASLEEP_NAP))
 [ "$_CORES_EVERY" -lt 1 ] 2>/dev/null && _CORES_EVERY=1
+# The deep-grace timer: how long the screen must stay off before the per-app
+# restrictions (app_restrict, rom_bg_off) are applied. The census of
+# 2026-09-25 caught them re-running on EVERY short screen-off - 48 passes in
+# eight minutes under a 15-second timeout, ~4,100 binder calls, most of the
+# CPU the mode burned while idle. 0 disables the wait (the v3.9.0 behavior:
+# they apply at the transition itself).
+_RESTRICT_AFTER=$(cfg deep_grace_secs 75)
+_RESTRICT_EVERY=$((_RESTRICT_AFTER / _ASLEEP_NAP))
+[ "$_RESTRICT_EVERY" -lt 1 ] 2>/dev/null && _RESTRICT_EVERY=1
 off_since=0
 
 # The backstop wait used when the monitor is supplying events. It must not be
@@ -461,6 +470,23 @@ while true; do
      && knob_enabled cores_sleep "$(knob_default cores_sleep)"; then
     : > "$STATE/cores_asleep" 2>/dev/null
     sh "$SCRIPT_DIR/engine.sh" core-sleep >>"$LOG" 2>&1 3<&- 4<&- &
+  fi
+
+  # The deep-grace timer, the same shape as the minute timer above: once the
+  # screen has been off continuously for deep_grace_secs, fire the deferred
+  # per-app restrictions. engine deep-restrict re-checks the mode, the screen
+  # and the journal itself, so a wake that lands during the firing simply
+  # wins; the wake also removes the marker, which re-arms the wait for the
+  # next screen-off.
+  if [ "$_RESTRICT_AFTER" -gt 0 ] 2>/dev/null \
+     && [ "$now" = "off" ] && [ "$off_since" != 0 ] \
+     && { _mon_alive || [ $((ticks % _RESTRICT_EVERY)) -eq 0 ]; } \
+     && [ ! -f "$STATE/deep_restricted" ] \
+     && [ "$(now_epoch)" -ge "$((off_since + _RESTRICT_AFTER))" ] \
+     && { knob_enabled app_restrict "$(knob_default app_restrict)" \
+          || knob_enabled rom_bg_off "$(knob_default rom_bg_off)"; }; then
+    : > "$STATE/deep_restricted" 2>/dev/null
+    sh "$SCRIPT_DIR/engine.sh" deep-restrict >>"$LOG" 2>&1 3<&- 4<&- &
   fi
 
   # The heartbeat. While asleep it is the proof that the mode is awake and

@@ -370,7 +370,7 @@ snapshot_home_swap() {
 }
 # Returns 2 to tell the engine the change was put back by us (see knob_apply).
 apply_home_swap() {
-  pm enable --user 0 dev.axion.spsm/.SpsmHomeActivity >/dev/null 2>&1
+  pm_run enable --user 0 dev.axion.spsm/.SpsmHomeActivity
   set_home dev.axion.spsm
   launch_home
 
@@ -448,11 +448,11 @@ refresh_launcher() { # refresh_launcher <package>
     *[!A-Za-z0-9._]*) return 0 ;;
   esac
   has am || return 0
-  am force-stop "$_pkg" >/dev/null 2>&1
+  am_write force-stop "$_pkg"
   log "launcher refreshed: $_pkg restarted, so its app list is rebuilt from the phone as it is now"
   # Straight back up: a force-stopped home would otherwise leave the phone with
   # nothing on screen until the next press of Home.
-  am start -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null 2>&1
+  am_write start -a android.intent.action.MAIN -c android.intent.category.HOME
 }
 
 restore_home_swap() {
@@ -477,7 +477,7 @@ restore_home_swap() {
   # manifest ships it disabled, and an unreadable state means exactly that.
   case "$_comp" in
     ENABLED*|enabled*) : ;;
-    *) pm disable --user 0 dev.axion.spsm/.SpsmHomeActivity >/dev/null 2>&1 ;;
+    *) pm_run disable --user 0 dev.axion.spsm/.SpsmHomeActivity ;;
   esac
   launch_home
 }
@@ -1266,20 +1266,20 @@ apply_app_restrict() {
         # them in place without reading anything.
         (
           bg_nice
-          am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          am_write set-standby-bucket "$_pkg" "$_bucket"
           cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
         ) & ;;
       *)
         (
           bg_nice
-          _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+          _ob=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
           [ -n "$_ob" ] || _ob=-
           _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
                 | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
           [ -n "$_oo" ] || _oo=-
           [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
           printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
-          [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          [ "$_ob" != "-" ] && am_write set-standby-bucket "$_pkg" "$_bucket"
           [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
         ) & ;;
     esac
@@ -1319,10 +1319,10 @@ restore_app_restrict() {
     (
       bg_nice
       if [ "$_ob" != "-" ]; then
-        _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+        _now=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
         # Only undo our own change: if the system or the user moved it since,
         # that newer decision wins.
-        [ "$_now" = "$_nb" ] && am set-standby-bucket "$_pkg" "$_ob" >/dev/null 2>&1
+        [ "$_now" = "$_nb" ] && am_write set-standby-bucket "$_pkg" "$_ob"
       fi
       if [ "$_oo" != "-" ]; then
         _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
@@ -1353,7 +1353,7 @@ google_packages() {
   printf '%s\n' $GOOGLE_PKGS_BASE
   for _p in $GOOGLE_PKGS_VARIANTS; do
     has pm || continue
-    pm list packages "$_p" 2>/dev/null | grep -q "^package:$_p$" && printf '%s\n' "$_p"
+    pm_read list packages "$_p" | grep -q "^package:$_p$" && printf '%s\n' "$_p"
   done
 }
 # Play Services is suspended, not disabled, so its `enabled` state does not move
@@ -1389,7 +1389,7 @@ apply_freeze_google() {
   for _p in $(google_packages); do
     ( bg_nice
       suspend_app "$_p"
-      am force-stop "$_p" >/dev/null 2>&1 ) &
+      am_write force-stop "$_p" ) &
   done
   wait
 }
@@ -1405,9 +1405,9 @@ restore_freeze_google() {
     # the snapshot here, before the work is handed to the background.
     _st=$(awk -F'\t' -v p="$_p" '$1==p{print $2; exit}' "$1" 2>/dev/null)
     case "$_st" in
-      disabled*) ( pm unsuspend "$_p" >/dev/null 2>&1 ) & ;;
-      *) ( pm unsuspend "$_p" >/dev/null 2>&1
-           pm enable "$_p" >/dev/null 2>&1 ) & ;;
+      disabled*) ( pm_run unsuspend "$_p" ) & ;;
+      *) ( pm_run unsuspend "$_p"
+           pm_run enable "$_p" ) & ;;
     esac
   done
   wait
@@ -1639,7 +1639,7 @@ apply_block_other_apps() {
     [ -n "$_p" ] || continue
     (
       bg_nice
-      am force-stop "$_p" >/dev/null 2>&1
+      am_write force-stop "$_p"
     ) &
     _c=$((_c + 1))
     [ "$_c" -ge 12 ] && { wait; _c=0; }
@@ -1772,7 +1772,9 @@ release_force_stopped() {
     _n=$((_n + 1))
     (
       bg_nice
-      su 2000 -c "pm unstop --user 0 $_p" >/dev/null 2>&1 \
+      su 2000 -c "cmd package unstop --user 0 $_p" >/dev/null 2>&1 \
+        || cmd package unstop --user 0 "$_p" >/dev/null 2>&1 \
+        || su 2000 -c "pm unstop --user 0 $_p" >/dev/null 2>&1 \
         || pm unstop --user 0 "$_p" >/dev/null 2>&1
     ) </dev/null &
     _c=$((_c + 1))
@@ -1878,7 +1880,7 @@ note_app_restrict() {
   for _p in $(managed_packages 2>/dev/null); do
     _see=$((_see + 1))
     [ "$_see" -gt 3 ] && break
-    case "$(am get-standby-bucket "$_p" 2>/dev/null | tr -d '\r')" in
+    case "$(am_read get-standby-bucket "$_p" | tr -d '\r')" in
       restricted|rare|frequent) _n=$((_n + 1)) ;;
     esac
   done
@@ -1916,7 +1918,7 @@ restore_data_off() {
 probe_app_restrict() {
   _n=0
   for _p in $(managed_packages | head -3); do
-    _b=$(am get-standby-bucket "$_p" 2>/dev/null | tr -d '\r')
+    _b=$(am_read get-standby-bucket "$_p" | tr -d '\r')
     _o=$(cmd appops get "$_p" RUN_ANY_IN_BACKGROUND 2>/dev/null | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
     [ -n "$_b" ] && printf 'bucket:%s\t%s\n' "$_p" "$_b"
     [ -n "$_o" ] && printf 'appop:%s\t%s\n' "$_p" "$_o"
@@ -2097,7 +2099,7 @@ sweep_background() { # sweep_background <why>
   # strays - processes of apps we never suspended - with the one-call
   # kill-all, and reports the memory honestly either way.
   if [ -f "$STATE/sweep_full" ]; then
-    has am && am kill-all >/dev/null 2>&1
+    has am && am_write kill-all
     _after=$(mem_available)
     log "background sweep ($_why): strays cleared, free memory $(mem_words "$_before") -> $(mem_words "$_after")"
     return 0
@@ -2114,7 +2116,7 @@ sweep_background() { # sweep_background <why>
       _n=$((_n + 1))
       (
         bg_nice
-        am force-stop "$_p" >/dev/null 2>&1
+        am_write force-stop "$_p"
         # The idle hand-to-ActivityManager happened in the block apply, for
         # this very set, seconds ago - repeating it here was a fork per app
         # for a fact already told. Stopping is what frees the memory; that
@@ -2127,7 +2129,7 @@ sweep_background() { # sweep_background <why>
   fi
   # The full pass happened; the rest of this session only needs the light one.
   : > "$STATE/sweep_full" 2>/dev/null
-  has am && am kill-all >/dev/null 2>&1
+  has am && am_write kill-all
   _after=$(mem_available)
   log "background sweep ($_why): $_n frozen app(s) stopped, free memory $(mem_words "$_before") -> $(mem_words "$_after")"
 }
@@ -2195,7 +2197,7 @@ keep_awake_string() {
 rom_bg_candidates() {
   _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') $(rom_bg_core | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
-  _sys=$(pm list packages -s 2>/dev/null | sed 's/^package://' | sort -u)
+  _sys=$(pm_read list packages -s | sed 's/^package://' | sort -u)
   _sys_s=" $(printf '%s\n' $_sys | tr '\n' ' ') "
   _ex_s=" $(printf '%s\n' $_exempt | tr '\n' ' ') "
   for _p in $(running_packages); do
@@ -2243,23 +2245,23 @@ apply_rom_bg_off() {
         # nothing to read and nothing to write down - just hold them in place.
         (
           bg_nice
-          am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          am_write set-standby-bucket "$_pkg" "$_bucket"
           cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
-          am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
+          am_write make-uid-idle "$_pkg" || am_write make-uid-idle --user 0 "$_pkg"
         ) & ;;
       *)
         (
           bg_nice
-          _ob=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+          _ob=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
           [ -n "$_ob" ] || _ob=-
           _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
                 | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
           [ -n "$_oo" ] || _oo=-
           [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
           printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" deny >> "$_r"
-          [ "$_ob" != "-" ] && am set-standby-bucket "$_pkg" "$_bucket" >/dev/null 2>&1
+          [ "$_ob" != "-" ] && am_write set-standby-bucket "$_pkg" "$_bucket"
           [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
-          am make-uid-idle "$_pkg" >/dev/null 2>&1 || am make-uid-idle --user 0 "$_pkg" >/dev/null 2>&1
+          am_write make-uid-idle "$_pkg" || am_write make-uid-idle --user 0 "$_pkg"
         ) & ;;
     esac
     _c=$((_c + 1))
@@ -2288,10 +2290,10 @@ restore_rom_bg_off() {
     (
       bg_nice
       if [ "$_ob" != "-" ]; then
-        _now=$(am get-standby-bucket "$_pkg" 2>/dev/null | tr -d '\r')
+        _now=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
         # Only undo our own change: a value something else has moved since is a
         # newer decision than ours.
-        [ "$_now" = "$_nb" ] && am set-standby-bucket "$_pkg" "$_ob" >/dev/null 2>&1
+        [ "$_now" = "$_nb" ] && am_write set-standby-bucket "$_pkg" "$_ob"
       fi
       if [ "$_oo" != "-" ]; then
         _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
@@ -2727,9 +2729,9 @@ blockable_packages() {
 
 _blockable_build() {
   _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
-  _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
+  _all=$(pm_read list packages -3 | sed 's/^package://')
   if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then
-    _all="$_all $(pm list packages -s 2>/dev/null | sed 's/^package://')"
+    _all="$_all $(pm_read list packages -s | sed 's/^package://')"
   fi
   # One sort, once, so a package in both lists costs one pass, not two writes.
   for _p in $(printf '%s\n' $_all | sort -u); do
@@ -2779,9 +2781,9 @@ managed_packages() {
 _managed_build() {
   _keep=" $(cfg keep '') $(cat "$KEEP_AWAKE" 2>/dev/null | tr '\n' ' ') $(cat "$SPSM_DIR/whitelist.txt" 2>/dev/null | tr '\n' ' ') $(protected_packages | tr '\n' ' ') "
   _exempt=$(dumpsys deviceidle whitelist 2>/dev/null | sed -n 's/^ *[a-z-]*,\([a-zA-Z0-9_.]*\),.*/\1/p' | sort -u)
-  _all=$(pm list packages -3 2>/dev/null | sed 's/^package://')
+  _all=$(pm_read list packages -3 | sed 's/^package://')
   if knob_enabled block_system_apps "$(knob_default block_system_apps)"; then
-    _all="$_all $(pm list packages -s 2>/dev/null | sed 's/^package://')"
+    _all="$_all $(pm_read list packages -s | sed 's/^package://')"
   fi
   # `echo "$_exempt" | grep -q "$_p"` inside this loop was a process per
   # installed app - about a hundred of them, twice per idle period - and it is

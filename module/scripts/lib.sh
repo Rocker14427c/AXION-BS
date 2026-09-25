@@ -799,9 +799,29 @@ rd() { # rd path -> value or empty
 
 exists() { [ -e "$(rp "$1")" ]; }
 
-sget() { settings get "$1" "$2" 2>/dev/null; }
-sput() { settings put "$1" "$2" "$3" >/dev/null 2>&1; }
-sdel() { settings delete "$1" "$2" >/dev/null 2>&1; }
+sget() { # sget namespace key
+  # `cmd settings` is the native path to the same provider the `settings` JVM
+  # wrapper calls: same output, same rc, a third of the cost under load
+  # (census of 2026-09-25: 103ms vs 32ms average while the deep phase
+  # churned). The wrapper stays as the fallback for a ROM without the native
+  # path; a failed cmd costs one extra fork and answers exactly as before.
+  _v=$(cmd settings get "$1" "$2" 2>/dev/null) && { printf '%s\n' "$_v"; return 0; }
+  settings get "$1" "$2" 2>/dev/null
+}
+sput() { cmd settings put "$1" "$2" "$3" >/dev/null 2>&1 || settings put "$1" "$2" "$3" >/dev/null 2>&1; }
+sdel() { cmd settings delete "$1" "$2" >/dev/null 2>&1 || settings delete "$1" "$2" >/dev/null 2>&1; }
+
+# The activity-manager and package-manager verbs the module uses, native
+# first. On this phone `am` and `pm` are shell wrappers that exec `cmd
+# activity` / `cmd package`: the wrapper is one fork and one parse per call on
+# top of the very same binder transaction, and a deep phase makes thousands of
+# calls (census of 2026-09-25). Reads keep stdout, writes keep the rc, and the
+# wrapper remains the fallback on a ROM without the native path. Writes are
+# idempotent, so the fallback retrying after a genuine failure is safe.
+am_read()  { cmd activity "$@" 2>/dev/null || am "$@" 2>/dev/null; }
+am_write() { cmd activity "$@" >/dev/null 2>&1 || am "$@" >/dev/null 2>&1; }
+pm_read()  { cmd package "$@" 2>/dev/null || pm "$@" 2>/dev/null; }
+pm_run()   { cmd package "$@" >/dev/null 2>&1 || pm "$@" >/dev/null 2>&1; }
 
 gprop() { getprop "$1" 2>/dev/null; }
 sprop() {
@@ -1079,7 +1099,12 @@ pm_batch() { # pm_batch <suspend|unsuspend>  (package list on stdin)
   _pb_acc=''
   _pb_n=0
   _pb_chunk() {
-    if su 2000 -c "pm $_act --user 0$_pb_acc" >/dev/null 2>&1 \
+    # Native `cmd package` first - same service the pm wrapper execs, without
+    # the wrapper; the su identity that the phone's permission checks know
+    # first, then root, then the legacy wrapper path on a ROM without cmd.
+    if su 2000 -c "cmd package $_act --user 0$_pb_acc" >/dev/null 2>&1 \
+       || cmd package "$_act" --user 0$_pb_acc >/dev/null 2>&1 \
+       || su 2000 -c "pm $_act --user 0$_pb_acc" >/dev/null 2>&1 \
        || pm "$_act" --user 0$_pb_acc >/dev/null 2>&1; then
       printf '%s\n' $_pb_acc
     else
@@ -1131,10 +1156,12 @@ suspend_app() { # suspend_app <package>
     if su 2000 -c true >/dev/null 2>&1; then printf '1\n' > "$_sf"; else printf '0\n' > "$_sf"; fi
   }
   if [ "$(cat "$_sf" 2>/dev/null)" = 1 ] \
-     && su 2000 -c "pm suspend --user 0 $1" >/dev/null 2>&1; then
+     && su 2000 -c "cmd package suspend --user 0 $1" >/dev/null 2>&1; then
     return 0
   fi
-  pm suspend --user 0 "$1" >/dev/null 2>&1 || pm suspend "$1" >/dev/null 2>&1
+  cmd package suspend --user 0 "$1" >/dev/null 2>&1 \
+    || pm suspend --user 0 "$1" >/dev/null 2>&1 \
+    || pm suspend "$1" >/dev/null 2>&1
 }
 
 # The reverse, built the same way and with the same rule: pm unsuspend is
@@ -1154,10 +1181,12 @@ unsuspend_app() { # unsuspend_app <package>
   # First through the same identity that suspended it: whatever permitted the
   # suspension permits its undo.
   if [ "$(cat "$_sf" 2>/dev/null)" = 1 ] \
-     && su 2000 -c "pm unsuspend --user 0 $1" >/dev/null 2>&1; then
+     && su 2000 -c "cmd package unsuspend --user 0 $1" >/dev/null 2>&1; then
     return 0
   fi
-  pm unsuspend --user 0 "$1" >/dev/null 2>&1 || pm unsuspend "$1" >/dev/null 2>&1
+  cmd package unsuspend --user 0 "$1" >/dev/null 2>&1 \
+    || pm unsuspend --user 0 "$1" >/dev/null 2>&1 \
+    || pm unsuspend "$1" >/dev/null 2>&1
 }
 
 # ------------------------------------------------------------------ home role

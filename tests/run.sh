@@ -30,6 +30,10 @@ make_tree() {
   ROOT="$WORK/dev"
   rm -rf "$ROOT" "$WORK/spsm"
   mkdir -p "$WORK/spsm/scripts"
+  # The rig runs the deep phase the way v3.9.0 did - the per-app restrictions
+  # at the screen-off transition itself - unless a section asks for the grace
+  # timer by its config name (cfg keeps the LAST value, so a later line wins).
+  echo "deep_grace_secs=0" >> "$WORK/spsm/config"
   cp "$SCRIPTS"/*.sh "$WORK/spsm/scripts/"
 
   # CPU clusters: the values here are the ones v2 got wrong, so the test would
@@ -3097,11 +3101,11 @@ screen_on
 run_engine activate >/dev/null 2>&1
 screen_off; run_engine screen-off >/dev/null 2>&1
 screen_on;  run_engine screen-on  >/dev/null 2>&1
-n=$(grep -c "^am force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 0 ]
 check "the launcher is left alone while the mode is running (got ${n:-0} restart(s))" $?
 run_engine deactivate >/dev/null 2>&1
-n=$(grep -c "^am force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 1 ]
 check "coming out of the mode restarts it exactly once (got ${n:-0})" $?
 # No ^ here: every line this mode writes is stamped with the time first.
@@ -3110,7 +3114,7 @@ n=$(grep -c "launcher refreshed: com.android.launcher3 restarted" "$WORK/spsm/sp
 check "and the log says which app was restarted and why (got ${n:-0} line(s))" $?
 # Started again in the same breath: a force-stopped home must not leave the phone
 # with nothing on screen.
-grep -q "^am start -a android.intent.action.MAIN -c android.intent.category.HOME$" "$WORK/stub/calls"
+grep -qE "^(am|cmd activity) start -a android.intent.action.MAIN -c android.intent.category.HOME$" "$WORK/stub/calls"
 check "and it is put back on screen straight away" $?
 # The reverts run side by side now - the owner measured this exit at about
 # three times the module installer's own revert for the same work, because the
@@ -3133,14 +3137,14 @@ echo "knob.nav_buttons=0" >> "$WORK/spsm/config"
 screen_on
 run_engine activate >/dev/null 2>&1
 run_engine deactivate >/dev/null 2>&1
-n=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop " "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 0 ]
 check "a session that changed nothing restarts nothing (got ${n:-0})" $?
 
 # And an exit on a phone that was never in the mode does even less.
 make_tree; make_stubs; seed_stub_state
 run_engine deactivate >/dev/null 2>&1
-n=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop " "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 0 ]
 check "an exit with no session behind it force-stops nothing (got ${n:-0})" $?
 
@@ -3229,7 +3233,7 @@ if grep -q "^cmd overlay enable-exclusive" "$WORK/stub/calls"; then
 else
   ok "and nothing is even asked of it"
 fi
-n=$(grep -c "^am force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop com.android.launcher3$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 1 ]
 check "and the launcher was refreshed once, so suspended apps show (got ${n:-0})" $?
 grep -q "launcher refreshed: com.android.launcher3 restarted" "$WORK/spsm/spsm.log"
@@ -3263,33 +3267,33 @@ say "73. the background sweep: the memory the frozen apps hold is handed back"
 make_tree; make_stubs; seed_stub_state
 screen_on
 run_engine activate >/dev/null 2>&1
-n=$(grep -c "^am force-stop com.spotify.music$" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop com.spotify.music$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 1 ]
 check "switching the mode on stops the frozen apps exactly once (${n:-0})" $?
 grep -q "free memory" "$WORK/spsm/spsm.log"
 check "and reports the memory it freed, before and after" $?
-if grep -q "^am make-uid-idle" "$WORK/stub/calls"; then
+if grep -qE "^(am|cmd activity) make-uid-idle" "$WORK/stub/calls"; then
   bad "no idle forks - a suspension already says more than idle ever did"
 else
   ok "no idle forks - a suspension already says more than idle ever did"
 fi
-grep -q "^am kill-all$" "$WORK/stub/calls"
+grep -qE "^(am|cmd activity) kill-all$" "$WORK/stub/calls"
 check "and the phone is asked to clear what it still calls background" $?
-_nstop=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+_nstop=$(grep -cE "^(am|cmd activity) force-stop " "$WORK/stub/calls" 2>/dev/null || true)
 # Screen off: memory an app grabbed while the screen was on is given back the
 # moment it goes off. This is the half that keeps the mode saving over a long day.
 screen_off
 run_engine screen-off >/dev/null 2>&1
 grep -q "background sweep (screen off)" "$WORK/spsm/spsm.log"
 check "every screen-off sweeps again" $?
-n=$(grep -c "^am kill-all$" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) kill-all$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" -ge 2 ]
 check "so a phone left alone all afternoon keeps giving the memory back (${n:-0} sweeps)" $?
 # A suspended app cannot run, so it cannot grab memory back: redoing the
 # per-app pass on every screen-off only kept 264 force-stops churning (the
 # v3.7.7 treadmill - 15 s a sweep, and the load with it). The second sweep
 # reaps strays and reports the memory, nothing more.
-_m=$(grep -c "^am force-stop " "$WORK/stub/calls" 2>/dev/null || true)
+_m=$(grep -cE "^(am|cmd activity) force-stop " "$WORK/stub/calls" 2>/dev/null || true)
 [ "${_m:-0}" = "${_nstop:-0}" ]
 check "and the suspended set is not force-stopped all over again ($_m)" $?
 grep -q "background sweep (screen off): strays cleared" "$WORK/spsm/spsm.log"
@@ -3316,7 +3320,7 @@ if grep -q "background sweep" "$WORK/spsm/spsm.log"; then
 else
   ok "with the option off nothing is swept"
 fi
-if grep -q "^am kill-all$" "$WORK/stub/calls"; then
+if grep -qE "^(am|cmd activity) kill-all$" "$WORK/stub/calls"; then
   bad "and the phone's background is not cleared either"
 else
   ok "and the phone's background is not cleared either"
@@ -3346,7 +3350,7 @@ run_engine screen-off >/dev/null 2>&1
 check "a system package working in the background is put in the restricted bucket" $?
 grep -q "RUN_ANY_IN_BACKGROUND: deny" "$WORK/stub/appop/com.android.traceur"
 check "and its background running is denied - the same switch Settings offers" $?
-grep -q "^am make-uid-idle com.android.traceur$" "$WORK/stub/calls"
+grep -qE "^(am|cmd activity) make-uid-idle com.android.traceur$" "$WORK/stub/calls"
 check "and it is put to sleep now, not at some later point" $?
 grep -q "rom background: .* of the phone's own package(s) restricted for this idle period" "$WORK/spsm/spsm.log"
 check "and the log names what was restricted, and that it is for this idle period" $?
@@ -3588,9 +3592,9 @@ stop_daemons
 check "no daemon is running while the idle pass is measured ($(daemons_alive) alive)" $?
 screen_off
 run_engine screen-off >/dev/null 2>&1
-_n1=$(grep -c "^am get-standby-bucket" "$WORK/stub/calls" 2>/dev/null || true)
+_n1=$(grep -cE "^(am|cmd activity) get-standby-bucket" "$WORK/stub/calls" 2>/dev/null || true)
 run_engine screen-off >/dev/null 2>&1
-_n2=$(grep -c "^am get-standby-bucket" "$WORK/stub/calls" 2>/dev/null || true)
+_n2=$(grep -cE "^(am|cmd activity) get-standby-bucket" "$WORK/stub/calls" 2>/dev/null || true)
 _n2=$(( ${_n2:-0} - ${_n1:-0} ))
 [ "$_n2" = "0" ]
 check "a second idle pass inside the same idle period reads nothing again (${_n1:-0} reads, then $_n2 more)" $?
@@ -4074,13 +4078,13 @@ run_engine activate >/dev/null 2>&1
 check "every one of 40 batched apps really is suspended" $?
 [ -e "$WORK/stub/pkg/com.whatsapp.suspended" ]
 check "and the ordinary per-app block still works beside it" $?
-n=$(grep -c "^pm suspend" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(pm|cmd package) suspend" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" -le 4 ]
 check "in ${n:-0} pm calls, not 43 forks" $?
 run_engine deactivate >/dev/null 2>&1
 [ ! -e "$WORK/stub/pkg/com.bench.app0.suspended" ] && [ ! -e "$WORK/stub/pkg/com.bench.app39.suspended" ]
 check "and the exit releases all 40 in one piece" $?
-n=$(grep -c "^pm unsuspend" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(pm|cmd package) unsuspend" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" -le 4 ]
 check "with ${n:-0} unsuspend calls, not 43 forks" $?
 # A phone that refuses multi-package calls falls back to the per-app path,
@@ -4096,7 +4100,7 @@ screen_on
 run_engine activate >/dev/null 2>&1
 [ -e "$WORK/stub/pkg/com.bench.app4.suspended" ]
 check "a phone that refuses batches still gets every app blocked" $?
-n=$(grep -c "^pm suspend --user 0 com.bench" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(pm|cmd package) suspend --user 0 com.bench" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" -ge 5 ]
 check "by the per-app path (${n:-0} single calls)" $?
 run_engine deactivate >/dev/null 2>&1
@@ -4174,7 +4178,7 @@ enable_knobs block_other_apps block_system_apps
 { i=0; while [ $i -lt 40 ]; do echo "com.bench.app$i"; i=$((i + 1)); done; } > "$WORK/stub/pkgs_sys"
 screen_on
 run_engine activate >/dev/null 2>&1
-n=$(grep -c "^am force-stop com.bench.app0$" "$WORK/stub/calls" 2>/dev/null || true)
+n=$(grep -cE "^(am|cmd activity) force-stop com.bench.app0$" "$WORK/stub/calls" 2>/dev/null || true)
 [ "${n:-0}" = 1 ]
 check "a blocked app is force-stopped exactly once per session (${n:-0})" $?
 grep -q "background sweep (mode on): strays cleared" "$WORK/spsm/spsm.log"
@@ -4346,7 +4350,7 @@ enable_knobs block_other_apps
 screen_on
 : > "$WORK/stub/calls"
 run_engine activate >"$WORK/out.act91b" 2>&1
-_n=$(grep -c '^pm list packages -3' "$WORK/stub/calls" 2>/dev/null || true)
+_n=$(grep -cE '^(pm|cmd package) list packages -3' "$WORK/stub/calls" 2>/dev/null || true)
 [ "${_n:-9}" = 1 ]
 check "an activation asks the phone for the package list ONCE (got ${_n:-?})" $?
 ls "$WORK/spsm/.tmp"/.spsm-blockable.* >/dev/null 2>&1
@@ -4374,6 +4378,80 @@ run_engine activate >/dev/null 2>&1
 { [ ! -f "$WORK/spsm/journal/unitc.writes" ] && [ ! -f "$WORK/spsm/journal/unitc.state" ]; }
 check "j_reset takes the writes scratch with the records of a finished session" $?
 run_engine deactivate >/dev/null 2>&1
+
+# --------------------------------------------------------------------------
+# 92. The deep grace: the per-app restrictions wait out short screen-offs.
+#     Census of 2026-09-25, on the owner's phone with a 15-second screen
+#     timeout: app_restrict + rom_bg_off re-ran on EVERY screen-off - 48
+#     passes in eight minutes, ~4,100 binder calls, most of the CPU the mode
+#     burned while idle, all for screen-offs nobody used. With the grace
+#     (config deep_grace_secs, default 75, the rig runs in seconds) the
+#     transition applies only the cheap deep knobs; the daemon's timer fires
+#     `engine deep-restrict` once the screen has STAYED off that long - the
+#     same mechanism as the owner's one-minute core-sleep. 0 keeps the
+#     v3.9.0 behavior, which is what every other section runs with.
+# --------------------------------------------------------------------------
+say "92. deep grace: the heavy restrict knobs wait for the timer"
+make_tree; make_stubs; seed_stub_state
+enable_knobs app_restrict rom_bg_off ged_boost_off
+echo "deep_grace_secs=2" >> "$WORK/spsm/config"
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+screen_off
+run_engine screen-off >/dev/null 2>&1
+# The cheap wave still lands at the transition...
+[ "$(cat "$ROOT/sys/module/ged/parameters/enable_cpu_boost" 2>/dev/null)" = "0" ]
+check "cheap deep knob still applies at screen-off" $?
+# ...the heavy per-app ones wait for the timer.
+[ ! -f "$WORK/spsm/journal/orig/app_restrict.tsv" ]
+check "app_restrict is deferred past the transition" $?
+[ ! -f "$WORK/spsm/journal/orig/rom_bg.tsv" ]
+check "rom_bg_off is deferred too" $?
+# The daemon's timer fires this command once the screen has stayed off; with
+# no daemon in the rig the test fires it directly, exactly as the timer does.
+run_engine deep-restrict >/dev/null 2>&1
+[ -f "$WORK/spsm/journal/orig/app_restrict.tsv" ]
+check "deep-restrict applies app_restrict" $?
+[ -f "$WORK/spsm/journal/orig/rom_bg.tsv" ]
+check "deep-restrict applies rom_bg_off" $?
+grep -q 'restrict knob app_restrict' "$WORK/spsm/spsm.log"
+check "the deferred pass is logged with its time" $?
+# A second fire in the same idle period must be a no-op: the journal says
+# applied, and re-recording would save our own values as the user's.
+_l1=$(wc -l < "$WORK/spsm/journal/orig/app_restrict.tsv")
+run_engine deep-restrict >/dev/null 2>&1
+_l2=$(wc -l < "$WORK/spsm/journal/orig/app_restrict.tsv")
+[ "$_l1" = "$_l2" ]
+check "re-fire in the same idle period changes nothing" $?
+# The wake reverts and disarms: the marker is gone for the daemon to re-arm,
+# and the restrictions are back out of the phone.
+: > "$WORK/spsm/state/deep_restricted"
+screen_on
+run_engine screen-on >/dev/null 2>&1
+[ ! -f "$WORK/spsm/state/deep_restricted" ]
+check "the wake clears the timer marker" $?
+[ ! -f "$WORK/spsm/journal/orig/app_restrict.tsv" ]
+check "the wake reverted the deferred restrictions" $?
+# Firing with the screen ON is a no-op that disarms itself.
+_c1=$(grep -c 'restrict knob' "$WORK/spsm/spsm.log")
+: > "$WORK/spsm/state/deep_restricted"
+run_engine deep-restrict >/dev/null 2>&1
+_c2=$(grep -c 'restrict knob' "$WORK/spsm/spsm.log")
+{ [ "$_c1" = "$_c2" ] && [ ! -f "$WORK/spsm/state/deep_restricted" ]; }
+check "deep-restrict with the screen on does nothing and disarms" $?
+# And the cycle re-arms: the next screen-off defers again, the next fire
+# applies again - a fresh record of fresh originals.
+screen_off
+run_engine screen-off >/dev/null 2>&1
+[ ! -f "$WORK/spsm/journal/orig/app_restrict.tsv" ]
+check "the next screen-off defers again" $?
+run_engine deep-restrict >/dev/null 2>&1
+[ -f "$WORK/spsm/journal/orig/app_restrict.tsv" ]
+check "and the next fire applies again" $?
+run_engine deactivate >/dev/null 2>&1
+run_engine verify > "$WORK/out.v92" 2>&1
+grep -q 'drift=0' "$WORK/out.v92"
+check "92 ends with no drift" $?
 
 # ==========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
