@@ -189,3 +189,87 @@ directly contradicts `docs/POWER.md` §1.3/§5 ("a lower frequency is not a lowe
 frequency restrictions explicitly ruled out by the owner). It was never applied before the fix
 only because of the same bug. Set `knob.gov_powersave=0` in `/data/adb/spsm/config` unless and
 until a measurement says otherwise.
+
+---
+
+## 2026-09-25 (v3.9.0 measurement session) - five resolutions
+
+All measured on the owner's RMX3430 while it was in daily use. Full release tables:
+docs/RELEASE-v3.9.0.md.
+
+### 1. The sticky battery saver was Android's own, and it explains the 850MHz cap
+
+With the mode OFF, the phone showed `low_power=1`, `low_power_sticky=1`, the big cluster's
+governor on `powersave` and (earlier in the day) the little cluster capped at 850000. No module
+code writes `scaling_max_freq` (grep-verified) and no restore had failed (`verify drift=0`).
+The sticky flag re-arms `low_power` on every unplug, and the platform's own power throttling
+(`/proc/ppm/policy_status`: `PPM_POLICY_PWR_THRO enabled`) does the capping when the saver is on.
+
+**Resolution:** `settings put global low_power 0; settings put global low_power_sticky 0` -
+policy6 returned to `schedutil` within seconds, and the 850MHz cap never reappeared across the
+day's cycles. `knob.battery_saver=1` is now part of the posture and journals the saver per
+session (ON at activation, OFF at exit, `low_power=0 sticky=0` verified after every exit), so
+nothing of ours can go sticky again. **No blind CPU-frequency writes were added** - the HANDOFF
+rule stands, and this finding is why it was right to wait for the measurement.
+
+### 2. The tunnel deaths during sleep were Data Saver, not doze alone
+
+`data_saver_idle` (`cmd netpolicy set restrict-background true`) blocks background sockets at
+screen-off - Termux's included - which killed the Pinggy tunnel mid-sleep; the gist endpoint
+then NXDOMAINs and the edge IP resets (tunnel unregistered). Only a phone-side wake revives it.
+
+**Resolution (device-side, owner's intent that Termux survives SPSM):**
+
+```sh
+dumpsys deviceidle whitelist +com.termux                      # doze exemption
+cmd netpolicy add restrict-background-whitelist 10252         # Data Saver exemption (UID, not name!)
+```
+
+**Verified:** two full deep-phase cycles (force-idle + restrict-background active, screen off
+60-150s) with the SSH session alive throughout.
+
+### 3. PackageManager's disk flush lag - why the journal called 187 suspensions invisible
+
+`pm suspend` answers from memory; `package-restrictions.xml` lands seconds later. The block
+knob's after-read re-read the disk immediately and saw the pre-suspend state: the field log
+said `note block_other_apps: no visible change` over a record of 187 pm-confirmed suspensions.
+v3.9.0 builds the after-read from pm's own confirmation (`state/blocked_by_us.tsv` + the
+before-record), and falls back to the real read whenever the confirmation is missing or empty.
+`verify drift=0` after every cycle since.
+
+### 4. The activation's cost anatomy (measured, ms where possible)
+
+* One package-list build = **246ms quiet** (protected-role binders + two `pm list` + sort);
+  a cache hit ~0ms. v3.8.2 built it three times per activation, under load, at 3-8s a build.
+* A per-package shell pass over 188 names = **~2s quiet, ~5s under the fan** - replaced by a
+  straight copy where nothing is filtered.
+* 188 `dumpsys package` calls in the before-snapshot = **~7-8s** - replaced by trusting the
+  phone's own suspension record when it was read (the per-package check remains for phones
+  where the record cannot be read).
+* 187 individual file appends = **~4-10s** through SELinux+f2fs - one redirect, one pass.
+* The whole knob: **41s -> 7s**; the activation: **67s/13 knobs -> 33s/21 knobs**.
+
+### 5. Deep-phase knobs fight the freeze they run beside - two waves now
+
+Applied all-at-once, `deep_doze`'s force-idle landed while `app_restrict` was mid-binder:
+43s apply / 20s revert (field 13:14), 48s of CPU between screen-off and real idle. With the
+freeze switches (`deep_doze`, `data_saver_idle`) applied last and reverted first: 30s / 18s,
+38s deep-in, 20s deep-out (field 13:54). The remaining cost is binder latency under the
+power-save governor, screen-off and unfelt - the next target if it ever matters.
+
+Also observed: `cores_sleep` fires on its one-minute timer after screen-off and is disarmed by
+any wake (a user picking the phone up at ~50s keeps preempting it - working as designed);
+`rom_bg_off` and `app_restrict` cannot be confirmed by this ROM's dumpsys output, and the
+journal says exactly that instead of claiming success ("written but cannot be confirmed").
+
+### Decision update: `gov_powersave`
+
+The 2026-09-22 finding advised `knob.gov_powersave=0` until a measurement said otherwise. On
+2026-09-25 the owner's standing direction is **maximum power saving for emergency usage**, and
+the measured round trip is clean: governor applied on activation (4s), reverted first on exit
+("the caps are off first - the rest of the exit runs at full speed"), `drift=0` every cycle,
+and the owner used the phone normally through a full session with it on. It is enabled in the
+posture. The POWER.md caution ("a lower frequency is not a lower energy") applies to *blind
+frequency caps*; the governor knob is the module's own shipped feature, journalled and
+revertible - and the sticky-saver cap that the caution predicted is exactly what finding #1
+turned out to be, from the platform, not from us.

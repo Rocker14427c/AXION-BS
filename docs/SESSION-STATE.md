@@ -1,17 +1,26 @@
 # Session state - read this first
 
+**v3.9.0 SHIPPED AND FIELD-MEASURED (2026-09-25, commit `ece2d15` on Rewrite):**
+ON 67s -> 33s (with 21 knobs instead of 13 - the full emergency posture),
+OFF 24-47s -> 21-24s across three cycles, `block_other_apps` 41s -> 7s, the
+187-app release 14s -> 4s, deep phase 48s -> 38s (freeze switches last),
+wake release 24s -> 20s (thaw first), `verify checked=27 drift=0` on every
+cycle. The journal's false "no visible change" over 187 pm-confirmed
+suspensions is gone (after-read built from pm's own record). Full tables and
+anatomy: docs/RELEASE-v3.9.0.md. Device-side resolutions (sticky battery
+saver = Android's own + PPM PWR_THRO; tunnel deaths = Data Saver blocking
+Termux, now whitelisted both lists): docs/DEVICE-FINDINGS.md, 2026-09-25.
+
 NIGHT-2 (airplane) DONE and DECISIVE: radios-off drain = radios-on drain =
 3.00%/6.8h ~26 mA. The floor is the PLATFORM, not the radios. 0-1% is physics-
-impossible until the floor drops 3x. Focus = platform floor (IPI0, alarmtimer,
-suspend residency via ie-history rails) + SPSM. See docs/POWER-OVERNIGHT-2.md.
-Wi-Fi-off-vs-on experiment cancelled by data.
+impossible until the floor drops 3x. See docs/POWER-OVERNIGHT-2.md.
 
 Toolchain that must be rebuilt after deep rewinds: `bash tools/ensure-jdk.sh`
 (extracts /home/user/jdk4py.whl into sdk/jdk - snapshots cap near 128 MB and eat
 the extracted tree), then `bash build.sh --bootstrap` (jars + toolchain.env),
-always `JAVA_HOME=$PWD/sdk/jdk`.
+always `JAVA_HOME=$PWD/sdk/jdk`. Zip-only builds need no JDK: `tools/makezip.sh`.
 
-Last updated: 2026-09-23 ~06:00 UTC (this sandbox's clock) by the agent.
+Last updated: 2026-09-25 ~08:30 UTC (this sandbox's clock) by the agent.
 
 ## The thing to know: this sandbox can rewind
 
@@ -20,7 +29,7 @@ branch** (repo at `1f36d7d` while GitHub had `c967396`+, and `.tailscale-state` 
 recovery is always the same, and it works because every commit gets pushed:
 
 ```sh
-cd /home/user/work/AXION-BS
+cd /home/user/AXION-BS            # sandbox layout can change; find the clone first
 git fetch https://github.com/Rocker14427c/AXION-BS.git Rewrite
 git reset --hard FETCH_HEAD          # safe: the tree is byte-identical to the tip
 ```
@@ -37,27 +46,40 @@ Consequences to design around:
 
 | thing | state |
 |---|---|
-| repo | `Rewrite` at `416c910` (v3.8.2 zip committed on top of `7e88cb6`) |
-| GitHub release | **v3.8.2** published; zip asset rebuilt with the drop_line fix (asset replaced) |
-| APK | `module/app/AxionSPSM.apk` = v3.8.2 (73), 105 355 bytes, md5 `3deaffa2d0a568d8a3219c1e4af00fd5` |
-| phone | scripts **v3.8.2 + drop_line fix** (frozen until after tonight run), app **v3.8.4 (75)** precision feature REMOVED (owner request), SPSM only; keep-list empty |
-| suites | 674/0 main, 252/0 codec, 22/0 install (single-entry remove now asserted) |
-| connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly; NEVER retry a dead host - re-fetch first |
+| repo | `Rewrite` at `ece2d15` (v3.9.0 code+tests) + docs commit on top |
+| GitHub release | v3.8.2 published; **v3.9.0 zip built via `tools/makezip.sh`** (publish when the owner asks) |
+| APK | `module/app/AxionSPSM.apk` unchanged this release (no app-side changes in v3.9.0); phone app **v3.8.4 (75)**, precision feature REMOVED (owner request), SPSM only |
+| phone | scripts **v3.9.0** live in `/data/adb/spsm/scripts` + module dir (md5-matched, `state/script_version`=v3.9.0), module.prop v3.9.0/76; v3.8.2 scripts backed up at `/data/local/tmp/spsm382_scripts_backup`; config = max emergency posture (gov_powersave, wifi/bt/nfc off, brightness cap, 15s timeout, AOD/animations/blur off, fps cap, battery_saver, block knobs; retired cpu_offline_big/cap_always lines removed); Termux whitelisted in deviceidle + netpolicy (uid 10252); sticky battery saver cleared (`low_power=0 low_power_sticky=0`) |
+| suites | **687/0 main (incl. new section 91), 252/0 codec, 22/0 install, 5/0 daemon** |
+| connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly; NEVER retry a dead host - re-fetch first. Sandbox helper: `/home/user/pinggy_connect.sh '<remote cmd>'` (re-fetches gist per run, DoH, edge-IP fallback); SSH password in `/home/user/.secrets/u0_a252_ssh_pass` (600). scp must target the Termux home (`/data/local/tmp` is not writable by u0_a252), then `su -c cp` into place |
 
 ## Connecting to the phone
 
-1. Sandbox network needs one routable address (the interface is link-local only otherwise, and
-   Tailscale's link monitor then reports *no network*, starts, and never asks for a login URL):
-   `sudo ip addr add 10.77.0.21/24 dev eth0`
-2. `tailscaled` (userspace networking; **no TUN, no root needed**):
-   `/home/user/ts/tailscaled --tun=userspace-networking --state=/home/user/ts/state/tailscaled.state --socket=/home/user/ts/state/tailscaled.sock --port=41641 --socks5-server=localhost:1055 &`
-3. `/home/user/ts/tailscale --socket=/home/user/ts/state/tailscaled.sock up --hostname=arena-sandbox`
-   — prints an approval URL the first time only; the owner clicks it.
-4. `status` → the phone appears as a peer. Then SSH through the userspace stack:
-   `ssh -o ProxyCommand="/home/user/ts/tailscale --socket=/home/user/ts/state/tailscaled.sock nc %h %p" -i ~/.ssh/arena_agent2 u0_a252@<phone>`
+**Pinggy is the way (2026-09-25).** The owner publishes the CURRENT endpoint at the gist URL
+(one `tcp://HOST:PORT` line). The sandbox helper does the whole dance per call:
 
-The owner publishes the CURRENT endpoint at the gist URL above (one `tcp://HOST:PORT`).
-After ANY ssh failure: re-fetch the gist, parse the new host/port, reconnect with `~/.ssh/arena_agent2`
+```sh
+/home/user/pinggy_connect.sh '<remote command>'    # ssh u0_a252@phone via the fresh endpoint
+```
+
+It re-fetches the gist on EVERY run (endpoints rotate ~hourly and a dead hostname NXDOMAINs -
+never cache, never retry a dead host), resolves via DoH when the sandbox resolver fails, and
+falls back to the edge IP with Host-header routing when DNS is hopeless. Password auth from
+`/home/user/.secrets/u0_a252_ssh_pass` (mode 600; the GitHub token lives beside it in
+`/home/user/.secrets/gh_token` - the owner was advised to rotate it after it transited a chat).
+
+Root on the phone is `su -c "..."` inside the SSH session (KernelSU). scp lands in the Termux
+home; `/data/local/tmp` is not writable by u0_a252, so installs go `scp ~/spsm390/ && su -c cp`.
+
+The tunnel itself runs from Termux on the phone. It DIES during SPSM sleep unless Termux is
+exempt from doze AND Data Saver (v3.9.0 field-tested both whitelists - see DEVICE-FINDINGS):
+`dumpsys deviceidle whitelist +com.termux` and `cmd netpolicy add restrict-background-whitelist 10252`.
+If the tunnel is dead anyway (screen-off froze it), only a phone-side wake revives it: ask the
+owner; do not burn retries (more than two failures -> ask).
+
+The old Tailscale route (tailscaled userspace + `~/.ssh/arena_agent2`) is kept in git history;
+it needs the owner to approve a login URL again after every sandbox rewind, which is why Pinggy
+replaced it.
 as `u0_a252` on that host/port.
 
 ## Installing v3.8.2 on the phone
