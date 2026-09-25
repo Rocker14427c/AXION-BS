@@ -196,7 +196,7 @@ publish_native() { # publish_native <module dir>
       return 0
     fi
   done
-  rm -f "$SPSM_BIN/spsm-screenmon" 2>/dev/null
+  rm -f "$SPSM_BIN/spsm-screenmon" "$SPSM_BIN/spsm-gesturemon" 2>/dev/null
   log "native helpers: none of the shipped builds run here - the daemon will poll"
   return 0
 }
