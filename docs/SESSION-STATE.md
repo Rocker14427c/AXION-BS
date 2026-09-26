@@ -1,15 +1,20 @@
 # Session state - read this first
 
-**v3.9.0 SHIPPED AND FIELD-MEASURED (2026-09-25, commit `ece2d15` on Rewrite):**
-ON 67s -> 33s (with 21 knobs instead of 13 - the full emergency posture),
-OFF 24-47s -> 21-24s across three cycles, `block_other_apps` 41s -> 7s, the
-187-app release 14s -> 4s, deep phase 48s -> 38s (freeze switches last),
-wake release 24s -> 20s (thaw first), `verify checked=27 drift=0` on every
-cycle. The journal's false "no visible change" over 187 pm-confirmed
-suspensions is gone (after-read built from pm's own record). Full tables and
-anatomy: docs/RELEASE-v3.9.0.md. Device-side resolutions (sticky battery
-saver = Android's own + PPM PWR_THRO; tunnel deaths = Data Saver blocking
-Termux, now whitelisted both lists): docs/DEVICE-FINDINGS.md, 2026-09-25.
+**CURRENT (2026-09-26): v3.10.0 committed on Rewrite = the measurement round +
+gesture nav.** A sandbox rewind ate the session that built it; the work was
+recovered from GitHub (`git reset --hard origin/Rewrite` after re-adding the
+remote - `.git/config` does not survive snapshots). What is proven: suites
+green (740 main / 95 sections, codec, install, daemon 19), gesturemon
+semantics proven on the host, census measured on the phone (6,354 calls /
+488s - the churn of per-app deep passes is THE cost). What is PENDING and was
+never done: **on-phone deployment + benchmark round + the real-finger gesture
+proof** (docs/RELEASE-v3.10.0.md keeps the honest ledger). The phone still
+runs v3.9.0 scripts (field-measured: ON 33s/21 knobs, OFF 21-24s, drift=0).
+The tunnel is DOWN (gist endpoint unregistered) - and after the owner's
+Termux reinstall (F-Droid -> Play) BOTH whitelists must be re-checked: the
+deviceidle entry dies with the uninstall, and the Data Saver whitelist was
+UID-based (10252 may be stale). Full story: docs/ARCH-PERF-PLAN.md,
+docs/RELEASE-v3.9.0.md, docs/RELEASE-v3.10.0.md.
 
 NIGHT-2 (airplane) DONE and DECISIVE: radios-off drain = radios-on drain =
 3.00%/6.8h ~26 mA. The floor is the PLATFORM, not the radios. 0-1% is physics-
@@ -46,12 +51,12 @@ Consequences to design around:
 
 | thing | state |
 |---|---|
-| repo | `Rewrite` at `ece2d15` (v3.9.0 code+tests) + docs commit on top |
-| GitHub release | v3.8.2 published; **v3.9.0 zip built via `tools/makezip.sh`** (publish when the owner asks) |
-| APK | `module/app/AxionSPSM.apk` unchanged this release (no app-side changes in v3.9.0); phone app **v3.8.4 (75)**, precision feature REMOVED (owner request), SPSM only |
-| phone | scripts **v3.9.0** live in `/data/adb/spsm/scripts` + module dir (md5-matched, `state/script_version`=v3.9.0), module.prop v3.9.0/76; v3.8.2 scripts backed up at `/data/local/tmp/spsm382_scripts_backup`; config = max emergency posture (gov_powersave, wifi/bt/nfc off, brightness cap, 15s timeout, AOD/animations/blur off, fps cap, battery_saver, block knobs; retired cpu_offline_big/cap_always lines removed); Termux whitelisted in deviceidle + netpolicy (uid 10252); sticky battery saver cleared (`low_power=0 low_power_sticky=0`) |
-| suites | **687/0 main (incl. new section 91), 252/0 codec, 22/0 install, 5/0 daemon** |
-| connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly; NEVER retry a dead host - re-fetch first. Sandbox helper: `/home/user/pinggy_connect.sh '<remote cmd>'` (re-fetches gist per run, DoH, edge-IP fallback); SSH password in `/home/user/.secrets/u0_a252_ssh_pass` (600). scp must target the Termux home (`/data/local/tmp` is not writable by u0_a252), then `su -c cp` into place |
+| repo | `Rewrite` at the v3.10.0 bump commit on top of `3ed7f10` (gesturemon ABI fix) |
+| GitHub release | **v3.9.0 published** (field-measured daily round); **v3.10.0 published** from the recovered HEAD - measurement round + gesture nav, on-phone benchmark PENDING (ledger in its notes) |
+| APK | `module/app/AxionSPSM.apk` unchanged since v3.8.4(75) on the phone; new since: `module/bin/spsm-tool.jar` (batch JVM) + `module/bin/*/spsm-gesturemon` (native, both ABIs) |
+| phone | scripts **v3.9.0** live (field-measured, drift=0), max-emergency config armed; **v3.10.0 NOT yet deployed**; v3.8.2 backup at `/data/local/tmp/spsm382_scripts_backup`; AFTER THE TERMUX REINSTALL: re-verify `dumpsys deviceidle whitelist +com.termux` and the netpolicy UID whitelist (`pm list packages -U com.termux` -> `cmd netpolicy add restrict-background-whitelist <uid>`) before the next sleep test, else the tunnel dies at screen-off again |
+| suites | **740/0 main (95 sections), codec, install, daemon 19/0** at HEAD |
+| connection | **Pinggy + gist endpoint**: fetch `https://gist.githubusercontent.com/Rocker14427c/a0ef0786c6474c07982a4a3c3b995322/raw/pinggy.txt` -> one `tcp://HOST:PORT`, rotates ~hourly AND EXPIRES (free tier ~60min) - a dead hostname means the phone-side tunnel is down; only the owner can revive it (open Termux, start pinggy, the gist updates). NEVER retry a dead host - re-fetch first; >2 failures -> ask the owner. Sandbox helper: `/home/user/pinggy_connect.sh`; `sshpass` must be reinstalled after any sandbox restore (`sudo apt-get install -y sshpass`); the edge-IP cache `/home/user/.secrets/pinggy_edge_ip` must hold an IPv4 (no IPv6 route in the sandbox). SSH password in `/home/user/.secrets/u0_a252_ssh_pass` - if the owner re-setup Termux, confirm it still matches. scp targets the Termux home (`/data/local/tmp` is not writable by u0_a252), then `su -c cp` into place |
 
 ## Connecting to the phone
 
