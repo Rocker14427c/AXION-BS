@@ -296,9 +296,20 @@ restore_kv() {
     # deletes the scratch file the moment the job is spawned, and a failed
     # record that raced it said "got []", naming half the story.
     _got=$(kv_result "$_ds" "$_idx")
-    ( kv_write "$_t" "$(unesc "$_v")" 2>/dev/null \
+    _want=$(unesc "$_v")
+    # A refused write whose value is ALREADY at the target is a no-op success,
+    # not a failure. This kernel refuses redundant writes to some /sys nodes:
+    # cpu6/online rejected the sleep (the applied record says 1) and then
+    # rejected writing the same 1 back - EPERM. The 2026-09-25 23:52 exit
+    # logged that refusal as "failed ... want [1] got [1]", the verdict
+    # counted 1 drifted knob and ran the safety valves: 70s to leave a mode
+    # that had already put everything back. A value standing at its original
+    # HAS returned, whatever the kernel says about the write that would have
+    # done it. (A value that merely could not be READ stays a failure - the
+    # guard compares a real reading, and an empty _got matches nothing.)
+    ( kv_write "$_t" "$_want" 2>/dev/null || [ "$_got" = "$_want" ] \
         && printf 'wrote\t%s\n' "$_t" >> "$_out" 2>/dev/null \
-        || printf 'failed\t%s: want [%s] got [%s]\n' "$_t" "$(unesc "$_v")" "$_got" >> "$_out" 2>/dev/null ) &
+        || printf 'failed\t%s: want [%s] got [%s]\n' "$_t" "$_want" "$_got" >> "$_out" 2>/dev/null ) &
     rm -f "$_ds/$$.$_idx" "$_ds/$$.$_idx.part"
     _idx=$((_idx + 1))
   done < "$1"
@@ -1282,8 +1293,8 @@ _batch_reads_parse() { # _batch_reads_parse <unks-file> <frames-file>
 # scratch-record lines the fan's workers write (4 fields for app_restrict,
 # 5 for rom_bg - each collector below reads its own shape), then batches the
 # writes: holds for the already-recorded, fresh restrictions for the rest.
-_restrict_batch() { # _restrict_batch <pkgs-file> <scratch> <known> <bucket> <ar|rb>
-  _bp=$1; _br=$2; _bk=$3; _bb=$4; _bm=$5
+_restrict_batch() { # _restrict_batch <pkgs-file> <scratch> <known> <bucket> <ar|rb> <list-file>
+  _bp=$1; _br=$2; _bk=$3; _bb=$4; _bm=$5; _bl=$6
   _bd="$SPSM_DIR/.tmp/rbatch.$$.${KRV_TAG:-main}"
   mkdir -p "$_bd" 2>/dev/null || return 1
   : > "$_bd/in1"; : > "$_bd/unks"; : > "$_bd/in2"
@@ -1319,6 +1330,25 @@ _restrict_batch() { # _restrict_batch <pkgs-file> <scratch> <known> <bucket> <ar
       [ "$_bm" = rb ] && printf 'activity\tmake-uid-idle\t%s\n' "$_p" >> "$_bd/in2"
     done < "$_bd/parsed"
   fi
+  # JOURNAL FIRST - the module's own rule #1, and the rule the 2026-09-25
+  # 21:27 stranding broke: records go into the persistent list BEFORE the
+  # writes are issued. A pass that dies mid-write (killed, rebooted, mode
+  # switched off) then leaves a record restore can work from; a write
+  # without a record leaves the phone restricted with nothing on file to
+  # restore it - 31 buckets and 80 appops, on the owner's phone.
+  if [ -n "$_bl" ] && [ -s "$_br" ]; then
+    awk -F'\t' -v listf="$_bl" -v known="$_bk" -v mode="$_bm" '
+      BEGIN { nk = split(known, ka, " "); for (i = 1; i <= nk; i++) if (ka[i] != "") kn[ka[i]] = 1 }
+      {
+        if ($1 in kn) next
+        if (mode == "rb") print $0 >> listf                       # already 5-field
+        else print $1 "\t" $2 "\t" $4 "\t" $3 "\t" "deny" >> listf  # ar: pkg ob oo b -> pkg ob b oo deny
+      }' "$_br"
+  fi
+  # The mode may have gone off while the reads were running (the exit races
+  # nobody: do_deep_restrict's own defence reverts from the records above).
+  # Return 2 - aborted - and the caller must NOT fall through to the fan.
+  [ -f "$ACTIVE" ] || { rm -rf "$_bd"; return 2; }
   if [ -s "$_bd/in2" ]; then
     _wn=$(awk 'NF { c++ } END { print c + 0 }' "$_bd/in2")
     if tool_shellbatch "$_bd/in2" > "$_bd/out2" 2>/dev/null \
@@ -1384,7 +1414,12 @@ _restore_batch() { # _restore_batch <tsv-list>
             f = firstline[fi_]
             if (rc[fi_] == 0 && f != "" && f !~ /[ \t]/) cur = f
           } else if (fi_ in opword) cur = opword[fi_]
-          if (cur != o[4]) continue        # not ours any more: leave it alone
+          # Seen AND moved on: a newer decision by the system or the user
+          # wins. A FAILED read is not a decision - what we cannot see we
+          # must not leave behind (the 2026-09-25 stranding: restore reads
+          # timed out in the exit storm, every guard skipped, every write
+          # stayed). Unknown values are restored from the record.
+          if (cur != "-" && cur != o[4]) continue
           if (o[2] == "bucket") printf "activity\tset-standby-bucket\t%s\t%s\n", o[1], o[3]
           else printf "appops\tset\t%s\tRUN_ANY_IN_BACKGROUND\t%s\n", o[1], o[3]
         }
@@ -1435,12 +1470,23 @@ apply_app_restrict() {
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   managed_packages > "$_d/restrict.pkgs.$$" 2>/dev/null
   # Batch tool first: one JVM reads the whole set, one writes it (_restrict_
-  # batch). The fan below is the fallback and stays the reference.
+  # batch). The fan below is the fallback and stays the reference. rc=2 from
+  # the batch means the mode went off mid-pass: stand down, no fan.
   _tool_done=''
-  if tool_ok && _restrict_batch "$_d/restrict.pkgs.$$" "$_r" "$_known" "$_bucket" ar; then
-    _tool_done=1
+  _aborted=''
+  if tool_ok; then
+    _restrict_batch "$_d/restrict.pkgs.$$" "$_r" "$_known" "$_bucket" ar "$_list"
+    case $? in
+      0) _tool_done=1 ;;
+      2) _aborted=1 ;;
+    esac
   fi
-  if [ -z "$_tool_done" ]; then
+  if [ -z "$_tool_done" ] && [ -z "$_aborted" ]; then
+  # A batch that died halfway journaled records and may have issued writes:
+  # recompute the known set from the list, or the fan would read our own
+  # values back as the user's originals - the exact confusion the record
+  # exists to prevent.
+  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   _c=0
   while read -r _pkg; do
     [ -n "$_pkg" ] || continue
@@ -1450,19 +1496,25 @@ apply_app_restrict() {
         # them in place without reading anything.
         (
           bg_nice
+          [ -f "$ACTIVE" ] || exit 0
           am_write set-standby-bucket "$_pkg" "$_bucket"
           cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
         ) & ;;
       *)
         (
           bg_nice
+          [ -f "$ACTIVE" ] || exit 0
           _ob=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
           [ -n "$_ob" ] || _ob=-
           _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
                 | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
           [ -n "$_oo" ] || _oo=-
           [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
-          printf '%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_oo" "$_bucket" >> "$_r"
+          # Journal first: the record lands in the persistent list BEFORE the
+          # writes below. One writer per line, appended as the worker goes -
+          # a killed fan leaves every record it made, and with it every write.
+          printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" deny >> "$_list"
+          [ -f "$ACTIVE" ] || exit 0
           [ "$_ob" != "-" ] && am_write set-standby-bucket "$_pkg" "$_bucket"
           [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
         ) & ;;
@@ -1474,20 +1526,15 @@ apply_app_restrict() {
     # navigation bar gone for seconds at a time). Six at a time is nearly as
     # fast in wall time and lets the phone breathe.
     _c=$((_c + 1))
-    [ "$_c" -ge 6 ] && { wait; _c=0; }
+    [ "$_c" -ge 6 ] && { wait; _c=0; [ -f "$ACTIVE" ] || break; }
   done < "$_d/restrict.pkgs.$$"
   wait
   fi
   rm -f "$_d/restrict.pkgs.$$"
-  # One writer, in a stable order. Only the first sighting of a package in this
-  # idle period is a record of what it looked like before we touched it.
-  sort -u "$_r" 2>/dev/null | while IFS="$(printf '\t')" read -r _pkg _ob _oo _b; do
-    [ -n "$_pkg" ] || continue
-    case "$_known" in
-      *" $_pkg "*) ;;
-      *) printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_b" "$_oo" "deny" >> "$_list" ;;
-    esac
-  done
+  # One stable order, whoever wrote the records: the batch appends in package
+  # order, the fan in completion order - the list is the journal, and the
+  # journal must not depend on which worker won which race.
+  [ -s "$_list" ] && sort -u "$_list" -o "$_list" 2>/dev/null
   rm -f "$_r"
 }
 restore_app_restrict() {
@@ -1512,12 +1559,14 @@ restore_app_restrict() {
         _now=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
         # Only undo our own change: if the system or the user moved it since,
         # that newer decision wins.
-        [ "$_now" = "$_nb" ] && am_write set-standby-bucket "$_pkg" "$_ob"
+        # A failed read (_now empty) is not "somebody moved it": restore
+        # from the record rather than leave our value in place unseen.
+        { [ "$_now" = "$_nb" ] || [ -z "$_now" ]; } && am_write set-standby-bucket "$_pkg" "$_ob"
       fi
       if [ "$_oo" != "-" ]; then
         _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
                | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
-        [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
+        { [ "$_now" = "$_no" ] || [ -z "$_now" ]; } && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
       fi
     ) &
     _c=$((_c + 1))
@@ -2461,12 +2510,20 @@ apply_rom_bg_off() {
   _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   _n=$(awk 'NF { c++ } END { print c + 0 }' "$_pkgfile" 2>/dev/null)
   # Batch tool first (_restrict_batch, rb shape); the fan below is the
-  # fallback and stays the reference.
+  # fallback and stays the reference. rc=2: the mode went off mid-pass.
   _tool_done=''
-  if tool_ok && _restrict_batch "$_pkgfile" "$_r" "$_known" "$_bucket" rb; then
-    _tool_done=1
+  _aborted=''
+  if tool_ok; then
+    _restrict_batch "$_pkgfile" "$_r" "$_known" "$_bucket" rb "$_list"
+    case $? in
+      0) _tool_done=1 ;;
+      2) _aborted=1 ;;
+    esac
   fi
-  if [ -z "$_tool_done" ]; then
+  if [ -z "$_tool_done" ] && [ -z "$_aborted" ]; then
+  # A batch that died halfway journaled records and may have issued writes:
+  # recompute the known set, or the fan reads our own values as the user's.
+  _known=" $(cut -f1 "$_list" 2>/dev/null | tr '\n' ' ') "
   _n=0
   _c=0
   while read -r _pkg; do
@@ -2478,6 +2535,7 @@ apply_rom_bg_off() {
         # nothing to read and nothing to write down - just hold them in place.
         (
           bg_nice
+          [ -f "$ACTIVE" ] || exit 0
           am_write set-standby-bucket "$_pkg" "$_bucket"
           cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
           am_write make-uid-idle "$_pkg" || am_write make-uid-idle --user 0 "$_pkg"
@@ -2485,29 +2543,30 @@ apply_rom_bg_off() {
       *)
         (
           bg_nice
+          [ -f "$ACTIVE" ] || exit 0
           _ob=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
           [ -n "$_ob" ] || _ob=-
           _oo=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
                 | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
           [ -n "$_oo" ] || _oo=-
           [ "$_ob" = "-" ] && [ "$_oo" = "-" ] && exit 0
-          printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" deny >> "$_r"
+          # Journal first: the record lands in the persistent list BEFORE the
+          # writes below (see _restrict_batch for the race this answers).
+          printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_bucket" "$_oo" deny >> "$_list"
+          [ -f "$ACTIVE" ] || exit 0
           [ "$_ob" != "-" ] && am_write set-standby-bucket "$_pkg" "$_bucket"
           [ "$_oo" != "-" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND deny >/dev/null 2>&1
           am_write make-uid-idle "$_pkg" || am_write make-uid-idle --user 0 "$_pkg"
         ) & ;;
     esac
     _c=$((_c + 1))
-    [ "$_c" -ge 6 ] && { wait; _c=0; }
+    [ "$_c" -ge 6 ] && { wait; _c=0; [ -f "$ACTIVE" ] || break; }
   done < "$_pkgfile"
   wait
   fi
   rm -f "$_pkgfile"
-  # One writer for the journal, in a stable order.
-  sort -u "$_r" 2>/dev/null | while IFS=$TAB read -r _pkg _ob _nb _oo _no; do
-    [ -n "$_pkg" ] || continue
-    printf '%s\t%s\t%s\t%s\t%s\n' "$_pkg" "$_ob" "$_nb" "$_oo" "$_no" >> "$_list"
-  done
+  # One stable order, whoever wrote the records (see apply_app_restrict).
+  [ -s "$_list" ] && sort -u "$_list" -o "$_list" 2>/dev/null
   rm -f "$_r"
   if [ "$_n" = 0 ]; then
     log "rom background: nothing of the phone's own was running in the background"
@@ -2532,12 +2591,14 @@ restore_rom_bg_off() {
         _now=$(am_read get-standby-bucket "$_pkg" | tr -d '\r')
         # Only undo our own change: a value something else has moved since is a
         # newer decision than ours.
-        [ "$_now" = "$_nb" ] && am_write set-standby-bucket "$_pkg" "$_ob"
+        # A failed read (_now empty) is not "somebody moved it": restore
+        # from the record rather than leave our value in place unseen.
+        { [ "$_now" = "$_nb" ] || [ -z "$_now" ]; } && am_write set-standby-bucket "$_pkg" "$_ob"
       fi
       if [ "$_oo" != "-" ]; then
         _now=$(cmd appops get "$_pkg" RUN_ANY_IN_BACKGROUND 2>/dev/null \
                | sed -n 's/^[[:space:]]*RUN_ANY_IN_BACKGROUND:[[:space:]]*\([a-z_]*\).*/\1/p' | head -1)
-        [ "$_now" = "$_no" ] && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
+        { [ "$_now" = "$_no" ] || [ -z "$_now" ]; } && cmd appops set "$_pkg" RUN_ANY_IN_BACKGROUND "$_oo" >/dev/null 2>&1
       fi
     ) &
     _c=$((_c + 1))

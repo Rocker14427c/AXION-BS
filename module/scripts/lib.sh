@@ -126,6 +126,10 @@ sync_scripts() {
 # Nothing in the module requires these to exist. If none can run, the binary is
 # simply not published and the daemon polls exactly as it always did.
 SPSM_BIN="$SPSM_DIR/bin"
+# The batch tool's runtime home: the copy uid 2000 can actually read, because
+# KernelSU keeps /data/adb at mode 700 root (see tool_jar_path). Persistent
+# like /data/adb; republished from the master at every boot.
+TOOL_JAR_RUN="${SPSM_TOOL_JAR_RUN:-/data/local/tmp/spsm/spsm-tool.jar}"
 
 # Which ABI directory suits this phone, most specific first.
 native_abi_list() {
@@ -151,18 +155,26 @@ publish_native() { # publish_native <module dir>
   # proof of life is the same idea as the natives': run it with no verb, which
   # the JVM inside answers with a usage line and status 2. Anything else (no
   # app_process, a jar the runtime will not load) removes it again, and every
-  # caller falls back to the shell paths it was built on.
+  # caller falls back to the shell paths it was built on. The proof runs from
+  # the RUNTIME copy in $TOOL_JAR_RUN - the one uid 2000 can actually read
+  # (see tool_jar_path); proving the unreadable master would prove nothing
+  # but root's own eyesight.
   if [ -f "$_md/bin/spsm-tool.jar" ]; then
     cp -f "$_md/bin/spsm-tool.jar" "$SPSM_BIN/spsm-tool.jar.new" 2>/dev/null \
       && chmod 644 "$SPSM_BIN/spsm-tool.jar.new" 2>/dev/null \
       && mv -f "$SPSM_BIN/spsm-tool.jar.new" "$SPSM_BIN/spsm-tool.jar" 2>/dev/null
-    if [ -f "$SPSM_BIN/spsm-tool.jar" ]; then
-      su 2000 -c "CLASSPATH=$SPSM_BIN/spsm-tool.jar app_process / dev.axion.spsm.tool.Main" >/dev/null 2>&1
+    mkdir -p /data/local/tmp/spsm 2>/dev/null
+    chmod 755 /data/local/tmp/spsm 2>/dev/null
+    cp -f "$_md/bin/spsm-tool.jar" "$TOOL_JAR_RUN.new" 2>/dev/null \
+      && chmod 644 "$TOOL_JAR_RUN.new" 2>/dev/null \
+      && mv -f "$TOOL_JAR_RUN.new" "$TOOL_JAR_RUN" 2>/dev/null
+    if [ -f "$TOOL_JAR_RUN" ]; then
+      su 2000 -c "CLASSPATH=$TOOL_JAR_RUN app_process / dev.axion.spsm.tool.Main" >/dev/null 2>&1
       _trc=$?
       if [ "$_trc" = 2 ]; then
         log "batch tool: published"
       else
-        rm -f "$SPSM_BIN/spsm-tool.jar" 2>/dev/null
+        rm -f "$SPSM_BIN/spsm-tool.jar" "$TOOL_JAR_RUN" 2>/dev/null
         log "batch tool: does not run here (rc=$_trc) - the shell paths stay in charge"
       fi
     fi
@@ -220,6 +232,18 @@ publish_native() { # publish_native <module dir>
 # the tool answers with a frame for every line: a missing jar, a dead runtime
 # or a short answer costs nothing but the attempt.
 tool_jar_path() {
+  # The tool runs as uid 2000 - the shell identity whose service calls the
+  # phone's permission checks know - and KernelSU keeps /data/adb at mode 700
+  # root: from that uid the master copy under $SPSM_BIN is UNREADABLE, and
+  # ART aborts with a misleading "DEX2OATBOOTCLASSPATH must be a prefix of
+  # BOOTCLASSPATH" when it cannot read the CLASSPATH jar at all (device
+  # proof, 2026-09-25: the same jar ran from /data/local/tmp under any
+  # SELinux label and aborted from /data/adb under any label - it is the
+  # directory's DAC, not its context). So the copy the runtime reads lives
+  # in the shell's own persistent scratch; the master stays beside the
+  # natives for the boot-time republish. A wiped scratch costs nothing: the
+  # callers' frame check fails and the shell fans stay in charge.
+  [ -f "$TOOL_JAR_RUN" ] && { printf '%s' "$TOOL_JAR_RUN"; return 0; }
   [ -f "$SPSM_BIN/spsm-tool.jar" ] && { printf '%s' "$SPSM_BIN/spsm-tool.jar"; return 0; }
   return 1
 }
@@ -754,8 +778,11 @@ j_reset() {
     _id=${_f##*/}
     _id=${_id%.state}
     case "$(cat "$_f" 2>/dev/null)" in
-      applied|restored-drift)
+      applied|restored-drift|applying)
         # Our value may still be in place: keep the record that predates it.
+        # "applying" is the strongest case of all - a worker may be mid-write
+        # RIGHT NOW (the 2026-09-25 21:27 stranding began with a sweep that
+        # deleted an in-flight knob's records as if the session were over).
         _kept=$((_kept + 1)) ;;
       *)
         rm -f "$JOURNAL/$_id.orig" "$JOURNAL/$_id.applied" "$JOURNAL/$_id.meta" "$JOURNAL/$_id.state" "$JOURNAL/$_id.writes" ;;
@@ -1327,7 +1354,11 @@ home_resumed() {
 safety_force() {
   for n in 0 1 2 3 4 5 6 7; do
     _f="/sys/devices/system/cpu/cpu$n/online"
-    [ -e "$(rp "$_f")" ] && printf '%s\n' 1 > "$(rp "$_f")" 2>/dev/null
+    # Subshell, stderr on the OUTSIDE: cpu0/online is read-only on this
+    # kernel, and a redirect failure is reported by the shell while its own
+    # stderr still points at the log - "can't create ... Permission denied"
+    # looked like a crash in the middle of an exit (bench4, 2026-09-25).
+    [ -e "$(rp "$_f")" ] && { ( printf '%s\n' 1 > "$(rp "$_f")" ) 2>/dev/null; }
   done
   for p in "$SPSM_ROOT"/sys/devices/system/cpu/cpufreq/policy*; do
     [ -w "$p/scaling_governor" ] && printf '%s\n' schedutil > "$p/scaling_governor" 2>/dev/null
@@ -1407,7 +1438,7 @@ pending_knobs() {
   # net), and a fork per knob for a question grep can answer in one pass is a
   # second of a slow phone's time on the way out.
   [ -d "$JOURNAL" ] || { echo 0; return; }
-  _n=$(grep -l -E '^(applied|restored-drift)$' "$JOURNAL"/*.state 2>/dev/null | wc -l)
+  _n=$(grep -l -E '^(applied|restored-drift|applying)$' "$JOURNAL"/*.state 2>/dev/null | wc -l)
   _n=${_n##* }
   case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
   echo "$_n"
@@ -1465,8 +1496,15 @@ start_gesturemon() {
         return 0
     fi
     _gbin=$(gesturemon_binary) || { log "gesturemon: binary not found - skipped"; return 0; }
-    _ghome=$(cfg gesture_home_cmd 'cmd input keyevent 3')
-    _grec=$(cfg gesture_recents_cmd 'cmd activity start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity')
+    # Dispatch goes through the app_process wrappers (input/am), not the
+    # native cmd binary: on RMX3430 the recognizer's nohup'd root context
+    # makes cmd's binder call die - "cmd: Failure calling service input:
+    # Failed transaction (2147483646)" - three recognitions, zero dispatches
+    # (bench4, 2026-09-25), which is exactly why the owner's swipes did
+    # nothing. The engine's own input/am calls run from the same context
+    # class all day. cfg still overrides, per phone.
+    _ghome=$(cfg gesture_home_cmd 'input keyevent 3')
+    _grec=$(cfg gesture_recents_cmd 'am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity')
     nohup "$_gbin" --home-cmd "$_ghome" --recents-cmd "$_grec" \
         >>"$SPSM_DIR/gesturemon.log" 2>&1 &
     echo $! > "$STATE/gesturemon.pid"

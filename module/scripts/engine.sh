@@ -61,6 +61,17 @@ knob_apply() { # knob_apply id
   # the builtin, because this path runs for every knob of every phase.
   : > "$JOURNAL/$_id.writes" 2>/dev/null
 
+  # The in-flight marker, and the race that made it necessary: a deactivate
+  # landed WHILE the grace-deferred restrict pass was still applying
+  # (2026-09-25 21:27, the owner's phone). The exit's journal sweep saw this
+  # knob with no recorded state, judged the session finished, and deleted the
+  # per-package records the still-running pass needed - then the pass finished
+  # and marked itself applied, stranding 31 standby buckets and 80 appops
+  # writes with nothing on record to restore them from. A knob that is mid-
+  # apply now says so: the sweep keeps its records, the exit waits (bounded)
+  # for it to stand down, and then reverts it like any applied knob.
+  j_record_state "$_id" applying
+
   "$_fn"
   _rc=$?
 
@@ -158,8 +169,13 @@ knob_revert() { # knob_revert id
   # without the retry those records are skipped forever while still being counted
   # as drift, which is how this phone reported "3 value(s) could not be restored"
   # while naming only one.
+  # "applying" is included since the 2026-09-25 exit race: a knob caught
+  # mid-apply has records worth restoring (they are written before the phone
+  # is touched), and by the time a revert is asked for, its workers have
+  # stood down - the exit waits for that before sweeping, and a later
+  # session's sweep must not walk past it either.
   case "$_st" in
-    applied|restored-drift) ;;
+    applied|restored-drift|applying) ;;
     *) return 0 ;;
   esac
   has_function "$_fn" || { log "no restore function for $_id"; return 1; }
@@ -512,23 +528,38 @@ do_deep_restrict() {
   for _k in app_restrict rom_bg_off; do
     knob_enabled "$_k" "$(knob_default "$_k")" || continue
     # Applied already in this idle period (an earlier fire): re-recording
-    # would save our own values as the user's originals.
-    case "$(j_state "$_k")" in applied) continue ;; esac
+    # would save our own values as the user's originals. "applying" is the
+    # same answer for a fire that is still running: two passes over one
+    # package set would read each other's writes as the user's values.
+    case "$(j_state "$_k")" in applied|applying) continue ;; esac
     ( KRV_TAG=$_k
       bg_nice
+      # The mode may have been switched off between the daemon's decision
+      # and this worker's first command (the 2026-09-25 exit race): a pass
+      # with no session behind it has nothing to apply.
+      [ -f "$ACTIVE" ] || exit 0
       _kt0=$(now_epoch)
       knob_apply "$_k"
       log "  restrict knob $_k: applied in $(( $(now_epoch) - _kt0 ))s" ) &
   done
   wait
+  rm -f "$STATE/deep_restrict.pid" 2>/dev/null
   # The wake may have landed while the restrictions were going in - undo them
   # here, now, rather than leave a phone in somebody's hand restricted. (The
   # wake's own phase_deep_revert may do the same; knob_revert is idempotent
-  # per journal slice, exactly as in the cores_sleep case.)
-  if [ ! -f "$STATE/deep_restricted" ] || [ "$(screen_state)" != "off" ]; then
+  # per journal slice, exactly as in the cores_sleep case.) The same answer
+  # applies when the MODE went off mid-pass: the exit waits (bounded) for
+  # this pass to stand down, but it is this pass that knows what its own
+  # workers wrote - so it puts those writes back itself, from the records it
+  # journaled before making them.
+  if [ ! -f "$ACTIVE" ] || [ ! -f "$STATE/deep_restricted" ] || [ "$(screen_state)" != "off" ]; then
+    log "  pass defence: its session is gone - reverting what it wrote"
     for _k in app_restrict rom_bg_off; do
-      case "$(j_state "$_k")" in
-        applied) ( KRV_TAG=$_k bg_nice knob_revert "$_k" >/dev/null 2>&1 ) & ;;
+      _kst="$(j_state "$_k")"
+      case "$_kst" in
+        applied|applying)
+          log "    defence: $_k is $_kst - putting it back"
+          ( KRV_TAG=$_k; bg_nice; knob_revert "$_k" ) & ;;
       esac
     done
     wait
@@ -542,6 +573,7 @@ do_activate() {
   rm -f "$STATE/doze_forced"
   rm -f "$STATE/cores_asleep"
   rm -f "$STATE/deep_restricted"
+  rm -f "$STATE/deep_restrict.pid"
 
   if [ -f "$ACTIVE" ]; then
     # Already on. Re-applying every knob here costs the phone a whole pass - 25
@@ -718,6 +750,28 @@ do_deactivate() {
   rm -f "$STATE/cores_asleep"
   rm -f "$STATE/deep_restricted"
   rm -f "$STATE/sweep_full"
+
+  # A grace-deferred restrict pass may still be in flight: its workers watch
+  # for $ACTIVE - removed above - and stand down within one batch of work.
+  # Rather than race them over the journal records (the 2026-09-25 21:27
+  # stranding: the sweep deleted records a live pass still needed, then the
+  # pass finished and left 31 buckets and 80 appops writes with nothing on
+  # record to restore them), the exit gives them a bounded moment to stop,
+  # then reverts whatever they recorded like any other knob. Paid only when
+  # a pass is actually alive: the daemon records the pid of the pass it
+  # fires, and the pass removes the file when it ends.
+  if [ -s "$STATE/deep_restrict.pid" ]; then
+    _dpid=$(cat "$STATE/deep_restrict.pid" 2>/dev/null)
+    if [ -n "$_dpid" ] && kill -0 "$_dpid" 2>/dev/null; then
+      _sw=0
+      while [ "$_sw" -lt 90 ] && kill -0 "$_dpid" 2>/dev/null; do
+        sleep 0.5 2>/dev/null || sleep 1
+        _sw=$((_sw + 1))
+      done
+      log "exit: an in-flight restrict pass stood down after $((_sw / 2))s"
+    fi
+    rm -f "$STATE/deep_restrict.pid" 2>/dev/null
+  fi
 
   # The CPU power mode is NOT touched on the way out - and not on the way in
   # either. v3.7.5 removed the Low Power mode option at the owner's direction

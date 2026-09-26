@@ -68,8 +68,13 @@
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
 
-#define HOME_CMD_DEFAULT    "cmd input keyevent 3"
-#define RECENTS_CMD_DEFAULT "cmd activity start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity"
+/* app_process wrappers, not the native cmd binary: from this process's
+ * nohup'd root context on RMX3430, cmd's binder call dies ("Failure calling
+ * service input: Failed transaction"), while input/am work everywhere else
+ * in this module from the same context. lib.sh passes these explicitly from
+ * cfg anyway; the defaults are for standalone runs. */
+#define HOME_CMD_DEFAULT    "input keyevent 3"
+#define RECENTS_CMD_DEFAULT "am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity"
 
 static int   opt_quiet = 0;
 static const char *opt_device   = NULL;   /* NULL: discover */
@@ -256,13 +261,17 @@ static int discover_touch(struct touchdev *td) {
 }
 
 /* ------------------------------------------------------------ evdev loop */
-/* Protocol B, slot 0 only: the first finger is the gesture; the rest of the
- * palm is noise. Positions are latched per SYN_REPORT, exactly as the input
- * dispatcher reads them. */
+/* Protocol B, ANY slot: the first finger DOWN owns the gesture, whatever
+ * slot the driver assigns it (this panel hands real swipes slots 2, 3, 5,
+ * 7 - a slot-0-only filter threw every one of them away, which is what the
+ * owner's working swipes proved on 2026-09-25). Every other finger is palm
+ * noise until the owner lifts. Positions are latched per SYN_REPORT, exactly
+ * as the input dispatcher reads them. */
 struct mt_state {
 	int slot;            /* current slot in the stream */
-	int tid0;            /* slot 0 tracking id, -1 = up */
-	int x, y;            /* slot 0 latest */
+	int gslot;           /* slot the gesture finger owns, -1 = unowned */
+	int tid0;            /* owning finger's tracking id, -1 = up */
+	int x, y;            /* the owner's latest position */
 	int x_latch, y_latch, tid_latch;   /* values at last SYN_REPORT */
 	int have_x, have_y;
 };
@@ -286,7 +295,7 @@ static int run_device(struct recog *r) {
 	if (r->min_dy <= 0) r->min_dy = r->screen_h * 5 / 100;
 
 	memset(&mt, 0, sizeof mt);
-	mt.tid0 = -1; mt.tid_latch = -1; mt.x = -1; mt.y = -1;
+	mt.tid0 = -1; mt.gslot = -1; mt.tid_latch = -1; mt.x = -1; mt.y = -1;
 
 	tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
 	if (tfd < 0) { logf_("timerfd: %s", strerror(errno)); close(td.fd); return 1; }
@@ -340,9 +349,25 @@ static int run_device(struct recog *r) {
 				struct input_event *e = (struct input_event *)((char *)ev + i);
 				if (e->type == EV_ABS) {
 					if (e->code == ABS_MT_SLOT) { mt.slot = e->value; continue; }
-					if (mt.slot != 0) continue;   /* the first finger is the gesture */
+					if (e->code == ABS_MT_TRACKING_ID) {
+						if (e->value >= 0) {
+							/* finger down: an unowned stream becomes this
+							 * finger's gesture; a second finger while one
+							 * is owned is noise and changes nothing */
+							if (mt.tid0 < 0) { mt.gslot = mt.slot; mt.tid0 = e->value; }
+							else if (mt.slot == mt.gslot) mt.tid0 = e->value;
+						} else if (mt.slot == mt.gslot) {
+							/* the owner lifted - the stream is unowned again */
+							mt.tid0 = -1; mt.gslot = -1;
+						}
+						continue;
+					}
+					/* Only the gesture finger's slot moves the gesture. Before an
+					 * owner exists there is nothing to move (protocol B sends the
+					 * tracking id first in a down frame); a single-touch panel has
+					 * no slots at all and always counts. */
+					if (td.mt && mt.slot != mt.gslot) continue;
 					switch (e->code) {
-					case ABS_MT_TRACKING_ID: mt.tid0 = e->value; break;
 					case ABS_MT_POSITION_X:  mt.x = e->value; mt.have_x = 1; break;
 					case ABS_MT_POSITION_Y:  mt.y = e->value; mt.have_y = 1; break;
 					case ABS_X: if (!td.mt) { mt.x = e->value; mt.have_x = 1; } break;

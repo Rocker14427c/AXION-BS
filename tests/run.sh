@@ -4619,6 +4619,14 @@ grep -q 'nav: keeping gesture navigation' "$WORK/spsm/spsm.log" && \
   [ "$(cat "$WORK/stub/settings/secure.navigation_mode")" = "2" ]
 check "the gesture phone keeps gestures - no three-button switch" $?
 grep -q 'gesturemon: started' "$WORK/spsm/spsm.log"
+# Dispatch defaults must be the app_process wrappers: the native cmd binary's
+# binder dies in the recognizer's context on RMX3430 ("Failure calling
+# service input: Failed transaction") - three recognitions, zero dispatches,
+# 2026-09-25. The fake logs the argv it was started with.
+grep -q -- '--home-cmd input keyevent 3' "$WORK/gmon.args"
+check "gesturemon started with the input-wrapper home dispatch (not cmd)" $?
+grep -q -- '--recents-cmd am start --user 0' "$WORK/gmon.args"
+check "gesturemon started with the am-wrapper recents dispatch (not cmd)" $?
 check "activate started the recognizer" $?
 _gpid=$(cat "$WORK/spsm/state/gesturemon.pid" 2>/dev/null)
 [ -n "$_gpid" ] && kill -0 "$_gpid" 2>/dev/null

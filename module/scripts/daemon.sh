@@ -487,6 +487,9 @@ while true; do
           || knob_enabled rom_bg_off "$(knob_default rom_bg_off)"; }; then
     : > "$STATE/deep_restricted" 2>/dev/null
     sh "$SCRIPT_DIR/engine.sh" deep-restrict >>"$LOG" 2>&1 3<&- 4<&- &
+    # The exit reads this pidfile to give an in-flight pass a bounded moment
+    # to stand down before the journal sweep runs (the 2026-09-25 race).
+    echo $! > "$STATE/deep_restrict.pid" 2>/dev/null
   fi
 
   # The heartbeat. While asleep it is the proof that the mode is awake and
