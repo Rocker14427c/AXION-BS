@@ -1,0 +1,1 @@
+home_swap	works	home: com.android.launcher3 -> dev.axion.spsm; activity: com.android.launcher3/.uioverrides.QuickstepLauncher -> dev.axion.spsm/.SpsmHomeActivity; 

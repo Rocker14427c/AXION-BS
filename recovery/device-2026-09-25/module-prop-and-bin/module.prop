@@ -1,0 +1,6 @@
+id=axion_spsm
+name=Axion Super Power Saving
+version=v3.9.2
+versionCode=78
+author=Axion SPSM
+description=v3.9.2, the race round, field-caught and fixed: the batch tool now runs where uid 2000 can actually read it (KernelSU keeps /data/adb at 700 root - the jar's runtime copy lives in /data/local/tmp/spsm, republished every boot) and answers every operation in milliseconds instead of 30 (its result receiver is pumped the way the platform's own cmd binary pumps it); a deactivate that lands while the grace-deferred restrictions are still applying no longer strands them - the knob mid-apply says so in the journal, its records are written BEFORE its writes, the exit gives the pass a bounded moment to stand down, and an unreadable value is restored from the record instead of skipped; and the gesture recognizer follows the first finger down on ANY slot the touch driver assigns, not just slot 0 - the panel was handing real swipes slots the old filter threw away. Everything else is v3.9.1: the deep grace, the native cmd paths, one JVM per batch with the shell fans as fallback, and swipe up = home / swipe up + hold = this mode's recents while the mode owns the bottom edge.

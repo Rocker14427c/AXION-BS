@@ -1,0 +1,3 @@
+/sys/module/ged/parameters/gpu_cust_upbound_freq	1200000\n
+/sys/module/ged/parameters/gpu_bottom_freq	300000\n
+/sys/module/ged/parameters/gpu_dvfs_enable	1\n

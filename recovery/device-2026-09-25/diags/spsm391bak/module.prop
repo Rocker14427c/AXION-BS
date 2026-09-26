@@ -1,0 +1,6 @@
+id=axion_spsm
+name=Axion Super Power Saving
+version=v3.9.1
+versionCode=77
+author=Axion SPSM
+description=v3.9.1, the architecture round, measured: the per-app restrictions wait out a deep grace (75s) instead of re-running on every short screen-off (the census counted ~4,100 binder calls in eight minutes of normal use); every service verb takes the native cmd path first with the old command as fallback; one JVM (spsm-tool.jar) does the whole batch of per-app reads, guarded writes and the exit's 187-package release, with the proven shell fans as the byte-for-byte reference and fallback; and gesture navigation now works INSIDE the mode - spsm-gesturemon, a poll()-based native reader of the touchscreen's own events (no grab, no uinput, zero CPU between touches), owns the bottom edge while this mode is the reason the launcher is gone: swipe up = home, swipe up + hold = this mode's recents. Three-button phones keep the three-button path, unchanged.

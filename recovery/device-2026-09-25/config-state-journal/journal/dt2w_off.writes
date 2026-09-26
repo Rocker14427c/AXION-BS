@@ -1,0 +1,4 @@
+@secure:double_tap_to_wake	0\n
+@system:double_tap_to_wake	0\n
+@secure:tap_to_wake	0\n
+/proc/touchpanel/double_tap_enable	0\n

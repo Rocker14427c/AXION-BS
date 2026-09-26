@@ -1,0 +1,1 @@
+little_max=1800000 big_max=2000000 governor=powersave doze=forced held_by=governor

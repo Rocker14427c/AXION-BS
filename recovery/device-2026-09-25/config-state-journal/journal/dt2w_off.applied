@@ -1,0 +1,17 @@
+@secure:double_tap_to_wake	0\n
+@system:double_tap_to_wake	0\n
+@secure:tap_to_wake	0\n
+@secure:wake_gesture_enabled	0\n
+/proc/touchpanel/double_tap_enable	0\n
+/proc/touchpanel/double_tap	(MISSING)
+/proc/touchpanel/gesture_enable	(MISSING)
+/proc/touchpanel/enable_dt2w	(MISSING)
+/proc/tp_gesture	(MISSING)
+/proc/ilitek/gesture	(MISSING)
+/proc/ilitek/double_tap	(MISSING)
+/sys/touchpanel/double_tap	(MISSING)
+/sys/class/touch/tp_gesture	(MISSING)
+/sys/class/touch/tp_dev/gesture_on	(MISSING)
+/sys/devices/virtual/touch/tp_dev/gesture_on	(MISSING)
+/sys/devices/platform/soc/soc:touch/gesture_on	(MISSING)
+/sys/class/ms-touchscreen-mtk/device/gesture_wakeup	(MISSING)

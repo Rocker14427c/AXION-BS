@@ -1,0 +1,3 @@
+@global:low_power	1\n
+@global:low_power_sticky	1\n
+@global:battery_saver_constants	enable_night_mode=false\n

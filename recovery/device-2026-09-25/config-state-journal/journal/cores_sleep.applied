@@ -1,0 +1,6 @@
+/sys/devices/system/cpu/cpu2/online	0\n
+/sys/devices/system/cpu/cpu3/online	0\n
+/sys/devices/system/cpu/cpu4/online	0\n
+/sys/devices/system/cpu/cpu5/online	0\n
+/sys/devices/system/cpu/cpu6/online	1\n
+/sys/devices/system/cpu/cpu7/online	0\n

@@ -1,0 +1,3 @@
+@global:wifi_scan_always_enabled	0\n
+@global:ble_scan_always_enabled	(MISSING)
+@global:network_recommendations_enabled	0\n

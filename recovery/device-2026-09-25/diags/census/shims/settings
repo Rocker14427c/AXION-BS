@@ -1,0 +1,6 @@
+#!/system/bin/sh
+_s=${EPOCHREALTIME:-0}
+"/system/bin/settings" "$@"; _rc=$?
+_e=${EPOCHREALTIME:-0}
+printf '%s\t%s\tsettings\t%s\t%s\n' "$_s" "$_e" "$_rc" "$*" >> "${CENSUS_LOG:-/data/local/tmp/census/fallback.log}" 2>/dev/null
+exit $_rc
