@@ -13,7 +13,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.util.Arrays;
-import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -118,12 +118,29 @@ public final class Main {
         out.flush();
     }
 
+    /** Keep this process's binder traffic moving. An app_process JVM that
+     *  only waits does not get its callbacks serviced promptly - the result
+     *  receiver sat undelivered while the poll slept (30s per operation on
+     *  the phone, 2026-09-25). The platform's own cmd never stands still
+     *  like that, so neither does this: one cheap getService between poll
+     *  slices is enough to pump the thread state the delivery needs. */
+    private static void pumpBinder() {
+        try {
+            sGetService.invoke(null, "activity");
+        } catch (Throwable ignored) { }
+    }
+
     /** One in-process shellCommand transaction; returns {rc, output}. */
     private static String[] runShellCommand(IBinder binder, String[] args) throws Exception {
         ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
         ParcelFileDescriptor readSide = pipe[0];
         ParcelFileDescriptor writeSide = pipe[1];
-        final SynchronousQueue<Integer> result = new SynchronousQueue<Integer>();
+        // Capacity one, NOT a hand-off queue: the receiver fires on a binder
+        // thread while this thread is still draining the pipe, and a
+        // SynchronousQueue offer with no waiter yet simply DROPS the result -
+        // the poll then waits out the full 30s ceiling for an answer that had
+        // already arrived (the device's ms-scale operations took 30s each).
+        final ArrayBlockingQueue<Integer> result = new ArrayBlockingQueue<Integer>(1);
         ResultReceiver receiver = new ResultReceiver(null) {
             @Override
             protected void onReceiveResult(int resultCode, android.os.Bundle resultData) {
@@ -146,7 +163,18 @@ public final class Main {
             // sees EOF: the service got its own duplicate of the descriptor.
             writeSide.close();
             output = readAll(new FileInputStream(readSide.getFileDescriptor()));
-            Integer delivered = result.poll(OP_TIMEOUT_S, TimeUnit.SECONDS);
+            pumpBinder();
+            // One deadline for the whole wait, polled in slices of at most
+            // 250ms so every slice boundary is a chance to pump.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(OP_TIMEOUT_S);
+            Integer delivered = null;
+            for (;;) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                delivered = result.poll(Math.min(remaining, 250000000L), TimeUnit.NANOSECONDS);
+                if (delivered != null) break;
+                pumpBinder();
+            }
             rc = (delivered == null) ? -3 : delivered.intValue();
         } finally {
             try { writeSide.close(); } catch (Throwable ignored) { }

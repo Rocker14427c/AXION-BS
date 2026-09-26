@@ -624,6 +624,53 @@ check "wake: every core returns" $?
 [ -f "$WORK/spsm/journal/cores_sleep.state" ] && grep -q restored "$WORK/spsm/journal/cores_sleep.state"
 check "and the journal says the knob is done" $?
 
+say "7b. a core that refuses the sleep is recorded honestly, and its refused write-back is a no-op, not drift"
+make_tree; make_stubs; seed_stub_state
+enable_knobs cores_sleep
+run_engine activate >/dev/null 2>&1
+quiesce_daemon
+screen_off
+run_engine screen-off >/dev/null 2>&1
+# The device kernel on 2026-09-25 23:50 refused cpu6 in BOTH directions: the
+# sleep write did not take (the applied record said 1 - it tells the truth),
+# and the identical write-back on the way out got EPERM. That refusal was
+# counted as "failed ... want [1] got [1]", one drifted knob, and the safety
+# valves: a 70s exit over a value that had never moved. A read-only file is
+# the rig's version of the refusal (the suite is not root, so the redirect
+# genuinely fails).
+chmod 444 "$ROOT/sys/devices/system/cpu/cpu6/online"
+run_engine core-sleep >/dev/null 2>&1
+i=0
+while [ $i -lt 20 ]; do
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpu2/online")" = "0" ] && break
+  sleep 0.25; i=$((i + 1))
+done
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu2/online")" = "0" ]
+check "the other cores slept around the stubborn one" $?
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu6/online")" = "1" ]
+check "the stubborn core stayed awake - its write was refused" $?
+grep -q "cores_sleep: 5 core(s) asleep" "$WORK/spsm/spsm.log"
+check "and the log counted what actually happened (5, not 6)" $?
+awk -F'\t' '$1 ~ /cpu6\/online$/ && $2 == "1\\n" { f=1 } END { exit !f }' "$WORK/spsm/journal/cores_sleep.applied"
+check "the applied record told the truth: cpu6 never went down" $?
+screen_on
+run_engine screen-on >/dev/null 2>&1
+i=0
+while [ $i -lt 20 ]; do
+  [ "$(cat "$ROOT/sys/devices/system/cpu/cpu2/online")" = "1" ] && break
+  sleep 0.25; i=$((i + 1))
+done
+[ "$(cat "$ROOT/sys/devices/system/cpu/cpu2/online")" = "1" ]
+check "wake: the slept cores returned" $?
+[ "$(cat "$WORK/spsm/journal/cores_sleep.state" 2>/dev/null)" = "restored" ]
+check "and the stubborn core's refused no-op write closed the knob as restored, not restored-drift" $?
+if grep -q "did not return" "$WORK/spsm/spsm.log"; then
+  bad "no false 'want [1] got [1]' alarm about a value that never moved ($(grep -m1 'did not return' "$WORK/spsm/spsm.log"))"
+else
+  ok "no false 'want [1] got [1]' alarm about a value that never moved"
+fi
+chmod 644 "$ROOT/sys/devices/system/cpu/cpu6/online"
+
 say "8. missing nodes are skipped, not invented"
 make_tree; make_stubs; seed_stub_state
 rm -f "$ROOT/proc/touchpanel/gesture_enable"
