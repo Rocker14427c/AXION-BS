@@ -129,6 +129,15 @@ static void run_cmd(const char *cmd) {
 	 * per swipe is nothing next to what the swipe itself wakes. */
 	pid_t pid = fork();
 	if (pid == 0) {
+		/* The dispatchers (input/cmd/am - cmd-based on this ROM) hand their
+		 * own fd 0/1/2 to the service inside the binder transaction. This
+		 * process is a daemon whose inherited stdin can be a dead socket
+		 * (an orphaned nohup), and a parcel carrying a closed fd fails the
+		 * whole transaction: "Failure calling service input". Give the
+		 * child fds that exist, whatever the parent was started from. */
+		int nul = open("/dev/null", O_RDONLY);
+		if (nul > 0) dup2(nul, STDIN_FILENO);
+		else if (nul < 0) { int d = open("/dev/null", O_RDWR); if (d >= 0) dup2(d, STDIN_FILENO); }
 		execl("/system/bin/sh", "sh", "-c", cmd, (char *)NULL);
 		execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
 		_exit(127);

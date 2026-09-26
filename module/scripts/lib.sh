@@ -1505,8 +1505,16 @@ start_gesturemon() {
     # class all day. cfg still overrides, per phone.
     _ghome=$(cfg gesture_home_cmd 'input keyevent 3')
     _grec=$(cfg gesture_recents_cmd 'am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity')
+    # </dev/null is not hygiene, it is the dispatch fix: the recognizer
+    # outlives the shell that started it, and an orphaned nohup keeps the
+    # DEAD stdin of that shell. Every dispatch (input/cmd/am - on this ROM
+    # input IS a cmd pass-through) hands its own fd 0/1/2 to the service
+    # over binder, and a transaction carrying a closed fd dies with
+    # "Failure calling service input: Failed transaction (2147483646)" -
+    # every recognised swipe, owner's and synthetic alike, since the first
+    # deploy (device proof 2026-09-25 21:24 and 2026-09-26 10:35).
     nohup "$_gbin" --home-cmd "$_ghome" --recents-cmd "$_grec" \
-        >>"$SPSM_DIR/gesturemon.log" 2>&1 &
+        </dev/null >>"$SPSM_DIR/gesturemon.log" 2>&1 &
     echo $! > "$STATE/gesturemon.pid"
     log "gesturemon: started (pid $(cat "$STATE/gesturemon.pid")) - swipe up = home, swipe up + hold = recents"
     return 0
