@@ -138,6 +138,23 @@ static void run_cmd(const char *cmd) {
 		int nul = open("/dev/null", O_RDONLY);
 		if (nul > 0) dup2(nul, STDIN_FILENO);
 		else if (nul < 0) { int d = open("/dev/null", O_RDWR); if (d >= 0) dup2(d, STDIN_FILENO); }
+		/* Close everything above stderr before the exec. This daemon holds
+		 * the panel (fd3), the hold timerfd and the epoll fd open, and the
+		 * dispatch chain is sh -> KernelSU su -> cmd: KernelSU hands its
+		 * privilege token to the kernel through a file descriptor (the
+		 * "ksu fd wrapper" of su --help, disable-able with -W). With the
+		 * daemon's descriptors squatting the low fd numbers the transition
+		 * comes out corrupted and the service call dies with binder
+		 * "Failed transaction" - device proof 2026-09-26: identical
+		 * commands 21/21 FAILED from the daemon's dirty fd table and 5/5
+		 * WORKED (uid transition + keyevent landed, focus moved) from a
+		 * detached repro with a clean one. Standard daemon hygiene. */
+		{
+			int maxfd = 1024;
+			long m = sysconf(_SC_OPEN_MAX);
+			if (m > 0 && m < maxfd) maxfd = (int)m;
+			for (int fd = STDERR_FILENO + 1; fd < maxfd; fd++) close(fd);
+		}
 		execl("/system/bin/sh", "sh", "-c", cmd, (char *)NULL);
 		execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
 		_exit(127);
