@@ -41,10 +41,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Spsm">
 
+        <!-- exported for the mode's OWN gesture dispatcher: gesturemon runs
+             the recents intent under the shell identity (su 2000 - the same
+             identity every proven service call in this module uses), and a
+             shell-uid start of a non-exported activity is a SecurityException
+             (device proof 2026-09-26: "not exported from uid 10225" - every
+             recognised hold-swipe died on it). The activity shows this mode's
+             recents screen and nothing else; excludeFromRecents + singleTop
+             keep it out of the stack it displays. -->
         <activity
             android:name=".SpsmRecentsActivity"
             android:excludeFromRecents="true"
-            android:exported="false"
+            android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.Spsm"
             android:windowSoftInputMode="stateAlwaysHidden" />
