@@ -73,8 +73,8 @@
  * service input: Failed transaction"), while input/am work everywhere else
  * in this module from the same context. lib.sh passes these explicitly from
  * cfg anyway; the defaults are for standalone runs. */
-#define HOME_CMD_DEFAULT    "input keyevent 3"
-#define RECENTS_CMD_DEFAULT "am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity"
+#define HOME_CMD_DEFAULT    "su 2000 -c 'input keyevent 3'"
+#define RECENTS_CMD_DEFAULT "su 2000 -c 'am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity'"
 
 static int   opt_quiet = 0;
 static const char *opt_device   = NULL;   /* NULL: discover */

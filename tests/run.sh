@@ -4670,10 +4670,10 @@ grep -q 'gesturemon: started' "$WORK/spsm/spsm.log"
 # binder dies in the recognizer's context on RMX3430 ("Failure calling
 # service input: Failed transaction") - three recognitions, zero dispatches,
 # 2026-09-25. The fake logs the argv it was started with.
-grep -q -- '--home-cmd input keyevent 3' "$WORK/gmon.args"
-check "gesturemon started with the input-wrapper home dispatch (not cmd)" $?
-grep -q -- '--recents-cmd am start --user 0' "$WORK/gmon.args"
-check "gesturemon started with the am-wrapper recents dispatch (not cmd)" $?
+grep -q -- "--home-cmd su 2000 -c 'input keyevent 3'" "$WORK/gmon.args"
+check "gesturemon started with the su-2000 input dispatch (the identity every proven service call uses)" $?
+grep -q -- "--recents-cmd su 2000 -c 'am start --user 0" "$WORK/gmon.args"
+check "gesturemon started with the su-2000 am dispatch (not cmd)" $?
 check "activate started the recognizer" $?
 _gpid=$(cat "$WORK/spsm/state/gesturemon.pid" 2>/dev/null)
 [ -n "$_gpid" ] && kill -0 "$_gpid" 2>/dev/null

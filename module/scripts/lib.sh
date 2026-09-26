@@ -1496,15 +1496,18 @@ start_gesturemon() {
         return 0
     fi
     _gbin=$(gesturemon_binary) || { log "gesturemon: binary not found - skipped"; return 0; }
-    # Dispatch goes through the app_process wrappers (input/am), not the
-    # native cmd binary: on RMX3430 the recognizer's nohup'd root context
-    # makes cmd's binder call die - "cmd: Failure calling service input:
-    # Failed transaction (2147483646)" - three recognitions, zero dispatches
-    # (bench4, 2026-09-25), which is exactly why the owner's swipes did
-    # nothing. The engine's own input/am calls run from the same context
-    # class all day. cfg still overrides, per phone.
-    _ghome=$(cfg gesture_home_cmd 'input keyevent 3')
-    _grec=$(cfg gesture_recents_cmd 'am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity')
+    # Dispatch runs under su 2000 - the shell identity EVERY proven service
+    # call in this module uses. Two days of device evidence: from the
+    # recognizer's root context, both cmd-fronted dispatchers die with
+    # "Failure calling service input/activity: Failed transaction
+    # (2147483646)" - recognition fine, dispatch never landed (bench4
+    # 2026-09-25; the owner's own finger swipes 2026-09-26 10:45, dy=352
+    # and dy=170 recognised, both dispatches failed) - while the engine's
+    # su-2000 chains succeed thousands of times on the same phone. The
+    # /dev/null stdin (below) removed one transaction killer; the uid is
+    # the other half. cfg still overrides, per phone.
+    _ghome=$(cfg gesture_home_cmd "su 2000 -c 'input keyevent 3'")
+    _grec=$(cfg gesture_recents_cmd "su 2000 -c 'am start --user 0 -f 268435456 -n dev.axion.spsm/.SpsmRecentsActivity'")
     # </dev/null is not hygiene, it is the dispatch fix: the recognizer
     # outlives the shell that started it, and an orphaned nohup keeps the
     # DEAD stdin of that shell. Every dispatch (input/cmd/am - on this ROM
